@@ -26,6 +26,8 @@ workflows:
           's/CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;/CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;/g' \
           Pods/Pods.xcodeproj/project.pbxproj
 
+          sed -i '' \ "s/DEFINES_MODULE = YES;/DEFINES_MODULE = NO;/g" \ Pods/Pods.xcodeproj/project.pbxproj
+
           echo "Pods patched."
 
       - name: Final iOS build
