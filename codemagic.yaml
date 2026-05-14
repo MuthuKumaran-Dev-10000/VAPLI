@@ -23,12 +23,12 @@ workflows:
         script: |
           cd ios
 
-          sed -i '' \
-          's/CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;/CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;/g' \
-          Pods/Pods.xcodeproj/project.pbxproj
+          sed -i '' "s/platform , '13.0'/platform , '15.0'/g" Podfile || true
+          sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" Runner.xcodeproj/project.pbxproj || true
 
-          sed -i '' \ "s/DEFINES_MODULE = YES;/DEFINES_MODULE = NO;/g" \ Pods/Pods.xcodeproj/project.pbxproj
+          cd ..
 
+          flutter build ios --config-only --no-codesign
           echo "Pods patched."
 
       - name: Final iOS build
