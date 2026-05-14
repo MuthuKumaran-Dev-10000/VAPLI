@@ -1,22 +1,33 @@
 // lib/presentation/screens/trends/trends_screen.dart
 // ══════════════════════════════════════════════════════════════════════════════
-// FULL REPLACEMENT — all features implemented:
-//   ✅ Obsidian-industrial UI — matches reading_entry_screen + dashboard_tab
-//   ✅ Only graphable params shown: number | slider | dual_text | dropdown
-//      Text / multiline hidden; hint shown below dropdown
-//   ✅ Each param item shows type badge next to its name
-//   ✅ Graph borders ONLY on left + bottom axes (not 4 sides)
-//   ✅ Graph title strip: Tank Name • Parameter Name always visible
-//   ✅ Legend below every chart (line colours, bar colours)
-//   ✅ X-axis labels = reading index (1, 2, 3 …) — NOT datetime
-//   ✅ dual_text → TWO lines (left series copper, right series teal)
-//   ✅ dropdown  → bar chart, one bar per option coloured distinctly
-//   ✅ number / slider → single copper line chart
-//   ✅ PNG export captures chart + title strip
-//   ✅ Excel export: all columns (tank, capturedAt, inspector + all param values)
-//   ✅ Smart in-memory cache: tank → readings fetched once, invalidated on
-//      tank switch; "Show Trend" re-uses cache if tank unchanged
-//   ✅ CapturedAt used everywhere (not DateTime label)
+// Production-grade TrendsScreen for VAPLI Lubrication Monitor
+//
+// FEATURES:
+//   ✅ Tank selector (single + "All Tanks") with QR scan button
+//   ✅ Timeline: Week / Month / Year / Custom (from→to calendars)
+//   ✅ Graphable param dropdown: number | slider | dual_text | dropdown only
+//      (type badge shown inline, text/multiline excluded)
+//   ✅ "All Tanks" mode → multi-line timeline graph (one line per tank)
+//   ✅ Aggressive in-memory cache (tankId → readings); zero extra reads on
+//      param switch, excel export, png export
+//   ✅ Graph types:
+//        number/slider  → single copper line
+//        dual_text      → two lines (copper=left, teal=right)
+//        dropdown       → bar chart per option (X=iterator+label, Y=count)
+//        all tanks      → multi-line, one per tank
+//   ✅ Axes: left + bottom ONLY (right + top hidden). X starts at 1.
+//      X label = capturedAt formatted date (DD/MM/YYYY\nHH:mm, sparse ≤5)
+//   ✅ Graph title strip: Tank • Param • From • To
+//   ✅ RepaintBoundary PNG export (title + chart + legend)
+//   ✅ Excel export: Sheet1=summary, SheetN=per tank, all param columns
+//      File name: Lubrication_Report_<from>_<to>_<tanks>.xlsx
+//   ✅ Handles 1000+ readings / 50+ tanks — no unnecessary rebuilds
+//   ✅ Matches existing dark industrial palette exactly
+//   ✅ All chart variables are LOCAL (no class-scope spots/xLabels leakage)
+//   ✅ Sorted oldest→newest everywhere; newest always on RIGHT edge
+//
+// FIX (fl_chart 1.2.0):
+//   tooltipRoundedRadius (removed) → tooltipBorderRadius: BorderRadius.circular(8)
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:io';
@@ -28,6 +39,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -36,7 +48,7 @@ import '../../../data/models/tank_model.dart';
 import '../../../data/repositories/reading_repository.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Palette — identical to ReadingEntryScreen + DashboardTab
+// PALETTE — identical to ReadingEntryScreen + DashboardTab
 // ─────────────────────────────────────────────────────────────────────────────
 const _kBg      = Color(0xFF0C0D0F);
 const _kSurface = Color(0xFF141618);
@@ -45,6 +57,7 @@ const _kBorder  = Color(0xFF252830);
 const _kBorderH = Color(0xFF38404F);
 const _kCopper  = Color(0xFFCB8C3E);
 const _kCopperL = Color(0xFFE8A84E);
+const _kCopperD = Color(0xFF8A5A1E);
 const _kTeal    = Color(0xFF1ABCBD);
 const _kText    = Color(0xFFF0EEE9);
 const _kSub     = Color(0xFF8A8F9C);
@@ -54,59 +67,83 @@ const _kWarn    = Color(0xFFF59E0B);
 const _kDanger  = Color(0xFFEF4444);
 const _kPurple  = Color(0xFFAB8FF0);
 const _kBlue    = Color(0xFF60A5FA);
+const _kIndigo  = Color(0xFF818CF8);
 
-// Bar chart colours cycling list
-const _kBarPalette = [
-  _kTeal, _kCopper, _kSuccess, _kWarn, _kPurple, _kBlue, _kDanger,
+// Bar / multi-line colour palette
+const _kMultiPalette = [
+  _kCopper, _kTeal, _kSuccess, _kWarn, _kPurple, _kBlue, _kDanger, _kIndigo,
+  Color(0xFFFF6B6B), Color(0xFF4ECDC4),
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helpers
+// CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+const _kAllTanksId = '__ALL__';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-String _fmtCapturedAt(String? raw) {
-  if (raw == null || raw.isEmpty) return '—';
-  try {
-    final dt = DateTime.parse(raw).toLocal();
-    return DateFormat('dd MMM yy').format(dt);
-  } catch (_) {
-    return raw;
-  }
-}
-
-// Which types are graphable
 bool _isGraphable(String? type) =>
     type == 'number' || type == 'slider' ||
     type == 'dual_text' || type == 'dropdown';
 
-// Human label for type badge
-String _typeLabel(String? type) {
+String _typeShort(String? type) {
   switch (type) {
     case 'number':    return 'NUM';
-    case 'slider':    return 'SLIDER';
+    case 'slider':    return 'SLIDE';
     case 'dual_text': return 'DUAL';
     case 'dropdown':  return 'DROP';
     default:          return (type ?? '').toUpperCase();
   }
 }
 
-Color _typeBadgeColor(String? type) {
+Color _typeColor(String? type) {
   switch (type) {
     case 'number':    return _kTeal;
-    case 'slider':    return Color(0xFF03DAC6);
+    case 'slider':    return const Color(0xFF03DAC6);
     case 'dual_text': return _kWarn;
     case 'dropdown':  return _kPurple;
     default:          return _kSubL;
   }
 }
 
+/// Format an ISO datetime string.
+/// Default: two-line DD/MM/YYYY\nHH:mm for axis labels.
+String _fmt(String? iso, {String pattern = 'dd/MM/yyyy\nHH:mm'}) {
+  if (iso == null || iso.isEmpty) return '—';
+  try {
+    return DateFormat(pattern).format(DateTime.parse(iso).toLocal());
+  } catch (_) {
+    return iso;
+  }
+}
+
+String _fmtFull(String? iso) => _fmt(iso, pattern: 'dd MMM yyyy, HH:mm');
+
+String _fmtFile(DateTime d) => DateFormat('yyyyMMdd').format(d);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TIMELINE ENUM
+// ─────────────────────────────────────────────────────────────────────────────
+enum _Timeline { week, month, year, custom }
+
+extension _TL on _Timeline {
+  String get label {
+    switch (this) {
+      case _Timeline.week:   return 'Last 7 Days';
+      case _Timeline.month:  return 'Last 30 Days';
+      case _Timeline.year:   return 'Last Year';
+      case _Timeline.custom: return 'Custom Range';
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // TrendsScreen
 // ─────────────────────────────────────────────────────────────────────────────
-
 class TrendsScreen extends StatefulWidget {
   final List<TankModel> tanks;
-
   const TrendsScreen({super.key, required this.tanks});
 
   @override
@@ -114,510 +151,1161 @@ class TrendsScreen extends StatefulWidget {
 }
 
 class _TrendsScreenState extends State<TrendsScreen> {
-  final _repo     = ReadingRepository();
-  final _chartKey = GlobalKey();
+  // ── Selection state ────────────────────────────────────────────────────────
+  String?               _selectedTankId;
+  Map<String, dynamic>? _selectedParam;
 
-  TankModel?              _tank;
-  Map<String, dynamic>?  _param;
-  List<ReadingModel>      _readings  = [];
-  bool                    _loading   = false;
-  bool                    _hasShown  = false; // chart visible once loaded
+  _Timeline _timeline  = _Timeline.week;
+  DateTime? _customFrom;
+  DateTime? _customTo;
 
-  // ── In-memory cache: tankId → readings ──────────────────────────────────
-  // Populated on first "Show Trend" for each tank; reused on param switch.
+  // ── Load / display state ───────────────────────────────────────────────────
+  bool _loading    = false;
+  bool _chartReady = false;
+  bool _exporting  = false;
+
+  // ── In-memory cache: tankId → sorted readings (oldest→newest) ────────────
   final Map<String, List<ReadingModel>> _cache = {};
 
-  // ── Graphable params for selected tank ────────────────────────────────────
+  final _chartKey = GlobalKey();
+  final _repo     = ReadingRepository();
+
+  // ── Derived helpers ────────────────────────────────────────────────────────
+
+  bool get _isAllTanks => _selectedTankId == _kAllTanksId;
+
+  TankModel? get _selectedTank =>
+      _selectedTankId == null || _isAllTanks
+          ? null
+          : widget.tanks.cast<TankModel?>().firstWhere(
+              (t) => t!.id == _selectedTankId,
+              orElse: () => null);
+
   List<Map<String, dynamic>> get _graphableParams {
-    if (_tank == null) return [];
-    return _tank!.inspectionProperties
-        .where((e) => _isGraphable(e['type'] as String?))
+    final t = _selectedTank;
+    if (t == null) return [];
+    return t.inspectionProperties
+        .where((p) => _isGraphable(p['type'] as String?))
         .toList();
   }
 
-  // ── Load readings (cache-first) ───────────────────────────────────────────
-  Future<void> _load() async {
-    if (_tank == null) {
-      _snack('Please select a tank first');
-      return;
+  DateTime get _rangeFrom {
+    final now = DateTime.now();
+    switch (_timeline) {
+      case _Timeline.week:   return now.subtract(const Duration(days: 7));
+      case _Timeline.month:  return now.subtract(const Duration(days: 30));
+      case _Timeline.year:   return DateTime(now.year - 1, now.month, now.day);
+      case _Timeline.custom:
+        return _customFrom ?? now.subtract(const Duration(days: 7));
     }
-    if (_param == null) {
-      _snack('Please select a parameter');
-      return;
+  }
+
+  DateTime get _rangeTo {
+    if (_timeline == _Timeline.custom && _customTo != null) {
+      return DateTime(
+          _customTo!.year, _customTo!.month, _customTo!.day, 23, 59, 59);
+    }
+    return DateTime.now();
+  }
+
+  // ── Data retrieval (cache-first) ───────────────────────────────────────────
+
+  Future<void> _ensureCached(String tankId) async {
+    if (_cache.containsKey(tankId)) return;
+    debugPrint('[Trends] Fetching from DB for tank=$tankId');
+    final all      = await _repo.getAllReadings();
+    final filtered = all.where((r) => r.tankId == tankId).toList()
+      ..sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
+    _cache[tankId] = filtered;
+    debugPrint('[Trends] Cached ${filtered.length} readings for tank=$tankId');
+  }
+
+  /// Returns readings for [tankId] within the selected date range,
+  /// always sorted oldest → newest.
+  List<ReadingModel> _filtered(String tankId) {
+    final from = _rangeFrom;
+    final to   = _rangeTo;
+    final list = (_cache[tankId] ?? []).where((r) {
+      final t = DateTime.tryParse(r.capturedAt);
+      if (t == null) return false;
+      return !t.isBefore(from) && !t.isAfter(to);
+    }).toList()
+      ..sort((a, b) =>
+          DateTime.parse(a.capturedAt).compareTo(DateTime.parse(b.capturedAt)));
+    return list;
+  }
+
+  // ── Show trend ─────────────────────────────────────────────────────────────
+  Future<void> _showTrend() async {
+    if (_selectedTankId == null) { _snack('Select a tank first'); return; }
+    if (!_isAllTanks && _selectedParam == null) {
+      _snack('Select a parameter'); return;
+    }
+    if (_timeline == _Timeline.custom &&
+        (_customFrom == null || _customTo == null)) {
+      _snack('Set both From and To dates for custom range'); return;
     }
 
-    setState(() => _loading = true);
+    setState(() { _loading = true; _chartReady = false; });
     try {
-      if (_cache.containsKey(_tank!.id)) {
-        debugPrint('[Trends] Cache HIT for tank ${_tank!.id}');
-        _readings = _cache[_tank!.id]!;
+      if (_isAllTanks) {
+        for (final t in widget.tanks) { await _ensureCached(t.id); }
       } else {
-        debugPrint('[Trends] Cache MISS — fetching from DB for tank ${_tank!.id}');
-        final all = await _repo.getAllReadings();
-        final filtered = all.where((r) => r.tankId == _tank!.id).toList();
-        // Sort chronologically
-        filtered.sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
-        _cache[_tank!.id] = filtered;
-        _readings = filtered;
-        debugPrint('[Trends] Fetched ${_readings.length} readings, cached.');
+        await _ensureCached(_selectedTankId!);
       }
-      setState(() { _hasShown = true; _loading = false; });
+      setState(() { _loading = false; _chartReady = true; });
     } catch (e) {
-      debugPrint('[Trends] Load error: $e');
       setState(() => _loading = false);
-      _snack('Failed to load readings: $e');
+      _snack('Load failed: $e');
+    }
+  }
+
+  // ── Excel export ───────────────────────────────────────────────────────────
+  Future<void> _exportExcel() async {
+    if (!_chartReady && _cache.isEmpty) { _snack('Load data first'); return; }
+    setState(() => _exporting = true);
+    try {
+      final excel = xl.Excel.createExcel();
+
+      final from    = _rangeFrom;
+      final to      = _rangeTo;
+      final fromStr = _fmtFile(from);
+      final toStr   = _fmtFile(to);
+
+      final tanksToExport = _isAllTanks
+          ? widget.tanks
+          : widget.tanks.where((t) => t.id == _selectedTankId!).toList();
+
+      // ── Sheet 1: Summary ──────────────────────────────────────────────────
+      final summarySheet = excel['Summary'];
+      summarySheet.appendRow([
+        xl.TextCellValue('Tank ID'),
+        xl.TextCellValue('Tank Name'),
+        xl.TextCellValue('Inspection Date'),
+        xl.TextCellValue('Inspection Time'),
+        xl.TextCellValue('Captured By'),
+      ]);
+
+      for (final tank in tanksToExport) {
+        for (final r in _filtered(tank.id)) {
+          final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
+          summarySheet.appendRow([
+            xl.TextCellValue(tank.tankCode),
+            xl.TextCellValue(tank.tankName),
+            xl.TextCellValue(
+                dt != null ? DateFormat('dd-MM-yyyy').format(dt) : '—'),
+            xl.TextCellValue(
+                dt != null ? DateFormat('HH:mm:ss').format(dt) : '—'),
+            xl.TextCellValue(r.capturedByName),
+          ]);
+        }
+      }
+
+      // ── Sheets 2..N: one per tank ─────────────────────────────────────────
+      for (final tank in tanksToExport) {
+        final paramLabels = tank.inspectionProperties
+            .map((p) => p['label'] as String? ?? '')
+            .where((l) => l.isNotEmpty)
+            .toList();
+
+        final sheetName =
+            tank.tankName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+        final sheet = excel[
+            sheetName.length > 31
+                ? sheetName.substring(0, 31)
+                : sheetName];
+        sheet.appendRow([
+          xl.TextCellValue('Tank ID'),
+          xl.TextCellValue('Tank Name'),
+          xl.TextCellValue('Captured At'),
+          xl.TextCellValue('Captured By'),
+          ...paramLabels.map((l) => xl.TextCellValue(l)),
+        ]);
+
+        for (final r in _filtered(tank.id)) {
+          final paramCells = paramLabels.map((l) {
+            final v = r.inspectionValues[l];
+            if (v is Map) {
+              return xl.TextCellValue(
+                  '${v['left'] ?? ''} | ${v['right'] ?? ''}');
+            }
+            return xl.TextCellValue(v?.toString() ?? '');
+          }).toList();
+
+          sheet.appendRow([
+            xl.TextCellValue(tank.tankCode),
+            xl.TextCellValue(tank.tankName),
+            xl.TextCellValue(
+                _fmt(r.capturedAt, pattern: 'dd-MM-yyyy HH:mm:ss')),
+            xl.TextCellValue(r.capturedByName),
+            ...paramCells,
+          ]);
+        }
+      }
+
+      // ── File name ──────────────────────────────────────────────────────────
+      final tankNames = tanksToExport.map((t) => t.tankCode).join('_');
+      final suffix =
+          tankNames.length > 40 ? '${tankNames.substring(0, 40)}…' : tankNames;
+      final fileName =
+          'Lubrication_Report_${fromStr}_${toStr}_$suffix.xlsx';
+
+      final dir  = await getTemporaryDirectory();
+      final file = File('${dir.path}/$fileName');
+      await file.writeAsBytes(excel.save()!);
+      debugPrint('[Trends] Excel saved → ${file.path}');
+      await Share.shareXFiles([XFile(file.path)], text: 'Lubrication Report');
+    } catch (e) {
+      _snack('Excel export failed: $e');
+      debugPrint('[Trends] Excel error: $e');
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  // ── PNG export ─────────────────────────────────────────────────────────────
+  Future<void> _exportPng() async {
+    try {
+      final boundary = _chartKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) { _snack('Chart not rendered yet'); return; }
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (bytes == null) throw Exception('PNG encode failed');
+      final dir  = await getTemporaryDirectory();
+      final name = '${_selectedTank?.tankCode ?? 'trends'}_'
+          '${_selectedParam?['label'] ?? 'all'}.png';
+      final file = File('${dir.path}/$name');
+      await file.writeAsBytes(bytes.buffer.asUint8List());
+      await Share.shareXFiles([XFile(file.path)],
+          text: '${_selectedTank?.tankName ?? 'All Tanks'} — '
+              '${_selectedParam?['label'] ?? 'Timeline'}');
+    } catch (e) {
+      _snack('PNG export failed: $e');
+    }
+  }
+
+  // ── QR scan ────────────────────────────────────────────────────────────────
+  Future<void> _scanQr() async {
+    final result = await Navigator.push<String>(
+        context,
+        MaterialPageRoute(builder: (_) => const _QrScanPage()));
+    if (result == null || !mounted) return;
+    try {
+      Map<String, dynamic>? data;
+      try {
+        final json = result.trim();
+        if (json.startsWith('{')) {
+          final parts = json
+              .replaceAll('{', '')
+              .replaceAll('}', '')
+              .replaceAll('"', '')
+              .split(',');
+          final m = <String, String>{};
+          for (final p in parts) {
+            final kv = p.split(':');
+            if (kv.length >= 2) {
+              m[kv[0].trim()] = kv.sublist(1).join(':').trim();
+            }
+          }
+          data = m;
+        }
+      } catch (_) {}
+
+      final tankId   = data?['tank_id']   as String?;
+      final tankCode = data?['tank_code'] as String?;
+
+      TankModel? found;
+      if (tankId != null) {
+        found = widget.tanks.cast<TankModel?>().firstWhere(
+            (t) => t!.id == tankId, orElse: () => null);
+      }
+      if (found == null && tankCode != null) {
+        found = widget.tanks.cast<TankModel?>().firstWhere(
+            (t) => t!.tankCode == tankCode, orElse: () => null);
+      }
+      if (found != null) {
+        setState(() {
+          _selectedTankId = found!.id;
+          _selectedParam  = null;
+          _chartReady     = false;
+        });
+        _snack('Tank selected: ${found.tankName}');
+      } else {
+        _snack('Tank not found for QR');
+      }
+    } catch (e) {
+      _snack('Invalid QR: $e');
     }
   }
 
   void _snack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg, style: const TextStyle(color: _kText)),
-      backgroundColor: _kBorder,
+      backgroundColor: _kCard,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Date picker ────────────────────────────────────────────────────────────
+  Future<void> _pickDate(bool isFrom) async {
+    final now = DateTime.now();
+    final d   = await showDatePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: now,
+      initialDate: (isFrom ? _customFrom : _customTo) ?? now,
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.dark(
+              primary: _kCopper,
+              surface: _kCard,
+              onSurface: _kText),
+        ),
+        child: child!,
+      ),
+    );
+    if (d == null) return;
+    setState(() => isFrom ? _customFrom = d : _customTo = d);
+  }
 
+  // ── BUILD ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _kBg,
-      appBar: AppBar(
-        backgroundColor: _kBg,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: _kText),
-        title: Text('Trends',
-            style: GoogleFonts.dmSans(
-                fontWeight: FontWeight.w700, fontSize: 17, color: _kText)),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: _kBorder),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(18, 20, 18, 48),
+    return Container(
+      color: _kBg,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 60),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // ── Tank selection ──────────────────────────────────────────────
+            _SecLabel('DATA SOURCE'),
+            const SizedBox(height: 10),
+            _buildTankRow(),
 
-            // ── Header label ─────────────────────────────────────────────
-            _SecLabel('SELECT DATA SOURCE'),
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
 
-            // ── Tank selector ─────────────────────────────────────────────
-            _buildTankDropdown(),
-            const SizedBox(height: 14),
+            // ── Timeline ────────────────────────────────────────────────────
+            _SecLabel('TIME RANGE'),
+            const SizedBox(height: 10),
+            _buildTimelineRow(),
 
-            // ── Parameter selector ────────────────────────────────────────
-            _buildParamDropdown(),
-            const SizedBox(height: 6),
-            Row(children: [
-              const Icon(Icons.info_outline_rounded, size: 11, color: _kSubL),
-              const SizedBox(width: 5),
-              Expanded(
-                child: Text(
-                  'Only Number, Slider, Dual Input and Dropdown parameters '
-                  'are graphable. Text fields are excluded.',
-                  style: GoogleFonts.dmSans(fontSize: 11, color: _kSubL),
+            if (_timeline == _Timeline.custom) ...[
+              const SizedBox(height: 10),
+              _buildCustomDateRow(),
+            ],
+
+            const SizedBox(height: 16),
+
+            // ── Excel export ─────────────────────────────────────────────────
+            _buildExcelButton(),
+
+            const SizedBox(height: 16),
+
+            // ── Parameter selection ───────────────────────────────────────────
+            if (!_isAllTanks && _selectedTankId != null) ...[
+              _buildParamRow(),
+              const SizedBox(height: 6),
+              Row(children: [
+                const Icon(Icons.info_outline_rounded,
+                    size: 11, color: _kSubL),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    'Only numerical and categorical parameters are graphable.',
+                    style: GoogleFonts.dmSans(fontSize: 11, color: _kSubL),
+                  ),
                 ),
-              ),
-            ]),
-            const SizedBox(height: 20),
+              ]),
+              const SizedBox(height: 16),
+            ],
 
-            // ── Show Trend button ─────────────────────────────────────────
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _kCopper,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: _kSurface,
-                  padding: const EdgeInsets.symmetric(vertical: 15),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                  elevation: 0,
-                ),
-                onPressed: _loading ? null : _load,
-                icon: _loading
-                    ? const SizedBox(
-                        width: 16, height: 16,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2))
-                    : const Icon(Icons.show_chart_rounded, size: 18),
-                label: Text(
-                  _loading ? 'Loading…' : 'Show Trend',
-                  style: GoogleFonts.dmSans(
-                      fontWeight: FontWeight.w700, fontSize: 14),
-                ),
-              ),
-            ),
+            // ── Show Trend button ─────────────────────────────────────────────
+            _buildShowTrendButton(),
+
             const SizedBox(height: 24),
 
-            // ── Chart (only when loaded + param selected) ─────────────────
-            if (_hasShown && _param != null && _readings.isNotEmpty)
-              _buildChartCard(),
-
-            if (_hasShown && _readings.isEmpty)
-              _buildNoData(),
-
-            const SizedBox(height: 20),
-
-            // ── Excel export (always available once tank loaded) ──────────
-            if (_hasShown && _readings.isNotEmpty)
-              _buildExcelButton(),
+            // ── Chart ─────────────────────────────────────────────────────────
+            if (_chartReady) ...[
+              _buildChartSection(),
+              const SizedBox(height: 14),
+              _buildPngButton(),
+            ],
           ],
         ),
       ),
     );
   }
 
-  // ── Selectors ─────────────────────────────────────────────────────────────
-
-  Widget _buildTankDropdown() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _kSurface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
+  // ── Tank row ───────────────────────────────────────────────────────────────
+  Widget _buildTankRow() {
+    final items = <DropdownMenuItem<String>>[
+      DropdownMenuItem<String>(
+        value: _kAllTanksId,
+        child: Row(children: [
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(
+              color: _kCopper.withOpacity(0.12),
+              shape: BoxShape.circle,
+              border: Border.all(color: _kCopper.withOpacity(0.3)),
+            ),
+            child: const Icon(Icons.water_outlined, size: 14, color: _kCopper),
+          ),
+          const SizedBox(width: 10),
+          Text('All Tanks',
+              style: GoogleFonts.dmSans(
+                  color: _kText,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600)),
+        ]),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<TankModel>(
-          value: _tank,
-          isExpanded: true,
-          dropdownColor: _kCard,
-          iconEnabledColor: _kSub,
-          hint: Text('Select tank…',
-              style: GoogleFonts.dmSans(color: _kSub, fontSize: 14)),
-          items: widget.tanks.map((t) => DropdownMenuItem(
-            value: t,
-            child: Row(children: [
-              Container(
-                width: 28, height: 28,
-                decoration: BoxDecoration(
-                  color: _kCopper.withOpacity(0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(color: _kCopper.withOpacity(0.3)),
-                ),
-                child: Center(
-                  child: Text(
-                    t.tankCode.isNotEmpty ? t.tankCode[0].toUpperCase() : '?',
-                    style: GoogleFonts.spaceGrotesk(
-                        fontSize: 11, color: _kCopper, fontWeight: FontWeight.w700),
-                  ),
-                ),
+      ...widget.tanks.map((t) => DropdownMenuItem<String>(
+        value: t.id,
+        child: Row(children: [
+          Container(
+            width: 28, height: 28,
+            decoration: BoxDecoration(
+              color: _kCopper.withOpacity(0.10),
+              shape: BoxShape.circle,
+              border: Border.all(color: _kCopper.withOpacity(0.25)),
+            ),
+            child: Center(
+              child: Text(
+                t.tankCode.isNotEmpty ? t.tankCode[0].toUpperCase() : '?',
+                style: GoogleFonts.spaceGrotesk(
+                    fontSize: 10,
+                    color: _kCopper,
+                    fontWeight: FontWeight.w700),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(t.tankName,
-                      style: GoogleFonts.dmSans(
-                          color: _kText, fontSize: 14, fontWeight: FontWeight.w600)),
-                  Text(t.tankCode,
-                      style: GoogleFonts.spaceGrotesk(
-                          fontSize: 10, color: _kSub)),
-                ]),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(t.tankName,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.dmSans(
+                      color: _kText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600)),
+              Text(
+                '${t.tankCode}${t.location != null ? " · ${t.location}" : ""}',
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.spaceGrotesk(fontSize: 9, color: _kSub),
               ),
             ]),
-          )).toList(),
-          onChanged: (v) {
-            debugPrint('[Trends] Tank selected: ${v?.tankCode}');
-            setState(() {
-              _tank  = v;
-              _param = null;
-              _hasShown = false;
-              _readings = [];
-              // Note: keep cache for this tank if it exists
-            });
-          },
+          ),
+        ]),
+      )),
+    ];
+
+    return Row(children: [
+      Expanded(
+        child: _DropContainer(
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedTankId,
+              isExpanded: true,
+              dropdownColor: _kCard,
+              iconEnabledColor: _kSub,
+              hint: Text('Select tank or All Tanks…',
+                  style: GoogleFonts.dmSans(color: _kSubL, fontSize: 13)),
+              items: items,
+              onChanged: (v) => setState(() {
+                _selectedTankId = v;
+                _selectedParam  = null;
+                _chartReady     = false;
+              }),
+            ),
+          ),
         ),
+      ),
+      const SizedBox(width: 10),
+      GestureDetector(
+        onTap: _scanQr,
+        child: Container(
+          width: 50, height: 50,
+          decoration: BoxDecoration(
+            color: _kTeal.withOpacity(0.10),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kTeal.withOpacity(0.35)),
+          ),
+          child: const Icon(Icons.qr_code_scanner_rounded,
+              color: _kTeal, size: 22),
+        ),
+      ),
+    ]);
+  }
+
+  // ── Timeline chips ──────────────────────────────────────────────────────────
+  Widget _buildTimelineRow() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: _Timeline.values.map((t) {
+          final sel = _timeline == t;
+          return GestureDetector(
+            onTap: () => setState(() {
+              _timeline   = t;
+              _chartReady = false;
+            }),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              margin: const EdgeInsets.only(right: 8),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              decoration: BoxDecoration(
+                color: sel ? _kCopper.withOpacity(0.13) : _kSurface,
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(
+                    color: sel ? _kCopper : _kBorder,
+                    width: sel ? 1.5 : 1),
+              ),
+              child: Text(t.label,
+                  style: GoogleFonts.dmSans(
+                    color: sel ? _kCopper : _kSub,
+                    fontWeight:
+                        sel ? FontWeight.w700 : FontWeight.normal,
+                    fontSize: 13,
+                  )),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
 
-  Widget _buildParamDropdown() {
-    return Container(
-      decoration: BoxDecoration(
-        color: _kSurface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _tank == null ? _kBorder : _kBorderH),
+  // ── Custom date pickers ─────────────────────────────────────────────────────
+  Widget _buildCustomDateRow() {
+    return Row(children: [
+      Expanded(
+        child: _DateBtn(
+          label: _customFrom == null
+              ? 'From date'
+              : DateFormat('dd MMM yyyy').format(_customFrom!),
+          icon: Icons.calendar_today_outlined,
+          onTap: () => _pickDate(true),
+          active: _customFrom != null,
+        ),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _DateBtn(
+          label: _customTo == null
+              ? 'To date'
+              : DateFormat('dd MMM yyyy').format(_customTo!),
+          icon: Icons.event_outlined,
+          onTap: () => _pickDate(false),
+          active: _customTo != null,
+        ),
+      ),
+    ]);
+  }
+
+  // ── Parameter row ───────────────────────────────────────────────────────────
+  Widget _buildParamRow() {
+    final params = _graphableParams;
+    return _DropContainer(
       child: DropdownButtonHideUnderline(
         child: DropdownButton<Map<String, dynamic>>(
-          value: _param,
+          value: _selectedParam,
           isExpanded: true,
           dropdownColor: _kCard,
-          iconEnabledColor: _tank == null ? _kSubL : _kSub,
+          iconEnabledColor: params.isEmpty ? _kSubL : _kSub,
           hint: Text(
-            _tank == null ? 'Select a tank first…' : 'Select parameter…',
-            style: GoogleFonts.dmSans(color: _kSubL, fontSize: 14),
+            params.isEmpty
+                ? 'No graphable parameters for this tank'
+                : 'Select parameter…',
+            style: GoogleFonts.dmSans(color: _kSubL, fontSize: 13),
           ),
-          items: _graphableParams.map((p) {
+          items: params.map((p) {
             final type  = p['type'] as String? ?? '';
             final label = p['label'] as String? ?? '';
-            final bColor = _typeBadgeColor(type);
+            final bc    = _typeColor(type);
             return DropdownMenuItem<Map<String, dynamic>>(
               value: p,
               child: Row(children: [
-                // Type badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
-                    color: bColor.withOpacity(0.13),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: bColor.withOpacity(0.35)),
+                    color: bc.withOpacity(0.13),
+                    borderRadius: BorderRadius.circular(5),
+                    border: Border.all(color: bc.withOpacity(0.4)),
                   ),
-                  child: Text(_typeLabel(type),
+                  child: Text(_typeShort(type),
                       style: GoogleFonts.spaceGrotesk(
-                          fontSize: 9, color: bColor, fontWeight: FontWeight.w700,
+                          fontSize: 9,
+                          color: bc,
+                          fontWeight: FontWeight.w700,
                           letterSpacing: 0.5)),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(label,
+                      overflow: TextOverflow.ellipsis,
                       style: GoogleFonts.dmSans(
-                          color: _kText, fontSize: 14, fontWeight: FontWeight.w500)),
+                          color: _kText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500)),
                 ),
               ]),
             );
           }).toList(),
-          onChanged: _tank == null
+          onChanged: params.isEmpty
               ? null
-              : (v) {
-                  debugPrint('[Trends] Param selected: ${v?['label']}');
-                  setState(() => _param = v);
-                },
+              : (v) => setState(() {
+                    _selectedParam = v;
+                    _chartReady    = false;
+                  }),
         ),
       ),
     );
   }
 
-  // ── Chart card ─────────────────────────────────────────────────────────────
-
-  Widget _buildChartCard() {
-    final type  = _param!['type'] as String? ?? 'number';
-    final label = _param!['label'] as String? ?? '';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SecLabel('TREND CHART'),
-        const SizedBox(height: 12),
-        RepaintBoundary(
-          key: _chartKey,
-          child: Container(
-            decoration: BoxDecoration(
-              color: _kCard,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _kBorder),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Title strip ──────────────────────────────────────────
-                Container(
-                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-                  decoration: const BoxDecoration(
-                    color: _kSurface,
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-                    border: Border(bottom: BorderSide(color: _kBorder)),
-                  ),
-                  child: Row(children: [
-                    Container(
-                      width: 3, height: 18,
-                      decoration: BoxDecoration(
-                          color: _kCopper,
-                          borderRadius: BorderRadius.circular(2)),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                        Text(_tank!.tankName,
-                            style: GoogleFonts.dmSans(
-                                color: _kText, fontSize: 13,
-                                fontWeight: FontWeight.w700)),
-                        Text(label,
-                            style: GoogleFonts.spaceGrotesk(
-                                color: _kCopper, fontSize: 11,
-                                fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-                      ]),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: _typeBadgeColor(type).withOpacity(0.13),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                            color: _typeBadgeColor(type).withOpacity(0.35)),
-                      ),
-                      child: Text(_typeLabel(type),
-                          style: GoogleFonts.spaceGrotesk(
-                              fontSize: 9, color: _typeBadgeColor(type),
-                              fontWeight: FontWeight.w700, letterSpacing: 0.5)),
-                    ),
-                  ]),
-                ),
-
-                // ── Chart area ───────────────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 20, 18, 8),
-                  child: SizedBox(
-                    height: 280,
-                    child: _buildGraph(type, label),
-                  ),
-                ),
-
-                // ── Legend ───────────────────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  child: _buildLegend(type, label),
-                ),
-
-                // ── Reading count ─────────────────────────────────────────
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                  child: Text(
-                    '${_readings.length} reading${_readings.length == 1 ? '' : 's'} '
-                    '· Tap PNG to export chart',
-                    style: GoogleFonts.dmSans(fontSize: 11, color: _kSubL),
-                  ),
-                ),
-              ],
+  // ── Excel button ────────────────────────────────────────────────────────────
+  Widget _buildExcelButton() {
+    final canExport = _selectedTankId != null;
+    return GestureDetector(
+      onTap: canExport && !_exporting ? _exportExcel : null,
+      child: Container(
+        height: 46,
+        decoration: BoxDecoration(
+          color: canExport ? _kSuccess.withOpacity(0.09) : _kSurface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: canExport ? _kSuccess.withOpacity(0.4) : _kBorder),
+        ),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          if (_exporting)
+            const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                    color: _kSuccess, strokeWidth: 2))
+          else
+            Icon(Icons.table_chart_outlined,
+                color: canExport ? _kSuccess : _kSubL, size: 18),
+          const SizedBox(width: 8),
+          Text(
+            _exporting ? 'Preparing Excel…' : 'Download Excel Report',
+            style: GoogleFonts.dmSans(
+              color: canExport ? _kSuccess : _kSubL,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
             ),
           ),
-        ),
-        const SizedBox(height: 14),
-
-        // ── PNG export button ─────────────────────────────────────────────
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: _kBorderH),
-              foregroundColor: _kText,
-              padding: const EdgeInsets.symmetric(vertical: 13),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-            onPressed: _exportPng,
-            icon: const Icon(Icons.image_outlined, size: 18, color: _kCopper),
-            label: Text('Export Chart as PNG',
-                style: GoogleFonts.dmSans(
-                    fontWeight: FontWeight.w600, fontSize: 13, color: _kText)),
-          ),
-        ),
-        const SizedBox(height: 10),
-      ],
+        ]),
+      ),
     );
   }
 
-  Widget _buildNoData() => Container(
-        margin: const EdgeInsets.only(top: 8),
-        padding: const EdgeInsets.all(28),
+  // ── Show Trend button ────────────────────────────────────────────────────────
+  Widget _buildShowTrendButton() {
+    final ready = _selectedTankId != null &&
+        (_isAllTanks || _selectedParam != null) &&
+        !(_timeline == _Timeline.custom &&
+            (_customFrom == null || _customTo == null));
+
+    return GestureDetector(
+      onTap: ready && !_loading ? _showTrend : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        width: double.infinity,
+        height: 52,
         decoration: BoxDecoration(
-          color: _kCard,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: _kBorder),
+          gradient: ready
+              ? const LinearGradient(
+                  colors: [_kCopperD, _kCopper],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight)
+              : null,
+          color: ready ? null : _kSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+              color: ready ? _kCopper : _kBorder,
+              width: ready ? 0 : 1),
+          boxShadow: ready
+              ? [
+                  BoxShadow(
+                      color: _kCopper.withOpacity(0.3),
+                      blurRadius: 14,
+                      offset: const Offset(0, 5))
+                ]
+              : [],
         ),
         child: Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.bar_chart_outlined, size: 40, color: _kSubL),
-            const SizedBox(height: 10),
-            Text('No readings found for this tank',
-                style: GoogleFonts.dmSans(
-                    fontSize: 14, fontWeight: FontWeight.w600, color: _kText)),
-            const SizedBox(height: 4),
-            Text('Submit readings via the Record Reading screen first.',
-                style: GoogleFonts.dmSans(fontSize: 12, color: _kSub)),
-          ]),
+          child: _loading
+              ? Row(mainAxisSize: MainAxisSize.min, children: [
+                  const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          color: Colors.white, strokeWidth: 2)),
+                  const SizedBox(width: 10),
+                  Text('Loading…',
+                      style: GoogleFonts.dmSans(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14)),
+                ])
+              : Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.show_chart_rounded,
+                      color: ready ? Colors.white : _kSubL, size: 20),
+                  const SizedBox(width: 8),
+                  Text('Show Trend',
+                      style: GoogleFonts.dmSans(
+                        color: ready ? Colors.white : _kSubL,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      )),
+                ]),
         ),
-      );
-
-  // ── Graph dispatcher ───────────────────────────────────────────────────────
-
-  Widget _buildGraph(String type, String label) {
-    if (type == 'dropdown') return _barChart(label);
-    if (type == 'dual_text') return _dualLineChart(label);
-    return _singleLineChart(label); // number | slider
+      ),
+    );
   }
 
-  // ── Shared axis/border style ───────────────────────────────────────────────
-  // ONLY left + bottom borders — no right, no top
-
-  FlBorderData get _borderData => FlBorderData(
-        show: true,
-        border: Border(
-          left:   const BorderSide(color: _kBorderH, width: 1),
-          bottom: const BorderSide(color: _kBorderH, width: 1),
-          right:  BorderSide.none,
-          top:    BorderSide.none,
+  // ── PNG export button ────────────────────────────────────────────────────────
+  Widget _buildPngButton() {
+    return GestureDetector(
+      onTap: _exportPng,
+      child: Container(
+        height: 44,
+        decoration: BoxDecoration(
+          color: _kSurface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kBorderH),
         ),
-      );
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const Icon(Icons.image_outlined, color: _kCopper, size: 17),
+          const SizedBox(width: 7),
+          Text('Export Chart as PNG',
+              style: GoogleFonts.dmSans(
+                  color: _kText,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13)),
+        ]),
+      ),
+    );
+  }
 
-  FlGridData get _gridData => FlGridData(
-        show: true,
-        drawVerticalLine: false,
-        getDrawingHorizontalLine: (_) => FlLine(
-          color: _kBorder,
-          strokeWidth: 1,
-          dashArray: [4, 4],
+  // ── Chart section ────────────────────────────────────────────────────────────
+  Widget _buildChartSection() {
+    return RepaintBoundary(
+      key: _chartKey,
+      child: Container(
+        color: _kBg,
+        child: Container(
+          decoration: BoxDecoration(
+            color: _kCard,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildChartTitle(),
+              _buildChartBody(),
+              _buildLegend(),
+              _buildReadingFooter(),
+            ],
+          ),
         ),
-      );
+      ),
+    );
+  }
 
-  SideTitles get _bottomTitles => SideTitles(
-        showTitles: true,
-        interval: 1,
-        getTitlesWidget: (value, meta) {
-          final idx = value.toInt() - 1;
-          if (idx < 0 || idx >= _readings.length) return const SizedBox.shrink();
-          // Show index number, not datetime
-          final label = '${idx + 1}';
-          return Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(label,
+  // ── Chart title strip ────────────────────────────────────────────────────────
+  Widget _buildChartTitle() {
+    final tankLabel = _isAllTanks
+        ? 'All Tanks (${widget.tanks.length})'
+        : (_selectedTank?.tankName ?? '—');
+    final paramLabel = _isAllTanks
+        ? 'Reading Timeline'
+        : (_selectedParam?['label'] as String? ?? '—');
+    final type =
+        _isAllTanks ? null : _selectedParam?['type'] as String?;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: const BoxDecoration(
+        color: _kSurface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        border: Border(bottom: BorderSide(color: _kBorder)),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+            width: 3,
+            height: 40,
+            decoration: BoxDecoration(
+                color: _kCopper,
+                borderRadius: BorderRadius.circular(2))),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(tankLabel,
+                    style: GoogleFonts.dmSans(
+                        color: _kText,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(paramLabel,
+                    style: GoogleFonts.spaceGrotesk(
+                        color: _kCopper,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 0.4)),
+                const SizedBox(height: 4),
+                Row(children: [
+                  _MetaChip(
+                      icon: Icons.calendar_today_outlined,
+                      label: DateFormat('dd MMM yyyy').format(_rangeFrom)),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.arrow_forward_rounded,
+                      size: 10, color: _kSubL),
+                  const SizedBox(width: 6),
+                  _MetaChip(
+                      icon: Icons.event_rounded,
+                      label: DateFormat('dd MMM yyyy').format(_rangeTo)),
+                ]),
+              ]),
+        ),
+        if (type != null)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: _typeColor(type).withOpacity(0.13),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                  color: _typeColor(type).withOpacity(0.35)),
+            ),
+            child: Text(_typeShort(type),
                 style: GoogleFonts.spaceGrotesk(
-                    fontSize: 9, color: _kSubL, fontWeight: FontWeight.w500)),
-          );
-        },
-      );
+                    fontSize: 9,
+                    color: _typeColor(type),
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5)),
+          ),
+      ]),
+    );
+  }
 
-  SideTitles get _leftTitles => SideTitles(
-        showTitles: true,
-        reservedSize: 38,
-        getTitlesWidget: (value, meta) => Text(
-          value.toStringAsFixed(value == value.truncateToDouble() ? 0 : 1),
-          style: GoogleFonts.spaceGrotesk(fontSize: 9, color: _kSubL),
-        ),
-      );
+  // ── Chart body dispatcher ────────────────────────────────────────────────────
+  Widget _buildChartBody() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 18, 16, 8),
+      child: SizedBox(
+        height: 260,
+        child: _isAllTanks ? _buildAllTanksChart() : _buildParamChart(),
+      ),
+    );
+  }
 
-  // ── Single line chart (number | slider) ────────────────────────────────────
+  Widget _buildParamChart() {
+    final type  = _selectedParam?['type'] as String? ?? 'number';
+    final label = _selectedParam?['label'] as String? ?? '';
+    final data  = _filtered(_selectedTankId!);
 
-  Widget _singleLineChart(String label) {
+    if (data.isEmpty) return _noData('No readings in this time range');
+
+    switch (type) {
+      case 'dropdown':  return _barChart(label, data);
+      case 'dual_text': return _dualLineChart(label, data);
+      default:          return _singleLineChart(label, data);
+    }
+  }
+
+  // ── All-tanks multi-line chart ─────────────────────────────────────────────
+  // Each tank gets ONE line whose Y position is the tank's index (1-based).
+  // X axis = reading index (oldest→newest). Bottom labels = sparse timestamps.
+  // Widget _buildAllTanksChart() {
+  //   final lines     = <LineChartBarData>[];
+  //   final xLabels   = <int, String>{};   // x-index → formatted date label
+  //   int   maxPoints = 0;
+
+  //   int colorIdx = 0;
+  //   for (final tank in widget.tanks) {
+  //     // _filtered already returns sorted oldest→newest
+  //     final data = _filtered(tank.id);
+  //     if (data.isEmpty) { colorIdx++; continue; }
+
+  //     if (data.length > maxPoints) maxPoints = data.length;
+
+  //     final color  = _kMultiPalette[colorIdx % _kMultiPalette.length];
+  //     final spots  = <FlSpot>[];
+  //     final yValue = (colorIdx + 1).toDouble(); // one horizontal level per tank
+
+  //     for (int i = 0; i < data.length; i++) {
+  //       final xIdx = i + 1;
+  //       spots.add(FlSpot(xIdx.toDouble(), yValue));
+  //       // Overwrite is fine — label at position i is the same regardless of tank
+  //       xLabels[xIdx] = _fmt(data[i].capturedAt);
+  //     }
+
+  //     lines.add(LineChartBarData(
+  //       spots: spots,
+  //       color: color,
+  //       barWidth: 3,
+  //       isCurved: false,
+  //       dotData: FlDotData(
+  //         show: true,
+  //         getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
+  //             radius: 5,
+  //             color: color,
+  //             strokeWidth: 1.5,
+  //             strokeColor: _kBg),
+  //       ),
+  //       belowBarData: BarAreaData(show: false),
+  //     ));
+  //     colorIdx++;
+  //   }
+
+  //   if (lines.isEmpty) return _noData('No readings in this time range');
+
+  //   return LineChart(LineChartData(
+  //     borderData: _borderData,
+  //     gridData:   _gridData,
+  //     minX: 1,
+  //     maxX: maxPoints.toDouble(),
+  //     minY: 0,
+  //     maxY: (widget.tanks.length + 1).toDouble(),
+  //     titlesData: FlTitlesData(
+  //       topTitles:
+  //           const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+  //       rightTitles:
+  //           const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+  //       leftTitles: AxisTitles(
+  //         sideTitles: SideTitles(
+  //           showTitles: true,
+  //           reservedSize: 52,
+  //           interval: 1,
+  //           getTitlesWidget: (v, _) {
+  //             final idx = v.toInt();
+  //             if (idx < 1 || idx > widget.tanks.length) {
+  //               return const SizedBox.shrink();
+  //             }
+  //             final code = widget.tanks[idx - 1].tankCode;
+  //             return Padding(
+  //               padding: const EdgeInsets.only(right: 4),
+  //               child: Text(code,
+  //                   style: GoogleFonts.spaceGrotesk(
+  //                       fontSize: 8, color: _kSubL)),
+  //             );
+  //           },
+  //         ),
+  //       ),
+  //       bottomTitles: AxisTitles(
+  //         sideTitles: _bottomTitlesSparse(
+  //             maxPoints, (idx) => xLabels[idx] ?? ''),
+  //       ),
+  //     ),
+  //     lineBarsData: lines,
+  //     lineTouchData: LineTouchData(
+  //       touchTooltipData: LineTouchTooltipData(
+  //         getTooltipColor: (_) => _kCard,
+  //         tooltipBorderRadius: BorderRadius.circular(8),
+  //         tooltipBorder: const BorderSide(color: _kBorder),
+  //         getTooltipItems: (spots) => spots.map((s) {
+  //           final tankIdx = s.y.toInt() - 1;
+  //           final tankName = (tankIdx >= 0 && tankIdx < widget.tanks.length)
+  //               ? widget.tanks[tankIdx].tankName
+  //               : '';
+  //           final dateLabel = xLabels[s.x.toInt()] ?? '';
+  //           return LineTooltipItem(
+  //             '$tankName\n$dateLabel',
+  //             GoogleFonts.spaceGrotesk(
+  //                 color: _kMultiPalette[tankIdx % _kMultiPalette.length],
+  //                 fontWeight: FontWeight.w700,
+  //                 fontSize: 11),
+  //           );
+  //         }).toList(),
+  //       ),
+  //     ),
+  //   ));
+  // }
+
+  Widget _buildAllTanksChart() {
+  // ── 1. Collect all unique timestamps across all tanks (oldest→newest) ──
+  final allTimes = <DateTime>{};
+  final tankData = <String, List<ReadingModel>>{};
+
+  for (final tank in widget.tanks) {
+    final data = _filtered(tank.id);
+    tankData[tank.id] = data;
+    for (final r in data) {
+      final t = DateTime.tryParse(r.capturedAt);
+      if (t != null) allTimes.add(t);
+    }
+  }
+
+  if (allTimes.isEmpty) return _noData('No readings in this time range');
+
+  // ── 2. Sort global timeline oldest → newest ────────────────────────────
+  final globalTimes = allTimes.toList()..sort();
+
+  // ── 3. Map each DateTime → X index (1-based) ──────────────────────────
+  final timeToX = <DateTime, int>{};
+  for (int i = 0; i < globalTimes.length; i++) {
+    timeToX[globalTimes[i]] = i + 1;
+  }
+
+  // ── 4. Build X label map: xIndex → formatted label ────────────────────
+  final xLabels = <int, String>{};
+  for (int i = 0; i < globalTimes.length; i++) {
+    xLabels[i + 1] = _fmt(globalTimes[i].toIso8601String());
+  }
+
+  // ── 5. Build one line per tank ────────────────────────────────────────
+  final lines = <LineChartBarData>[];
+  int colorIdx = 0;
+
+  for (final tank in widget.tanks) {
+    final data = tankData[tank.id] ?? [];
+    if (data.isEmpty) { colorIdx++; continue; }
+
+    final color = _kMultiPalette[colorIdx % _kMultiPalette.length];
     final spots = <FlSpot>[];
-    for (int i = 0; i < _readings.length; i++) {
-      final raw = _readings[i].inspectionValues[label];
-      final num? v = raw is num ? raw : double.tryParse(raw?.toString() ?? '');
-      if (v != null) spots.add(FlSpot((i + 1).toDouble(), v.toDouble()));
+
+    for (final r in data) {
+      final t = DateTime.tryParse(r.capturedAt);
+      if (t == null) continue;
+      // Find closest match in globalTimes (handles sub-second drift)
+      DateTime bestMatch = globalTimes.first;
+      int bestDiff = (globalTimes.first.difference(t).inMilliseconds).abs();
+      for (final gt in globalTimes) {
+        final diff = (gt.difference(t).inMilliseconds).abs();
+        if (diff < bestDiff) { bestDiff = diff; bestMatch = gt; }
+      }
+      final xIdx = timeToX[bestMatch];
+      if (xIdx == null) continue;
+      final yValue = (colorIdx + 1).toDouble();
+      spots.add(FlSpot(xIdx.toDouble(), yValue));
     }
 
-    if (spots.isEmpty) {
-      return _noDataOverlay('No numeric values found for "$label"');
+    if (spots.isEmpty) { colorIdx++; continue; }
+
+    lines.add(LineChartBarData(
+      spots: spots,
+      color: color,
+      barWidth: 3,
+      isCurved: false,
+      dotData: FlDotData(
+        show: true,
+        getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
+            radius: 5,
+            color: color,
+            strokeWidth: 1.5,
+            strokeColor: _kBg),
+      ),
+      belowBarData: BarAreaData(show: false),
+    ));
+    colorIdx++;
+  }
+
+  if (lines.isEmpty) return _noData('No readings in this time range');
+
+  final maxX = globalTimes.length.toDouble();
+
+  return LineChart(LineChartData(
+    borderData: _borderData,
+    gridData:   _gridData,
+    minX: 1,
+    maxX: maxX,
+    minY: 0,
+    maxY: (widget.tanks.length + 1).toDouble(),
+    titlesData: FlTitlesData(
+      topTitles:
+          const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+      rightTitles:
+          const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+      leftTitles: AxisTitles(
+        sideTitles: SideTitles(
+          showTitles: true,
+          reservedSize: 52,
+          interval: 1,
+          getTitlesWidget: (v, _) {
+            final idx = v.toInt();
+            if (idx < 1 || idx > widget.tanks.length) {
+              return const SizedBox.shrink();
+            }
+            final code = widget.tanks[idx - 1].tankCode;
+            return Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Text(code,
+                  style: GoogleFonts.spaceGrotesk(
+                      fontSize: 8, color: _kSubL)),
+            );
+          },
+        ),
+      ),
+      bottomTitles: AxisTitles(
+        sideTitles: _bottomTitlesSparse(
+            globalTimes.length, (idx) => xLabels[idx] ?? ''),
+      ),
+    ),
+    lineBarsData: lines,
+    lineTouchData: LineTouchData(
+      touchTooltipData: LineTouchTooltipData(
+        getTooltipColor: (_) => _kCard,
+        tooltipBorderRadius: BorderRadius.circular(8),
+        tooltipBorder: const BorderSide(color: _kBorder),
+        getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+          final tankIdx = s.y.toInt() - 1;
+          final tankName = (tankIdx >= 0 && tankIdx < widget.tanks.length)
+              ? widget.tanks[tankIdx].tankName
+              : '';
+          final dateLabel = xLabels[s.x.toInt()] ?? '';
+          return LineTooltipItem(
+            '$tankName\n$dateLabel',
+            GoogleFonts.spaceGrotesk(
+                color: _kMultiPalette[tankIdx % _kMultiPalette.length],
+                fontWeight: FontWeight.w700,
+                fontSize: 11),
+          );
+        }).toList(),
+      ),
+    ),
+  ));
+}
+
+  // ── Single line chart (number / slider) ───────────────────────────────────
+  Widget _singleLineChart(String label, List<ReadingModel> data) {
+    // LOCAL variables — NOT class fields
+    final spots   = <FlSpot>[];
+    final xLabels = <int, String>{};
+
+    for (int i = 0; i < data.length; i++) {
+      final xIdx = i + 1;
+      final raw  = data[i].inspectionValues[label];
+      final v    = _toDouble(raw);
+      if (v != null) {
+        spots.add(FlSpot(xIdx.toDouble(), v));
+        xLabels[xIdx] = _fmt(data[i].capturedAt);
+      }
     }
+
+    if (spots.isEmpty) return _noData('No numeric values for "$label"');
 
     return LineChart(LineChartData(
       borderData: _borderData,
       gridData:   _gridData,
+      minX: 1,
+      maxX: spots.length.toDouble(),
       titlesData: FlTitlesData(
-        topTitles:   const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: AxisTitles(sideTitles: _bottomTitles),
-        leftTitles:   AxisTitles(sideTitles: _leftTitles),
+        topTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        leftTitles:  AxisTitles(sideTitles: _leftTitles),
+        bottomTitles: AxisTitles(
+            sideTitles: _bottomTitlesSparse(
+                spots.length, (idx) => xLabels[idx] ?? '')),
       ),
       lineBarsData: [
         LineChartBarData(
@@ -627,64 +1315,74 @@ class _TrendsScreenState extends State<TrendsScreen> {
           isCurved: true,
           curveSmoothness: 0.3,
           dotData: FlDotData(
-            show: spots.length <= 20,
+            show: spots.length <= 30,
             getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
-              radius: 4,
-              color: _kCopper,
-              strokeWidth: 1.5,
-              strokeColor: _kCopperL,
-            ),
+                radius: 4,
+                color: _kCopper,
+                strokeWidth: 1.5,
+                strokeColor: _kCopperL),
           ),
           belowBarData: BarAreaData(
             show: true,
             gradient: LinearGradient(
-              colors: [_kCopper.withOpacity(0.18), _kCopper.withOpacity(0.0)],
+              colors: [
+                _kCopper.withOpacity(0.18),
+                _kCopper.withOpacity(0.0),
+              ],
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
             ),
           ),
         ),
       ],
+      lineTouchData: _lineTouchData(
+          (s) => '${s.y.toStringAsFixed(2)}\n${xLabels[s.x.toInt()] ?? ''}'),
     ));
   }
 
-  // ── Dual line chart (dual_text → left + right) ─────────────────────────────
-
-  Widget _dualLineChart(String label) {
+  // ── Dual line chart (dual_text) ────────────────────────────────────────────
+  Widget _dualLineChart(String label, List<ReadingModel> data) {
+    // LOCAL variables
     final leftSpots  = <FlSpot>[];
     final rightSpots = <FlSpot>[];
+    final xLabels    = <int, String>{};
 
-    for (int i = 0; i < _readings.length; i++) {
-      final raw = _readings[i].inspectionValues[label];
+    for (int i = 0; i < data.length; i++) {
+      final raw = data[i].inspectionValues[label];
+      final x   = (i + 1).toDouble();
+      xLabels[i + 1] = _fmt(data[i].capturedAt);
       if (raw is Map) {
-        final lRaw = raw['left'];
-        final rRaw = raw['right'];
-        final lv = lRaw is num ? lRaw.toDouble() : double.tryParse(lRaw?.toString() ?? '');
-        final rv = rRaw is num ? rRaw.toDouble() : double.tryParse(rRaw?.toString() ?? '');
-        final x  = (i + 1).toDouble();
+        final lv = _toDouble(raw['left']);
+        final rv = _toDouble(raw['right']);
         if (lv != null) leftSpots.add(FlSpot(x, lv));
         if (rv != null) rightSpots.add(FlSpot(x, rv));
       }
     }
 
     if (leftSpots.isEmpty && rightSpots.isEmpty) {
-      return _noDataOverlay('No numeric dual-input values found for "$label"');
+      return _noData('No numeric dual-input values for "$label"');
     }
 
-    final leftLabel  = _param!['left_label']  as String? ?? 'Left';
-    final rightLabel = _param!['right_label'] as String? ?? 'Right';
+    final leftLabel  = _selectedParam?['left_label']  as String? ?? 'Left';
+    final rightLabel = _selectedParam?['right_label'] as String? ?? 'Right';
+    final totalCount = data.length;
 
     return LineChart(LineChartData(
       borderData: _borderData,
       gridData:   _gridData,
+      minX: 1,
+      maxX: totalCount.toDouble(),
       titlesData: FlTitlesData(
-        topTitles:   const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        bottomTitles: AxisTitles(sideTitles: _bottomTitles),
-        leftTitles:   AxisTitles(sideTitles: _leftTitles),
+        topTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        leftTitles:  AxisTitles(sideTitles: _leftTitles),
+        bottomTitles: AxisTitles(
+            sideTitles: _bottomTitlesSparse(
+                totalCount, (idx) => xLabels[idx] ?? '')),
       ),
       lineBarsData: [
-        // Left series — copper
         if (leftSpots.isNotEmpty)
           LineChartBarData(
             spots: leftSpots,
@@ -693,21 +1391,25 @@ class _TrendsScreenState extends State<TrendsScreen> {
             isCurved: true,
             curveSmoothness: 0.3,
             dotData: FlDotData(
-              show: leftSpots.length <= 20,
+              show: leftSpots.length <= 30,
               getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
-                radius: 4, color: _kCopper,
-                strokeWidth: 1.5, strokeColor: _kCopperL,
-              ),
+                  radius: 4,
+                  color: _kCopper,
+                  strokeWidth: 1.5,
+                  strokeColor: _kCopperL),
             ),
             belowBarData: BarAreaData(
               show: true,
               gradient: LinearGradient(
-                colors: [_kCopper.withOpacity(0.15), _kCopper.withOpacity(0.0)],
-                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [
+                  _kCopper.withOpacity(0.15),
+                  _kCopper.withOpacity(0.0),
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
               ),
             ),
           ),
-        // Right series — teal
         if (rightSpots.isNotEmpty)
           LineChartBarData(
             spots: rightSpots,
@@ -716,64 +1418,114 @@ class _TrendsScreenState extends State<TrendsScreen> {
             isCurved: true,
             curveSmoothness: 0.3,
             dotData: FlDotData(
-              show: rightSpots.length <= 20,
+              show: rightSpots.length <= 30,
               getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
-                radius: 4, color: _kTeal,
-                strokeWidth: 1.5, strokeColor: _kTeal.withOpacity(0.5),
-              ),
+                  radius: 4,
+                  color: _kTeal,
+                  strokeWidth: 1.5,
+                  strokeColor: _kTeal.withOpacity(0.5)),
             ),
             belowBarData: BarAreaData(
               show: true,
               gradient: LinearGradient(
-                colors: [_kTeal.withOpacity(0.12), _kTeal.withOpacity(0.0)],
-                begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                colors: [
+                  _kTeal.withOpacity(0.12),
+                  _kTeal.withOpacity(0.0),
+                ],
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
               ),
             ),
           ),
       ],
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => _kCard,
+          tooltipBorderRadius: BorderRadius.circular(8),
+          tooltipBorder: const BorderSide(color: _kBorder),
+          getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+            final isLeft  = s.barIndex == 0;
+            final color   = isLeft ? _kCopper : _kTeal;
+            final seriesL = isLeft ? leftLabel : rightLabel;
+            return LineTooltipItem(
+              '$seriesL: ${s.y.toStringAsFixed(2)}\n${xLabels[s.x.toInt()] ?? ''}',
+              GoogleFonts.spaceGrotesk(
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11),
+            );
+          }).toList(),
+        ),
+      ),
     ));
   }
 
-  // ── Bar chart (dropdown) ───────────────────────────────────────────────────
-
-  Widget _barChart(String label) {
+  // ── Bar chart (dropdown) ──────────────────────────────────────────────────
+  // X axis: iterator (1, 2, 3…) with dropdown option label below.
+  // Y axis: occurrence count.
+  Widget _barChart(String label, List<ReadingModel> data) {
+    // Count occurrences of each dropdown option
     final counts = <String, int>{};
-    for (final r in _readings) {
+    for (final r in data) {
       final v = r.inspectionValues[label]?.toString() ?? '';
       if (v.isNotEmpty) counts[v] = (counts[v] ?? 0) + 1;
     }
-
     if (counts.isEmpty) {
-      return _noDataOverlay('No dropdown selections found for "$label"');
+      return _noData('No dropdown selections for "$label"');
     }
 
     final entries = counts.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-
     final maxY = entries.first.value.toDouble();
 
     return BarChart(BarChartData(
       borderData: _borderData,
       gridData:   _gridData,
-      alignment: BarChartAlignment.spaceAround,
-      maxY: maxY * 1.25,
+      alignment:  BarChartAlignment.spaceAround,
+      maxY:       maxY * 1.3,
       titlesData: FlTitlesData(
-        topTitles:   const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        leftTitles:  AxisTitles(sideTitles: _leftTitles),
+        topTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        // Y axis = occurrence count
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 42,
+            getTitlesWidget: (v, _) {
+              if (v != v.truncateToDouble()) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Text(
+                  v.toInt().toString(),
+                  style: GoogleFonts.spaceGrotesk(
+                      fontSize: 9, color: _kSubL),
+                ),
+              );
+            },
+          ),
+        ),
+        // X axis = iterator 1, 2, 3… + option label beneath
         bottomTitles: AxisTitles(
           sideTitles: SideTitles(
             showTitles: true,
-            getTitlesWidget: (value, meta) {
-              final idx = value.toInt();
-              if (idx < 0 || idx >= entries.length) return const SizedBox.shrink();
-              final opt = entries[idx].key;
-              final short = opt.length > 8 ? '${opt.substring(0, 7)}…' : opt;
+            reservedSize: 44,
+            getTitlesWidget: (v, _) {
+              final idx = v.toInt();
+              if (idx < 0 || idx >= entries.length) {
+                return const SizedBox.shrink();
+              }
+              final opt   = entries[idx].key;
+              final short = opt.length > 9 ? '${opt.substring(0, 8)}…' : opt;
               return Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: Text(short,
-                    style: GoogleFonts.dmSans(
-                        fontSize: 9, color: _kSubL, fontWeight: FontWeight.w500)),
+                padding: const EdgeInsets.only(top: 5),
+                child: Text(
+                  '${idx + 1}\n$short',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.spaceGrotesk(
+                      fontSize: 8, color: _kSubL),
+                ),
               );
             },
           ),
@@ -782,169 +1534,399 @@ class _TrendsScreenState extends State<TrendsScreen> {
       barGroups: entries.asMap().entries.map((e) {
         final idx   = e.key;
         final count = e.value.value.toDouble();
-        final color = _kBarPalette[idx % _kBarPalette.length];
+        final color = _kMultiPalette[idx % _kMultiPalette.length];
         return BarChartGroupData(
           x: idx,
           barRods: [
             BarChartRodData(
               toY: count,
               color: color,
-              width: 28,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
+              width: 30,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(6)),
               backDrawRodData: BackgroundBarChartRodData(
-                show: true,
-                toY: maxY * 1.25,
-                color: color.withOpacity(0.07),
-              ),
+                  show: true,
+                  toY: maxY * 1.3,
+                  color: color.withOpacity(0.07)),
             ),
           ],
+          showingTooltipIndicators: [],
         );
       }).toList(),
+      barTouchData: BarTouchData(
+        touchTooltipData: BarTouchTooltipData(
+          getTooltipColor: (_) => _kCard,
+          tooltipBorderRadius: BorderRadius.circular(8),
+          getTooltipItem: (group, _, rod, __) {
+            final opt   = entries[group.x].key;
+            final cnt   = entries[group.x].value;
+            final total = counts.values.fold(0, (a, b) => a + b);
+            final pct   = (cnt / total * 100).toStringAsFixed(1);
+            return BarTooltipItem(
+              '$opt\n$cnt readings ($pct%)',
+              GoogleFonts.spaceGrotesk(
+                  color: _kMultiPalette[group.x % _kMultiPalette.length],
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11),
+            );
+          },
+        ),
+      ),
     ));
   }
 
-  Widget _noDataOverlay(String msg) => Center(
+  // ── Legend ─────────────────────────────────────────────────────────────────
+  Widget _buildLegend() {
+    Widget content;
+    if (_isAllTanks) {
+      content = Wrap(
+        spacing: 12,
+        runSpacing: 6,
+        children: widget.tanks.asMap().entries.map((e) {
+          final color = _kMultiPalette[e.key % _kMultiPalette.length];
+          return _LegendDot(color: color, label: e.value.tankName);
+        }).toList(),
+      );
+    } else {
+      final type  = _selectedParam?['type'] as String? ?? 'number';
+      final label = _selectedParam?['label'] as String? ?? '';
+
+      if (type == 'dual_text') {
+        final ll = _selectedParam?['left_label']  as String? ?? 'Left';
+        final rl = _selectedParam?['right_label'] as String? ?? 'Right';
+        content = Row(children: [
+          _LegendLine(color: _kCopper, label: '← $ll'),
+          const SizedBox(width: 16),
+          _LegendLine(color: _kTeal,   label: '→ $rl'),
+        ]);
+      } else if (type == 'dropdown') {
+        final data    = _filtered(_selectedTankId!);
+        final counts  = <String, int>{};
+        for (final r in data) {
+          final v = r.inspectionValues[label]?.toString() ?? '';
+          if (v.isNotEmpty) counts[v] = (counts[v] ?? 0) + 1;
+        }
+        final total   = counts.values.fold(0, (a, b) => a + b);
+        final entries = counts.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        content = Wrap(
+          spacing: 10,
+          runSpacing: 6,
+          children: entries.asMap().entries.map((e) {
+            final color = _kMultiPalette[e.key % _kMultiPalette.length];
+            final pct   = total > 0
+                ? (e.value.value / total * 100).toStringAsFixed(1)
+                : '0';
+            return _LegendDot(
+                color: color,
+                label: '${e.value.key}  ${e.value.value}×  ($pct%)');
+          }).toList(),
+        );
+      } else {
+        content = _LegendLine(color: _kCopper, label: label);
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 14),
+      child: content,
+    );
+  }
+
+  // ── Reading count footer ─────────────────────────────────────────────────
+  Widget _buildReadingFooter() {
+    int count = 0;
+    if (_isAllTanks) {
+      for (final t in widget.tanks) count += _filtered(t.id).length;
+    } else if (_selectedTankId != null) {
+      count = _filtered(_selectedTankId!).length;
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      child: Text(
+        '$count reading${count == 1 ? '' : 's'} in range · '
+        'tap "Export Chart as PNG" to save',
+        style: GoogleFonts.dmSans(fontSize: 11, color: _kSubL),
+      ),
+    );
+  }
+
+  // ── Chart style helpers ───────────────────────────────────────────────────
+
+  /// Left + bottom borders only; top + right hidden.
+  FlBorderData get _borderData => FlBorderData(
+        show: true,
+        border: const Border(
+          left:   BorderSide(color: _kBorderH, width: 1),
+          bottom: BorderSide(color: _kBorderH, width: 1),
+          top:    BorderSide(color: Colors.transparent),
+          right:  BorderSide(color: Colors.transparent),
+        ),
+      );
+
+  FlGridData get _gridData => FlGridData(
+        show: true,
+        drawVerticalLine: false,
+        getDrawingHorizontalLine: (_) => const FlLine(
+            color: _kBorder, strokeWidth: 1, dashArray: [4, 4]),
+      );
+
+  SideTitles get _leftTitles => SideTitles(
+        showTitles: true,
+        reservedSize: 50,
+        getTitlesWidget: (v, _) => Text(
+          v == v.truncateToDouble()
+              ? v.toInt().toString()
+              : v.toStringAsFixed(1),
+          style: GoogleFonts.spaceGrotesk(fontSize: 9, color: _kSubL),
+        ),
+      );
+
+  /// Sparse bottom labels — at most 5 visible, each showing DD/MM/YYYY\nHH:mm.
+  SideTitles _bottomTitlesSparse(
+    int count,
+    String Function(int) getLabel,
+  ) {
+    final step = (count / 5).ceil().clamp(1, count);
+
+    return SideTitles(
+      showTitles: true,
+      reservedSize: 58, // enough for two-line timestamp
+      interval: step.toDouble(),
+      getTitlesWidget: (v, _) {
+        final idx = v.toInt();
+        if (idx < 1) return const SizedBox.shrink();
+        return Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: SizedBox(
+            width: 60,
+            child: Text(
+              getLabel(idx),
+              textAlign: TextAlign.center,
+              style: GoogleFonts.spaceGrotesk(
+                fontSize: 8.5,
+                height: 1.2,
+                color: _kSubL,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// ✅ FIX: tooltipRoundedRadius → tooltipBorderRadius in fl_chart 1.2.0
+  LineTouchData _lineTouchData(String Function(LineBarSpot) fmt) =>
+      LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => _kCard,
+          tooltipBorderRadius: BorderRadius.circular(8),
+          tooltipBorder: const BorderSide(color: _kBorder),
+          getTooltipItems: (spots) => spots
+              .map((s) => LineTooltipItem(
+                    fmt(s),
+                    GoogleFonts.spaceGrotesk(
+                        color: _kCopper,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11),
+                  ))
+              .toList(),
+        ),
+      );
+
+  double? _toDouble(dynamic v) {
+    if (v is num)    return v.toDouble();
+    if (v is String) return double.tryParse(v);
+    return null;
+  }
+
+  Widget _noData(String msg) => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.show_chart_rounded, size: 36, color: _kSubL),
+          const Icon(Icons.bar_chart_outlined, size: 36, color: _kSubL),
           const SizedBox(height: 8),
           Text(msg,
               textAlign: TextAlign.center,
               style: GoogleFonts.dmSans(fontSize: 12, color: _kSub)),
         ]),
       );
-
-  // ── Legend ─────────────────────────────────────────────────────────────────
-
-  Widget _buildLegend(String type, String label) {
-    if (type == 'dual_text') {
-      final leftLabel  = _param!['left_label']  as String? ?? 'Left';
-      final rightLabel = _param!['right_label'] as String? ?? 'Right';
-      return Row(children: [
-        _LegendDot(color: _kCopper, label: '← $leftLabel'),
-        const SizedBox(width: 18),
-        _LegendDot(color: _kTeal,   label: '→ $rightLabel'),
-      ]);
-    }
-
-    if (type == 'dropdown') {
-      final counts = <String, int>{};
-      for (final r in _readings) {
-        final v = r.inspectionValues[label]?.toString() ?? '';
-        if (v.isNotEmpty) counts[v] = (counts[v] ?? 0) + 1;
-      }
-      final entries = counts.entries.toList()
-        ..sort((a, b) => b.value.compareTo(a.value));
-      final total = counts.values.fold(0, (a, b) => a + b);
-      return Wrap(
-        spacing: 12, runSpacing: 6,
-        children: entries.asMap().entries.map((e) {
-          final color = _kBarPalette[e.key % _kBarPalette.length];
-          final pct   = total > 0 ? (e.value.value / total * 100).toStringAsFixed(1) : '0';
-          return _LegendDot(
-              color: color,
-              label: '${e.value.key}  ${e.value.value}×  ($pct%)');
-        }).toList(),
-      );
-    }
-
-    // number | slider
-    return _LegendDot(color: _kCopper, label: label);
-  }
-
-  // ── Excel export ───────────────────────────────────────────────────────────
-
-  Widget _buildExcelButton() => SizedBox(
-        width: double.infinity,
-        child: OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(
-            side: const BorderSide(color: _kBorderH),
-            foregroundColor: _kText,
-            padding: const EdgeInsets.symmetric(vertical: 13),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-          ),
-          onPressed: _exportExcel,
-          icon: const Icon(Icons.table_chart_outlined, size: 18, color: _kSuccess),
-          label: Text('Export All Readings as Excel',
-              style: GoogleFonts.dmSans(
-                  fontWeight: FontWeight.w600, fontSize: 13, color: _kText)),
-        ),
-      );
-
-  Future<void> _exportExcel() async {
-    debugPrint('[Trends] Exporting Excel — ${_readings.length} readings');
-    final excel = xl.Excel.createExcel();
-    final sheet = excel[_tank?.tankName ?? 'Readings'];
-
-    // Collect all param labels for columns
-    final paramLabels = _tank?.inspectionProperties
-            .map((p) => p['label'] as String? ?? '')
-            .where((l) => l.isNotEmpty)
-            .toList() ??
-        [];
-
-    // Header row
-    sheet.appendRow([
-      xl.TextCellValue('Tank'),
-      xl.TextCellValue('Captured At'),
-      xl.TextCellValue('Inspector'),
-      ...paramLabels.map((l) => xl.TextCellValue(l)),
-    ]);
-
-    // Data rows
-    for (final r in _readings) {
-      final paramValues = paramLabels.map((l) {
-        final v = r.inspectionValues[l];
-        if (v is Map) {
-          // dual_text: export as "left | right"
-          return xl.TextCellValue(
-              '${v['left'] ?? ''} | ${v['right'] ?? ''}');
-        }
-        return xl.TextCellValue(v?.toString() ?? '');
-      }).toList();
-
-      sheet.appendRow([
-        xl.TextCellValue(r.tankSnapshotName ?? _tank?.tankName ?? ''),
-        xl.TextCellValue(_fmtCapturedAt(r.capturedAt)),
-        xl.TextCellValue(r.capturedByName ?? ''),
-        ...paramValues,
-      ]);
-    }
-
-    final dir  = await getTemporaryDirectory();
-    final name = '${_tank?.tankCode ?? 'tank'}_readings.xlsx';
-    final file = File('${dir.path}/$name');
-    await file.writeAsBytes(excel.save()!);
-    debugPrint('[Trends] Excel saved → ${file.path}');
-    await Share.shareXFiles([XFile(file.path)],
-        text: 'Readings for ${_tank?.tankName ?? 'tank'}');
-  }
-
-  // ── PNG export ─────────────────────────────────────────────────────────────
-
-  Future<void> _exportPng() async {
-    debugPrint('[Trends] Exporting PNG chart');
-    try {
-      final boundary = _chartKey.currentContext!.findRenderObject()
-          as RenderRepaintBoundary;
-      final image = await boundary.toImage(pixelRatio: 3.0);
-      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-      final dir   = await getTemporaryDirectory();
-      final name  = '${_tank?.tankCode ?? 'tank'}_${_param?['label'] ?? 'chart'}.png';
-      final file  = File('${dir.path}/$name');
-      await file.writeAsBytes(bytes!.buffer.asUint8List());
-      debugPrint('[Trends] PNG saved → ${file.path}');
-      await Share.shareXFiles([XFile(file.path)],
-          text: '${_tank?.tankName} — ${_param?['label']}');
-    } catch (e) {
-      debugPrint('[Trends] PNG export error: $e');
-      _snack('PNG export failed: $e');
-    }
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Reusable sub-widgets
+// QR SCAN PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+class _QrScanPage extends StatefulWidget {
+  const _QrScanPage();
+  @override
+  State<_QrScanPage> createState() => _QrScanPageState();
+}
+
+class _QrScanPageState extends State<_QrScanPage>
+    with SingleTickerProviderStateMixin {
+  bool _scanned = false;
+  late AnimationController _pulse;
+  late Animation<double> _pulseAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+        vsync: this, duration: const Duration(seconds: 2))
+      ..repeat(reverse: true);
+    _pulseAnim = Tween(begin: 0.85, end: 1.0).animate(
+        CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _kBg,
+      appBar: AppBar(
+        backgroundColor: _kBg,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: _kText),
+        title: Text('Scan Tank QR',
+            style: GoogleFonts.dmSans(
+                fontWeight: FontWeight.w700,
+                color: _kText,
+                fontSize: 17)),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(height: 1, color: _kBorder),
+        ),
+      ),
+      body: Stack(children: [
+        MobileScanner(
+          onDetect: (capture) {
+            if (_scanned) return;
+            final raw = capture.barcodes.firstOrNull?.rawValue;
+            if (raw != null) {
+              _scanned = true;
+              Navigator.pop(context, raw);
+            }
+          },
+        ),
+        IgnorePointer(
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: _OverlayPainter(),
+          ),
+        ),
+        Center(
+          child: AnimatedBuilder(
+            animation: _pulseAnim,
+            builder: (_, __) => Transform.scale(
+              scale: _pulseAnim.value,
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  border: Border.all(color: _kCopper, width: 2.5),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Center(
+          child: SizedBox(
+            width: 240,
+            height: 240,
+            child: Stack(children: [
+              _Corner(top: 0, left: 0, rotate: 0),
+              _Corner(top: 0, right: 0, rotate: 90),
+              _Corner(bottom: 0, right: 0, rotate: 180),
+              _Corner(bottom: 0, left: 0, rotate: 270),
+            ]),
+          ),
+        ),
+        Positioned(
+          bottom: 56,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 18, vertical: 10),
+              decoration: BoxDecoration(
+                color: _kCard.withOpacity(0.92),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: _kBorder),
+              ),
+              child: Text('Point at tank QR code',
+                  style: GoogleFonts.dmSans(
+                      color: _kText, fontSize: 13)),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _OverlayPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = Colors.black.withOpacity(0.55);
+    const cut = 240.0;
+    final cx = size.width / 2, cy = size.height / 2;
+    final rect = Rect.fromCenter(
+        center: Offset(cx, cy), width: cut, height: cut);
+    canvas.drawPath(
+      Path.combine(
+        PathOperation.difference,
+        Path()..addRect(Offset.zero & size),
+        Path()
+          ..addRRect(RRect.fromRectAndRadius(
+              rect, const Radius.circular(16))),
+      ),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_) => false;
+}
+
+class _Corner extends StatelessWidget {
+  final double? top, left, right, bottom;
+  final double rotate;
+  const _Corner(
+      {this.top,
+      this.left,
+      this.right,
+      this.bottom,
+      required this.rotate});
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+        top: top,
+        left: left,
+        right: right,
+        bottom: bottom,
+        child: Transform.rotate(
+          angle: rotate * 3.14159 / 180,
+          child: Container(
+            width: 24,
+            height: 24,
+            decoration: const BoxDecoration(
+              border: Border(
+                top:  BorderSide(color: _kCopperL, width: 3),
+                left: BorderSide(color: _kCopperL, width: 3),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REUSABLE MICRO-WIDGETS
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SecLabel extends StatelessWidget {
@@ -953,23 +1935,120 @@ class _SecLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Text(text,
       style: GoogleFonts.spaceGrotesk(
-          fontSize: 9, fontWeight: FontWeight.w700,
-          color: _kSubL, letterSpacing: 1.5));
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          color: _kSubL,
+          letterSpacing: 1.8));
+}
+
+class _DropContainer extends StatelessWidget {
+  final Widget child;
+  const _DropContainer({required this.child});
+  @override
+  Widget build(BuildContext context) => Container(
+        decoration: BoxDecoration(
+          color: _kSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kBorder),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: child,
+      );
+}
+
+class _DateBtn extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool active;
+  const _DateBtn(
+      {required this.label,
+      required this.icon,
+      required this.onTap,
+      required this.active});
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          height: 46,
+          decoration: BoxDecoration(
+            color: active ? _kCopper.withOpacity(0.08) : _kSurface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+                color: active ? _kCopper.withOpacity(0.4) : _kBorder),
+          ),
+          child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon,
+                    size: 14,
+                    color: active ? _kCopper : _kSub),
+                const SizedBox(width: 7),
+                Text(label,
+                    style: GoogleFonts.dmSans(
+                        color: active ? _kCopper : _kSub,
+                        fontWeight: active
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                        fontSize: 12)),
+              ]),
+        ),
+      );
+}
+
+class _MetaChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  const _MetaChip({required this.icon, required this.label});
+  @override
+  Widget build(BuildContext context) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Icon(icon, size: 10, color: _kSubL),
+        const SizedBox(width: 4),
+        Text(label,
+            style: GoogleFonts.dmSans(fontSize: 10, color: _kSubL)),
+      ]);
 }
 
 class _LegendDot extends StatelessWidget {
-  final Color  color;
+  final Color color;
   final String label;
   const _LegendDot({required this.color, required this.label});
   @override
-  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+  Widget build(BuildContext context) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
         Container(
-          width: 10, height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-        ),
+            width: 8,
+            height: 8,
+            decoration:
+                BoxDecoration(color: color, shape: BoxShape.circle)),
+        const SizedBox(width: 5),
+        Text(label,
+            style: GoogleFonts.dmSans(
+                fontSize: 11,
+                color: _kSub,
+                fontWeight: FontWeight.w500)),
+      ]);
+}
+
+class _LegendLine extends StatelessWidget {
+  final Color color;
+  final String label;
+  const _LegendLine({required this.color, required this.label});
+  @override
+  Widget build(BuildContext context) =>
+      Row(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+            width: 18,
+            height: 2.5,
+            decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 6),
         Text(label,
-            style: GoogleFonts.dmSans(fontSize: 11, color: _kSub,
+            style: GoogleFonts.dmSans(
+                fontSize: 11,
+                color: _kSub,
                 fontWeight: FontWeight.w500)),
       ]);
 }
