@@ -1,3 +1,4 @@
+
 workflows:
   ios-release:
     name: iOS Release
@@ -8,69 +9,25 @@ workflows:
 
     scripts:
 
-      - name: Flutter dependencies
+      - name: Flutter packages
         script: |
           flutter pub get
 
-      - name: Fix Firebase iOS Podfile
+      - name: Build iOS dependencies only
+        script: |
+          cd ios
+          flutter build ios --config-only --no-codesign
+
+      - name: Patch Pods project
         script: |
           cd ios
 
-          cat > Podfile <<'EOF'
-          platform :ios, '13.0'
+          sed -i '' \
+          's/CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;/CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;/g' \
+          Pods/Pods.xcodeproj/project.pbxproj
 
-          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+          echo "Pods patched."
 
-          project 'Runner', {
-            'Debug' => :debug,
-            'Profile' => :release,
-            'Release' => :release,
-          }
-
-          def flutter_root
-            generated_xcode_build_settings_path = File.expand_path(
-              File.join('Flutter', 'Generated.xcconfig'),
-              __dir__,
-            )
-
-            File.foreach(generated_xcode_build_settings_path) do |line|
-              matches = line.match(/FLUTTER_ROOT\=(.*)/)
-              return matches[1].strip if matches
-            end
-          end
-
-          require File.expand_path(
-            File.join(
-              flutter_root,
-              'packages',
-              'flutter_tools',
-              'bin',
-              'podhelper'
-            ),
-          )
-
-          flutter_ios_podfile_setup()
-
-          target 'Runner' do
-            use_frameworks!
-            use_modular_headers!
-
-            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-          end
-
-          post_install do |installer|
-            installer.pods_project.targets.each do |target|
-              flutter_additional_ios_build_settings(target)
-
-              target.build_configurations.each do |config|
-                config.build_settings[
-                  'CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'
-                ] = 'YES'
-              end
-            end
-          end
-          EOF
-
-      - name: Build iOS
+      - name: Final iOS build
         script: |
           flutter build ios --release --no-codesign
