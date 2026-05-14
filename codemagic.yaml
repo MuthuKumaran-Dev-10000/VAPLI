@@ -5,8 +5,8 @@ workflows:
 
     environment:
       flutter: stable
-      xcode: 13.0
-      
+      xcode: latest
+
 
     scripts:
 
