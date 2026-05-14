@@ -23,12 +23,12 @@ workflows:
         script: |
           cd ios
 
-          sed -i '' "s/platform , '13.0'/platform , '15.0'/g" Podfile || true
-          sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" Runner.xcodeproj/project.pbxproj || true
+        sed -i '' "s/platform , '13.0'/platform , '15.0'/g" Podfile || true
+        sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" Runner.xcodeproj/project.pbxproj || true
 
-          cd ..
+        cd ..
 
-          flutter build ios --config-only --no-codesign
+        flutter build ios --config-only --no-codesign
           echo "Pods patched."
 
       - name: Final iOS build
