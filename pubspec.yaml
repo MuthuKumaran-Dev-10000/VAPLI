@@ -18,10 +18,13 @@ dependencies:
   
   firebase_core: ^4.9.0
   firebase_database: ^12.4.1
-  # firebase_core: ^4.8.0 
+  # firebase_core: ^4.8.0  #old version
   # firebase_database: ^12.4.0
   # QR Code
-  mobile_scanner: ^3.5.6
+  # mobile_scanner: ^3.5.6 #old version
+  
+  mobile_scanner: ^7.2.0
+
   qr_flutter: ^4.1.0
 
   # Charts
