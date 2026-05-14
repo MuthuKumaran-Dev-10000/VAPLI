@@ -25,15 +25,9 @@ class DefaultFirebaseOptions {
       case TargetPlatform.iOS:
         return ios;
       case TargetPlatform.macOS:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for macos - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return macos;
       case TargetPlatform.windows:
-        throw UnsupportedError(
-          'DefaultFirebaseOptions have not been configured for windows - '
-          'you can reconfigure this by running the FlutterFire CLI again.',
-        );
+        return windows;
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
@@ -68,12 +62,33 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'dummy-firebase-ios-api-key',
-    appId: '1:000000000000:ios:6ad5cc255ed5a422f8705e',
+    appId: '1:000000000000:ios:aca77e13f82d16c4f8705e',
     messagingSenderId: '000000000000',
     projectId: 'dummy-firebase-project-id',
     databaseURL: 'https://dummy-firebase-project-id-default-rtdb.firebaseio.com',
     storageBucket: 'dummy-firebase-project-id.firebasestorage.app',
-    iosBundleId: 'com.lubeindicator.myapp',
+    iosBundleId: 'com.example.dummyapp',
+  );
+
+  static const FirebaseOptions macos = FirebaseOptions(
+    apiKey: 'dummy-firebase-ios-api-key',
+    appId: '1:000000000000:ios:aca77e13f82d16c4f8705e',
+    messagingSenderId: '000000000000',
+    projectId: 'dummy-firebase-project-id',
+    databaseURL: 'https://dummy-firebase-project-id-default-rtdb.firebaseio.com',
+    storageBucket: 'dummy-firebase-project-id.firebasestorage.app',
+    iosBundleId: 'com.example.dummyapp',
+  );
+
+  static const FirebaseOptions windows = FirebaseOptions(
+    apiKey: 'dummy-firebase-web-api-key',
+    appId: '1:000000000000:web:8f0ce15f2ed43332f8705e',
+    messagingSenderId: '000000000000',
+    projectId: 'dummy-firebase-project-id',
+    authDomain: 'dummy-firebase-project-id.firebaseapp.com',
+    databaseURL: 'https://dummy-firebase-project-id-default-rtdb.firebaseio.com',
+    storageBucket: 'dummy-firebase-project-id.firebasestorage.app',
+    measurementId: 'G-DUMMYWIN1234',
   );
 
 }
