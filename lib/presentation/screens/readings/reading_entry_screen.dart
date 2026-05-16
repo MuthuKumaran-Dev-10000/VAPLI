@@ -1,14 +1,21 @@
 // lib/presentation/screens/readings/reading_entry_screen.dart
 // ══════════════════════════════════════════════════════════════════════════════
-// WHAT'S NEW:
-//   ✅ Scale reading field REMOVED — users fill their own inspection form
-//   ✅ On successful save → DashboardStatsRepository.updateStatsAfterReading()
-//      is called inline so the dashboard never needs bulk recalculation
+// WHAT'S NEW (v2):
+//   ✅ Global "Reference Photo" section REMOVED
+//   ✅ Per-parameter capture_image support:
+//        capture_image: true  → camera button + thumbnail inside param card
+//                               capturing is REQUIRED (blocks save)
+//        capture_image: false → no camera UI for that param
+//        key absent           → no camera UI (treated as false)
+//   ✅ Number hint shown TWO ways:
+//        (i)  above the field as hint text label
+//        (ii) as placeholder text inside the input box ("inaf")
+//   ✅ Deep copy of inspectionProperties → fixes cross-tank param bleed bug
 //   ✅ All dynamic property types: number | text | multiline | dropdown |
 //      dual_text | slider
 //   ✅ Required-field enforcement blocks save button
-//   ✅ Photo capture mandatory
-//   ✅ Industrial luxury UI (copper accents, obsidian background)
+//   ✅ Industrial luxury UI (copper accents, obsidian background) unchanged
+//   ✅ On successful save → DashboardStatsRepository.updateStatsAfterReading()
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
@@ -68,9 +75,7 @@ class ReadingEntryScreen extends StatefulWidget {
 }
 
 class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
-  // ── photo ─────────────────────────────────────────────────────────────────
   final _picker = ImagePicker();
-  File? _capturedImage;
 
   // ── save state ────────────────────────────────────────────────────────────
   bool _saving = false;
@@ -85,8 +90,14 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   final Map<String, String?> _dropdownVal = {};
   final Map<String, double> _sliderVal = {};
 
-  List<Map<String, dynamic>> get _props =>
-      List<Map<String, dynamic>>.from(widget.tank.inspectionProperties);
+  /// Per-parameter photo (only for params where capture_image == true)
+  final Map<String, File?> _paramPhoto = {};
+
+  // ── DEEP COPY of inspection properties ───────────────────────────────────
+  // FIX: shallow copy caused cross-tank parameter bleed when Flutter reused
+  // widget state across tank navigations. Deep-copy every map so mutations
+  // (e.g. controller attachment) never bleed into the TankModel's original list.
+  late final List<Map<String, dynamic>> _props;
 
   String get _nowLabel =>
       DateFormat('dd MMM yyyy, HH:mm:ss').format(DateTime.now());
@@ -96,9 +107,25 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   @override
   void initState() {
     super.initState();
+
+    // ── Deep copy to prevent cross-tank bleed ──────────────────────────────
+    _props = widget.tank.inspectionProperties
+        .map((p) => Map<String, dynamic>.from(
+              // Also deep-copy any nested lists (e.g. options, constraints)
+              p.map((k, v) {
+                if (v is List) return MapEntry(k, List<dynamic>.from(v));
+                if (v is Map)
+                  return MapEntry(k, Map<String, dynamic>.from(v as Map));
+                return MapEntry(k, v);
+              }),
+            ))
+        .toList();
+
+    // ── Initialise input controllers ───────────────────────────────────────
     for (final p in _props) {
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
+
       switch (type) {
         case 'number':
         case 'text':
@@ -116,6 +143,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           _dualRight[id] = TextEditingController();
           break;
       }
+
+      // Initialise per-param photo slot if capture_image == true
+      if (p['capture_image'] == true) {
+        _paramPhoto[id] = null;
+      }
     }
   }
 
@@ -129,100 +161,62 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── validation ────────────────────────────────────────────────────────────
 
+  String? _validateConstraints(Map<String, dynamic> prop, dynamic value) {
+    final constraints =
+        List<Map<String, dynamic>>.from(prop['constraints'] ?? []);
 
-String? _validateConstraints(
-  Map<String, dynamic> prop,
-  dynamic value,
-) {
+    for (final c in constraints) {
+      final op = c['op']?.toString() ?? '';
+      final expected = c['value']?.toString() ?? '';
+      final msg = c['error_msg']?.toString() ?? 'Invalid value';
+      final actual = value.toString();
 
-  final constraints =
-      List<Map<String, dynamic>>.from(
-        prop["constraints"] ?? [],
-      );
-
-  for (final c in constraints) {
-
-    final op =
-        c["op"]?.toString() ?? "";
-
-    final expected =
-        c["value"]?.toString() ?? "";
-
-    final msg =
-        c["error_msg"]?.toString() ??
-            "Invalid value";
-
-
-    final actual =
-        value.toString();
-
-
-    switch (op) {
-
-      case "<":
-        if ((double.tryParse(actual) ?? 0) >=
-            (double.tryParse(expected) ?? 0)) {
-          return msg;
-        }
-        break;
-
-
-      case "<=":
-        if ((double.tryParse(actual) ?? 0) >
-            (double.tryParse(expected) ?? 0)) {
-          return msg;
-        }
-        break;
-
-
-      case ">":
-        if ((double.tryParse(actual) ?? 0) <=
-            (double.tryParse(expected) ?? 0)) {
-          return msg;
-        }
-        break;
-
-
-      case ">=":
-        if ((double.tryParse(actual) ?? 0) <
-            (double.tryParse(expected) ?? 0)) {
-          return msg;
-        }
-        break;
-
-
-      case "==":
-        if (actual != expected) {
-          return msg;
-        }
-        break;
-
-
-      case "!=":
-        if (actual == expected) {
-          return msg;
-        }
-        break;
-
-
-      case "contains":
-        if (!actual.contains(expected)) {
-          return msg;
-        }
-        break;
+      switch (op) {
+        case '<':
+          if ((double.tryParse(actual) ?? 0) >=
+              (double.tryParse(expected) ?? 0)) return msg;
+          break;
+        case '<=':
+          if ((double.tryParse(actual) ?? 0) > (double.tryParse(expected) ?? 0))
+            return msg;
+          break;
+        case '>':
+          if ((double.tryParse(actual) ?? 0) <=
+              (double.tryParse(expected) ?? 0)) return msg;
+          break;
+        case '>=':
+          if ((double.tryParse(actual) ?? 0) < (double.tryParse(expected) ?? 0))
+            return msg;
+          break;
+        case '==':
+          if (actual != expected) return msg;
+          break;
+        case '!=':
+          if (actual == expected) return msg;
+          break;
+        case 'contains':
+          if (!actual.contains(expected)) return msg;
+          break;
+      }
     }
+    return null;
   }
-
-  return null;
-}
-
 
   String? _requiredError() {
     for (final p in _props) {
-      if (p['required'] != true) continue;
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
       final label = p['label'] as String? ?? 'Parameter';
+      final isReq = p['required'] == true;
+      final hasCam = p['capture_image'] == true;
+
+      // Per-parameter photo required check
+      if (hasCam && (_paramPhoto[id] == null)) {
+        return '"$label" — photo is required';
+      }
+
+      if (!isReq) continue;
+
       switch (type) {
         case 'number':
         case 'text':
@@ -248,7 +242,19 @@ String? _validateConstraints(
     return null;
   }
 
-  bool get _canSave => !_saving && !_saved && _capturedImage != null;
+  /// canSave: at least one param has capture_image==true → its photo must exist.
+  /// No global photo requirement anymore.
+  bool get _canSave {
+    if (_saving || _saved) return false;
+    // Check all per-param photos that are required
+    for (final p in _props) {
+      if (p['capture_image'] == true) {
+        final id = p['id'] as String;
+        if (_paramPhoto[id] == null) return false;
+      }
+    }
+    return true;
+  }
 
   // ── collect values ────────────────────────────────────────────────────────
 
@@ -258,6 +264,7 @@ String? _validateConstraints(
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
       final label = p['label'] as String? ?? id;
+
       switch (type) {
         case 'number':
           out[label] = double.tryParse(_textCtrl[id]?.text.trim() ?? '') ?? 0.0;
@@ -274,20 +281,11 @@ String? _validateConstraints(
           break;
         case 'dual_text':
           final leftRaw = _dualLeft[id]?.text.trim() ?? '';
-
           final rightRaw = _dualRight[id]?.text.trim() ?? '';
-
           out[label] = {
-            "left": double.tryParse(
-                  leftRaw,
-                ) ??
-                leftRaw,
-            "right": double.tryParse(
-                  rightRaw,
-                ) ??
-                rightRaw,
+            'left': double.tryParse(leftRaw) ?? leftRaw,
+            'right': double.tryParse(rightRaw) ?? rightRaw,
           };
-
           break;
       }
     }
@@ -296,12 +294,12 @@ String? _validateConstraints(
 
   // ── camera ────────────────────────────────────────────────────────────────
 
-  Future<void> _captureImage() async {
+  Future<void> _captureParamImage(String paramId) async {
     final img =
         await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
     if (img == null) return;
     setState(() {
-      _capturedImage = File(img.path);
+      _paramPhoto[paramId] = File(img.path);
       _uploadError = null;
     });
   }
@@ -312,7 +310,7 @@ String? _validateConstraints(
       .convert(utf8.encode('folder=$_folder&timestamp=$ts$_apiSecret'))
       .toString();
 
-  Future<String> _uploadPhoto() async {
+  Future<String> _uploadFile(File file) async {
     final ts = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
     final req = http.MultipartRequest('POST',
         Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/image/upload'));
@@ -320,10 +318,9 @@ String? _validateConstraints(
     req.fields['timestamp'] = ts;
     req.fields['signature'] = _sig(ts);
     req.fields['folder'] = _folder;
-    req.files.add(await http.MultipartFile.fromPath(
-        'file', _capturedImage!.path,
-        contentType: MediaType.parse(
-            lookupMimeType(_capturedImage!.path) ?? 'image/jpeg')));
+    req.files.add(await http.MultipartFile.fromPath('file', file.path,
+        contentType:
+            MediaType.parse(lookupMimeType(file.path) ?? 'image/jpeg')));
     final res = await http.Response.fromStream(await req.send());
     if (res.statusCode != 200) {
       throw Exception('Photo upload failed (${res.statusCode})');
@@ -334,10 +331,6 @@ String? _validateConstraints(
   // ── save ──────────────────────────────────────────────────────────────────
 
   Future<void> _save() async {
-    if (_capturedImage == null) {
-      _snack('Please capture a photo first', _kWarn);
-      return;
-    }
     final propErr = _requiredError();
     if (propErr != null) {
       _snack(propErr, _kDanger);
@@ -352,53 +345,54 @@ String? _validateConstraints(
     });
 
     try {
-      final imageUrl = await _uploadPhoto();
+      // Upload all per-parameter photos and collect their URLs
+      final paramImageUrls = <String, String>{};
+      for (final p in _props) {
+        final id = p['id'] as String;
+        if (p['capture_image'] == true && _paramPhoto[id] != null) {
+          final url = await _uploadFile(_paramPhoto[id]!);
+          paramImageUrls[id] = url;
+        }
+      }
+
+      // Collect inspection values
       final inspVals = _collectValues();
 
+      // Merge param image URLs into inspection values so they persist
+      // Key convention: "<param_id>__image_url"
+      for (final entry in paramImageUrls.entries) {
+        inspVals['${entry.key}__image_url'] = entry.value;
+      }
 
-    
-for (final p in _props) {
+      // Validate constraints
+      for (final p in _props) {
+        final label = p['label'];
+        final value = inspVals[label];
+        final err = _validateConstraints(p, value);
+        if (err != null) {
+          _snack(err, _kDanger);
+          setState(() => _saving = false);
+          return;
+        }
+      }
 
-  final label =
-      p["label"];
-
-  final value =
-      inspVals[label];
-
-  final err =
-      _validateConstraints(
-        p,
-        value,
-      );
-
-  if (err != null) {
-
-    _snack(
-      err,
-      _kDanger,
-    );
-
-    setState(
-      () => _saving = false,
-    );
-
-    return;
-  }
-}
+      // Use first param image URL as the primary reading imageUrl,
+      // or empty string if none (no global photo anymore)
+      final primaryImageUrl =
+          paramImageUrls.values.isNotEmpty ? paramImageUrls.values.first : '';
 
       // 1 ── Save reading
       final reading = await ReadingRepository().saveReading(
         tankId: widget.tank.id,
         tankName: widget.tank.tankName,
-        level:
-            0, // scale removed; level is vestigial — keep field for schema compat
+        level: 0, // vestigial field, kept for schema compat
         capturedBy: widget.currentUser.id,
         capturedByName: widget.currentUser.fullName,
-        imageUrl: imageUrl,
+        imageUrl: primaryImageUrl,
         inspectionValues: inspVals,
       );
 
-      // 2 ── Incrementally update dashboard stats (no bulk recalculation)
+      // 2 ── Incrementally update dashboard stats
       await DashboardStatsRepository().updateStatsAfterReading(
         reading: reading,
         tank: widget.tank,
@@ -458,18 +452,6 @@ for (final p in _props) {
               tank: widget.tank,
               currentUser: widget.currentUser,
               nowLabel: _nowLabel,
-              imageStatus:
-                  _capturedImage == null ? 'Not captured' : 'Captured ✓',
-            ),
-
-            const SizedBox(height: 24),
-
-            // ── Photo section ─────────────────────────────────────────────
-            _SecLabel('REFERENCE PHOTO *'),
-            const SizedBox(height: 10),
-            _PhotoRow(
-              image: _capturedImage,
-              onCapture: _captureImage,
             ),
 
             // ── Inspection parameters ─────────────────────────────────────
@@ -532,22 +514,26 @@ for (final p in _props) {
     final label = p['label'] as String? ?? 'Parameter';
     final hint = p['hint'] as String? ?? '';
     final isReq = p['required'] == true;
+    final hasCam = p['capture_image'] == true;
+
+    // A param with capture_image:true is implicitly required
+    final isEffectivelyRequired = isReq || hasCam;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Label row
+          // ── Label row ────────────────────────────────────────────────────
           Row(children: [
             Expanded(
               child: Text(
-                isReq ? '$label *' : label,
+                isEffectivelyRequired ? '$label *' : label,
                 style: GoogleFonts.dmSans(
                     fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
               ),
             ),
-            if (isReq)
+            if (isEffectivelyRequired)
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
@@ -563,24 +549,41 @@ for (final p in _props) {
                         letterSpacing: 0.8)),
               ),
           ]),
+
+          // ── Hint text above field (for number type) ───────────────────
+          // For number: show hint BOTH above the field AND as placeholder
+          // For others: show hint above only when present
           if (hint.isNotEmpty) ...[
             const SizedBox(height: 3),
             Text(hint, style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
           ],
+
           const SizedBox(height: 8),
+
+          // ── Input widget ──────────────────────────────────────────────
           _buildInput(p, id, type, hint, isReq),
+
+          // ── Per-parameter camera section ──────────────────────────────
+          if (hasCam) ...[
+            const SizedBox(height: 10),
+            _ParamPhotoRow(
+              image: _paramPhoto[id],
+              onCapture: () => _captureParamImage(id),
+            ),
+          ],
         ],
       ),
     );
   }
 
-  InputDecoration _dec(String hint) {
+  InputDecoration _dec(String hintText, {String? placeholder}) {
     final border = OutlineInputBorder(
       borderRadius: BorderRadius.circular(10),
       borderSide: const BorderSide(color: _kBorder),
     );
     return InputDecoration(
-      hintText: hint.isEmpty ? null : hint,
+      // placeholder shown inside box (used for number type)
+      hintText: placeholder ?? (hintText.isNotEmpty ? hintText : null),
       hintStyle: GoogleFonts.dmSans(color: _kSub, fontSize: 13),
       filled: true,
       fillColor: _kSurface,
@@ -600,14 +603,17 @@ for (final p in _props) {
   Widget _buildInput(
       Map<String, dynamic> p, String id, String type, String hint, bool isReq) {
     switch (type) {
-      // ── Number ─────────────────────────────────────────────────────────
+      // ── Number ────────────────────────────────────────────────────────
+      // hint shown above the field (already done in _buildPropField)
+      // AND as placeholder text inside the box
       case 'number':
         return TextFormField(
           controller: _textCtrl[id],
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: GoogleFonts.spaceGrotesk(color: _kText, fontSize: 15),
           cursorColor: _kCopper,
-          decoration: _dec(hint),
+          // placeholder inside box = hint text (shows "inaf" or whatever hint says)
+          decoration: _dec(hint, placeholder: hint.isNotEmpty ? hint : null),
           onChanged: (_) => setState(() {}),
           validator: isReq
               ? (v) {
@@ -619,7 +625,7 @@ for (final p in _props) {
               : null,
         );
 
-      // ── Text ────────────────────────────────────────────────────────────
+      // ── Text ──────────────────────────────────────────────────────────
       case 'text':
         return TextFormField(
           controller: _textCtrl[id],
@@ -632,7 +638,7 @@ for (final p in _props) {
               : null,
         );
 
-      // ── Multiline ───────────────────────────────────────────────────────
+      // ── Multiline ─────────────────────────────────────────────────────
       case 'multiline':
         return TextFormField(
           controller: _textCtrl[id],
@@ -646,7 +652,7 @@ for (final p in _props) {
               : null,
         );
 
-      // ── Dropdown ────────────────────────────────────────────────────────
+      // ── Dropdown ──────────────────────────────────────────────────────
       case 'dropdown':
         final options = List<String>.from(p['options'] ?? []);
         return Container(
@@ -677,7 +683,7 @@ for (final p in _props) {
           ),
         );
 
-      // ── Dual text ───────────────────────────────────────────────────────
+      // ── Dual text ─────────────────────────────────────────────────────
       case 'dual_text':
         final lbl = (p['left_label'] as String?)?.isNotEmpty == true
             ? p['left_label'] as String
@@ -738,7 +744,7 @@ for (final p in _props) {
           ],
         );
 
-      // ── Slider ──────────────────────────────────────────────────────────
+      // ── Slider ────────────────────────────────────────────────────────
       case 'slider':
         final mn = ((p['min'] ?? 0) as num).toDouble();
         final mx = ((p['max'] ?? 100) as num).toDouble();
@@ -754,42 +760,39 @@ for (final p in _props) {
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: _kBorder),
           ),
-          child: Column(
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('${mn.toInt()}',
-                      style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
-                  Text(curStr,
-                      style: GoogleFonts.spaceGrotesk(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          color: _kCopper)),
-                  Text('${mx.toInt()}',
-                      style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
-                ],
+          child: Column(children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('${mn.toInt()}',
+                    style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
+                Text(curStr,
+                    style: GoogleFonts.spaceGrotesk(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w700,
+                        color: _kCopper)),
+                Text('${mx.toInt()}',
+                    style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
+              ],
+            ),
+            SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                activeTrackColor: _kCopper,
+                thumbColor: _kCopper,
+                inactiveTrackColor: _kBorder,
+                overlayColor: _kCopper.withOpacity(0.15),
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
+                trackHeight: 3,
               ),
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  activeTrackColor: _kCopper,
-                  thumbColor: _kCopper,
-                  inactiveTrackColor: _kBorder,
-                  overlayColor: _kCopper.withOpacity(0.15),
-                  thumbShape:
-                      const RoundSliderThumbShape(enabledThumbRadius: 10),
-                  trackHeight: 3,
-                ),
-                child: Slider(
-                  value: cur,
-                  min: mn,
-                  max: safeMx,
-                  divisions: (safeMx - mn).round().clamp(1, 9999),
-                  onChanged: (v) => setState(() => _sliderVal[id] = v),
-                ),
+              child: Slider(
+                value: cur,
+                min: mn,
+                max: safeMx,
+                divisions: (safeMx - mn).round().clamp(1, 9999),
+                onChanged: (v) => setState(() => _sliderVal[id] = v),
               ),
-            ],
-          ),
+            ),
+          ]),
         );
 
       default:
@@ -799,128 +802,14 @@ for (final p in _props) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUB-WIDGETS
+// PER-PARAMETER PHOTO ROW
+// Same look-and-feel as the old global photo row.
 // ─────────────────────────────────────────────────────────────────────────────
-
-class _SecLabel extends StatelessWidget {
-  final String text;
-  const _SecLabel(this.text);
-  @override
-  Widget build(BuildContext context) => Text(text,
-      style: GoogleFonts.spaceGrotesk(
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 2,
-          color: _kSub));
-}
-
-// ── Meta card ─────────────────────────────────────────────────────────────────
-class _MetaCard extends StatelessWidget {
-  final TankModel tank;
-  final UserModel currentUser;
-  final String nowLabel;
-  final String imageStatus;
-
-  const _MetaCard({
-    required this.tank,
-    required this.currentUser,
-    required this.nowLabel,
-    required this.imageStatus,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Column(
-        children: [
-          // Header strip
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: const BoxDecoration(
-              color: _kSurface,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
-              border: Border(bottom: BorderSide(color: _kBorder)),
-            ),
-            child: Row(children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                    color: _kCopper, shape: BoxShape.circle),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(tank.tankName,
-                    style: GoogleFonts.dmSans(
-                        color: _kText,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14)),
-              ),
-              Text(tank.tankCode,
-                  style: GoogleFonts.spaceGrotesk(
-                      color: _kCopper,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5)),
-            ]),
-          ),
-          // Rows
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(children: [
-              _MetaRow(label: 'Zone', value: tank.location ?? '—'),
-              _MetaRow(label: 'Inspector', value: currentUser.fullName),
-              _MetaRow(label: 'Timestamp', value: nowLabel),
-              _MetaRow(
-                label: 'Photo',
-                value: imageStatus,
-                valueColor: imageStatus.contains('✓') ? _kSuccess : _kSub,
-              ),
-            ]),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MetaRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color? valueColor;
-  const _MetaRow({required this.label, required this.value, this.valueColor});
-
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 7),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SizedBox(
-            width: 80,
-            child: Text(label,
-                style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(value,
-                style: GoogleFonts.dmSans(
-                    color: valueColor ?? _kText,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500)),
-          ),
-        ]),
-      );
-}
-
-// ── Photo row ─────────────────────────────────────────────────────────────────
-class _PhotoRow extends StatelessWidget {
+class _ParamPhotoRow extends StatelessWidget {
   final File? image;
   final VoidCallback onCapture;
-  const _PhotoRow({required this.image, required this.onCapture});
+
+  const _ParamPhotoRow({required this.image, required this.onCapture});
 
   @override
   Widget build(BuildContext context) {
@@ -973,6 +862,117 @@ class _PhotoRow extends StatelessWidget {
       ],
     ]);
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUB-WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SecLabel extends StatelessWidget {
+  final String text;
+  const _SecLabel(this.text);
+  @override
+  Widget build(BuildContext context) => Text(text,
+      style: GoogleFonts.spaceGrotesk(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 2,
+          color: _kSub));
+}
+
+// ── Meta card (no photo status row — photo is now per-param) ──────────────────
+class _MetaCard extends StatelessWidget {
+  final TankModel tank;
+  final UserModel currentUser;
+  final String nowLabel;
+
+  const _MetaCard({
+    required this.tank,
+    required this.currentUser,
+    required this.nowLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        children: [
+          // Header strip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: const BoxDecoration(
+              color: _kSurface,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(14)),
+              border: Border(bottom: BorderSide(color: _kBorder)),
+            ),
+            child: Row(children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: const BoxDecoration(
+                    color: _kCopper, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(tank.tankName,
+                    style: GoogleFonts.dmSans(
+                        color: _kText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14)),
+              ),
+              Text(tank.tankCode,
+                  style: GoogleFonts.spaceGrotesk(
+                      color: _kCopper,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5)),
+            ]),
+          ),
+          // Meta rows
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(children: [
+              _MetaRow(label: 'Zone', value: tank.location ?? '—'),
+              _MetaRow(label: 'Inspector', value: currentUser.fullName),
+              _MetaRow(label: 'Timestamp', value: nowLabel),
+            ]),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MetaRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? valueColor;
+  const _MetaRow({required this.label, required this.value, this.valueColor});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 7),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(
+            width: 80,
+            child: Text(label,
+                style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(value,
+                style: GoogleFonts.dmSans(
+                    color: valueColor ?? _kText,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500)),
+          ),
+        ]),
+      );
 }
 
 // ── Save button ───────────────────────────────────────────────────────────────

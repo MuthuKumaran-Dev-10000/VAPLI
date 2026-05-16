@@ -542,6 +542,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
     final label = p['label'] as String? ?? 'Untitled';
     final hint = p['hint'] as String? ?? '';
     final isRequired = p['required'] == true;
+    final captureImage = p['capture_image'] == true;
     final color = _typeColor(type);
     final constraints = List<Map<String, dynamic>>.from(p['constraints'] ?? []);
 
@@ -616,6 +617,27 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
                               fontWeight: FontWeight.w600)),
                     ),
                 ]),
+                if (captureImage) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _kAccent.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'Photo',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: _kAccent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 _cardPreview(p, type, hint),
                 // ── constraint chips ─────────────────────────────────
@@ -1078,6 +1100,7 @@ class _PropertyBuilderPageState extends State<_PropertyBuilderPage> {
 
   String _type = 'number';
   bool _required = true;
+  bool _captureImage = false;
   final List<String> _options = [];
   final List<Map<String, dynamic>> _constraints = [];
 
@@ -1118,6 +1141,7 @@ class _PropertyBuilderPageState extends State<_PropertyBuilderPage> {
       _hintCtrl.text = p['hint'] ?? '';
       _type = p['type'] ?? 'number';
       _required = p['required'] == true;
+      _captureImage = p['capture_image'] == true;
       _leftLabelCtrl.text = p['left_label'] ?? 'Before';
       _rightLabelCtrl.text = p['right_label'] ?? 'After';
       // min/max only relevant for slider
@@ -1375,6 +1399,7 @@ class _PropertyBuilderPageState extends State<_PropertyBuilderPage> {
       'hint': _hintCtrl.text.trim(),
       'type': _type,
       'required': _required,
+      'capture_image': _captureImage,
       'options': List<String>.from(_options),
       'left_label': _leftLabelCtrl.text.trim().isEmpty
           ? 'Before'
@@ -1488,6 +1513,45 @@ class _PropertyBuilderPageState extends State<_PropertyBuilderPage> {
                     onChanged: (v) {
                       debugPrint('[PropertyBuilder] Required toggled to $v');
                       setState(() => _required = v);
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                Container(
+                  decoration: BoxDecoration(
+                    color: _kSurface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: _kBorder),
+                  ),
+                  child: SwitchListTile(
+                    value: _captureImage,
+                    activeColor: _kAccent,
+                    title: Text(
+                      'Capture Image',
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 14,
+                        color: _kText,
+                      ),
+                    ),
+                    subtitle: Text(
+                      _captureImage
+                          ? 'Inspector must capture image for this parameter'
+                          : 'No image required',
+                      style: const TextStyle(
+                        color: _kSub,
+                        fontSize: 12,
+                      ),
+                    ),
+                    onChanged: (v) {
+                      debugPrint(
+                        '[PropertyBuilder] Capture image changed: $v',
+                      );
+
+                      setState(
+                        () => _captureImage = v,
+                      );
                     },
                   ),
                 ),

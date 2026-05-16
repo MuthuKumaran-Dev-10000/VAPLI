@@ -50,29 +50,37 @@ import '../../../data/repositories/reading_repository.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // PALETTE — identical to ReadingEntryScreen + DashboardTab
 // ─────────────────────────────────────────────────────────────────────────────
-const _kBg      = Color(0xFF0C0D0F);
+const _kBg = Color(0xFF0C0D0F);
 const _kSurface = Color(0xFF141618);
-const _kCard    = Color(0xFF1A1C20);
-const _kBorder  = Color(0xFF252830);
+const _kCard = Color(0xFF1A1C20);
+const _kBorder = Color(0xFF252830);
 const _kBorderH = Color(0xFF38404F);
-const _kCopper  = Color(0xFFCB8C3E);
+const _kCopper = Color(0xFFCB8C3E);
 const _kCopperL = Color(0xFFE8A84E);
 const _kCopperD = Color(0xFF8A5A1E);
-const _kTeal    = Color(0xFF1ABCBD);
-const _kText    = Color(0xFFF0EEE9);
-const _kSub     = Color(0xFF8A8F9C);
-const _kSubL    = Color(0xFF6B7280);
+const _kTeal = Color(0xFF1ABCBD);
+const _kText = Color(0xFFF0EEE9);
+const _kSub = Color(0xFF8A8F9C);
+const _kSubL = Color(0xFF6B7280);
 const _kSuccess = Color(0xFF22C55E);
-const _kWarn    = Color(0xFFF59E0B);
-const _kDanger  = Color(0xFFEF4444);
-const _kPurple  = Color(0xFFAB8FF0);
-const _kBlue    = Color(0xFF60A5FA);
-const _kIndigo  = Color(0xFF818CF8);
+const _kWarn = Color(0xFFF59E0B);
+const _kDanger = Color(0xFFEF4444);
+const _kPurple = Color(0xFFAB8FF0);
+const _kBlue = Color(0xFF60A5FA);
+const _kIndigo = Color(0xFF818CF8);
 
 // Bar / multi-line colour palette
 const _kMultiPalette = [
-  _kCopper, _kTeal, _kSuccess, _kWarn, _kPurple, _kBlue, _kDanger, _kIndigo,
-  Color(0xFFFF6B6B), Color(0xFF4ECDC4),
+  _kCopper,
+  _kTeal,
+  _kSuccess,
+  _kWarn,
+  _kPurple,
+  _kBlue,
+  _kDanger,
+  _kIndigo,
+  Color(0xFFFF6B6B),
+  Color(0xFF4ECDC4),
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,26 +93,38 @@ const _kAllTanksId = '__ALL__';
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool _isGraphable(String? type) =>
-    type == 'number' || type == 'slider' ||
-    type == 'dual_text' || type == 'dropdown';
+    type == 'number' ||
+    type == 'slider' ||
+    type == 'dual_text' ||
+    type == 'dropdown';
 
 String _typeShort(String? type) {
   switch (type) {
-    case 'number':    return 'NUM';
-    case 'slider':    return 'SLIDE';
-    case 'dual_text': return 'DUAL';
-    case 'dropdown':  return 'DROP';
-    default:          return (type ?? '').toUpperCase();
+    case 'number':
+      return 'NUM';
+    case 'slider':
+      return 'SLIDE';
+    case 'dual_text':
+      return 'DUAL';
+    case 'dropdown':
+      return 'DROP';
+    default:
+      return (type ?? '').toUpperCase();
   }
 }
 
 Color _typeColor(String? type) {
   switch (type) {
-    case 'number':    return _kTeal;
-    case 'slider':    return const Color(0xFF03DAC6);
-    case 'dual_text': return _kWarn;
-    case 'dropdown':  return _kPurple;
-    default:          return _kSubL;
+    case 'number':
+      return _kTeal;
+    case 'slider':
+      return const Color(0xFF03DAC6);
+    case 'dual_text':
+      return _kWarn;
+    case 'dropdown':
+      return _kPurple;
+    default:
+      return _kSubL;
   }
 }
 
@@ -131,10 +151,14 @@ enum _Timeline { week, month, year, custom }
 extension _TL on _Timeline {
   String get label {
     switch (this) {
-      case _Timeline.week:   return 'Last 7 Days';
-      case _Timeline.month:  return 'Last 30 Days';
-      case _Timeline.year:   return 'Last Year';
-      case _Timeline.custom: return 'Custom Range';
+      case _Timeline.week:
+        return 'Last 7 Days';
+      case _Timeline.month:
+        return 'Last 30 Days';
+      case _Timeline.year:
+        return 'Last Year';
+      case _Timeline.custom:
+        return 'Custom Range';
     }
   }
 }
@@ -152,34 +176,33 @@ class TrendsScreen extends StatefulWidget {
 
 class _TrendsScreenState extends State<TrendsScreen> {
   // ── Selection state ────────────────────────────────────────────────────────
-  String?               _selectedTankId;
+  String? _selectedTankId;
   Map<String, dynamic>? _selectedParam;
 
-  _Timeline _timeline  = _Timeline.week;
+  _Timeline _timeline = _Timeline.week;
   DateTime? _customFrom;
   DateTime? _customTo;
 
   // ── Load / display state ───────────────────────────────────────────────────
-  bool _loading    = false;
+  bool _loading = false;
   bool _chartReady = false;
-  bool _exporting  = false;
+  bool _exporting = false;
 
   // ── In-memory cache: tankId → sorted readings (oldest→newest) ────────────
   final Map<String, List<ReadingModel>> _cache = {};
 
   final _chartKey = GlobalKey();
-  final _repo     = ReadingRepository();
+  final _repo = ReadingRepository();
 
   // ── Derived helpers ────────────────────────────────────────────────────────
 
   bool get _isAllTanks => _selectedTankId == _kAllTanksId;
 
-  TankModel? get _selectedTank =>
-      _selectedTankId == null || _isAllTanks
-          ? null
-          : widget.tanks.cast<TankModel?>().firstWhere(
-              (t) => t!.id == _selectedTankId,
-              orElse: () => null);
+  TankModel? get _selectedTank => _selectedTankId == null || _isAllTanks
+      ? null
+      : widget.tanks
+          .cast<TankModel?>()
+          .firstWhere((t) => t!.id == _selectedTankId, orElse: () => null);
 
   List<Map<String, dynamic>> get _graphableParams {
     final t = _selectedTank;
@@ -192,9 +215,12 @@ class _TrendsScreenState extends State<TrendsScreen> {
   DateTime get _rangeFrom {
     final now = DateTime.now();
     switch (_timeline) {
-      case _Timeline.week:   return now.subtract(const Duration(days: 7));
-      case _Timeline.month:  return now.subtract(const Duration(days: 30));
-      case _Timeline.year:   return DateTime(now.year - 1, now.month, now.day);
+      case _Timeline.week:
+        return now.subtract(const Duration(days: 7));
+      case _Timeline.month:
+        return now.subtract(const Duration(days: 30));
+      case _Timeline.year:
+        return DateTime(now.year - 1, now.month, now.day);
       case _Timeline.custom:
         return _customFrom ?? now.subtract(const Duration(days: 7));
     }
@@ -213,7 +239,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
   Future<void> _ensureCached(String tankId) async {
     if (_cache.containsKey(tankId)) return;
     debugPrint('[Trends] Fetching from DB for tank=$tankId');
-    final all      = await _repo.getAllReadings();
+    final all = await _repo.getAllReadings();
     final filtered = all.where((r) => r.tankId == tankId).toList()
       ..sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
     _cache[tankId] = filtered;
@@ -224,7 +250,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
   /// always sorted oldest → newest.
   List<ReadingModel> _filtered(String tankId) {
     final from = _rangeFrom;
-    final to   = _rangeTo;
+    final to = _rangeTo;
     final list = (_cache[tankId] ?? []).where((r) {
       final t = DateTime.tryParse(r.capturedAt);
       if (t == null) return false;
@@ -237,40 +263,159 @@ class _TrendsScreenState extends State<TrendsScreen> {
 
   // ── Show trend ─────────────────────────────────────────────────────────────
   Future<void> _showTrend() async {
-    if (_selectedTankId == null) { _snack('Select a tank first'); return; }
+    if (_selectedTankId == null) {
+      _snack('Select a tank first');
+      return;
+    }
     if (!_isAllTanks && _selectedParam == null) {
-      _snack('Select a parameter'); return;
+      _snack('Select a parameter');
+      return;
     }
     if (_timeline == _Timeline.custom &&
         (_customFrom == null || _customTo == null)) {
-      _snack('Set both From and To dates for custom range'); return;
+      _snack('Set both From and To dates for custom range');
+      return;
     }
 
-    setState(() { _loading = true; _chartReady = false; });
+    setState(() {
+      _loading = true;
+      _chartReady = false;
+    });
     try {
       if (_isAllTanks) {
-        for (final t in widget.tanks) { await _ensureCached(t.id); }
+        for (final t in widget.tanks) {
+          await _ensureCached(t.id);
+        }
       } else {
         await _ensureCached(_selectedTankId!);
       }
-      setState(() { _loading = false; _chartReady = true; });
+      setState(() {
+        _loading = false;
+        _chartReady = true;
+      });
     } catch (e) {
       setState(() => _loading = false);
       _snack('Load failed: $e');
     }
   }
 
+  // // ── Excel export ───────────────────────────────────────────────────────────
+  // Future<void> _exportExcel() async {
+  //   if (!_chartReady && _cache.isEmpty) { _snack('Load data first'); return; }
+  //   setState(() => _exporting = true);
+  //   try {
+  //     final excel = xl.Excel.createExcel();
+
+  //     final from    = _rangeFrom;
+  //     final to      = _rangeTo;
+  //     final fromStr = _fmtFile(from);
+  //     final toStr   = _fmtFile(to);
+
+  //     final tanksToExport = _isAllTanks
+  //         ? widget.tanks
+  //         : widget.tanks.where((t) => t.id == _selectedTankId!).toList();
+
+  //     // ── Sheet 1: Summary ──────────────────────────────────────────────────
+  //     final summarySheet = excel['Summary'];
+  //     summarySheet.appendRow([
+  //       xl.TextCellValue('Tank ID'),
+  //       xl.TextCellValue('Tank Name'),
+  //       xl.TextCellValue('Inspection Date'),
+  //       xl.TextCellValue('Inspection Time'),
+  //       xl.TextCellValue('Captured By'),
+  //     ]);
+
+  //     for (final tank in tanksToExport) {
+  //       for (final r in _filtered(tank.id)) {
+  //         final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
+  //         summarySheet.appendRow([
+  //           xl.TextCellValue(tank.tankCode),
+  //           xl.TextCellValue(tank.tankName),
+  //           xl.TextCellValue(
+  //               dt != null ? DateFormat('dd-MM-yyyy').format(dt) : '—'),
+  //           xl.TextCellValue(
+  //               dt != null ? DateFormat('HH:mm:ss').format(dt) : '—'),
+  //           xl.TextCellValue(r.capturedByName),
+  //         ]);
+  //       }
+  //     }
+
+  //     // ── Sheets 2..N: one per tank ─────────────────────────────────────────
+  //     for (final tank in tanksToExport) {
+  //       final paramLabels = tank.inspectionProperties
+  //           .map((p) => p['label'] as String? ?? '')
+  //           .where((l) => l.isNotEmpty)
+  //           .toList();
+
+  //       final sheetName =
+  //           tank.tankName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+  //       final sheet = excel[
+  //           sheetName.length > 31
+  //               ? sheetName.substring(0, 31)
+  //               : sheetName];
+  //       sheet.appendRow([
+  //         xl.TextCellValue('Tank ID'),
+  //         xl.TextCellValue('Tank Name'),
+  //         xl.TextCellValue('Captured At'),
+  //         xl.TextCellValue('Captured By'),
+  //         ...paramLabels.map((l) => xl.TextCellValue(l)),
+  //       ]);
+
+  //       for (final r in _filtered(tank.id)) {
+  //         final paramCells = paramLabels.map((l) {
+  //           final v = r.inspectionValues[l];
+  //           if (v is Map) {
+  //             return xl.TextCellValue(
+  //                 '${v['left'] ?? ''} | ${v['right'] ?? ''}');
+  //           }
+  //           return xl.TextCellValue(v?.toString() ?? '');
+  //         }).toList();
+
+  //         sheet.appendRow([
+  //           xl.TextCellValue(tank.tankCode),
+  //           xl.TextCellValue(tank.tankName),
+  //           xl.TextCellValue(
+  //               _fmt(r.capturedAt, pattern: 'dd-MM-yyyy HH:mm:ss')),
+  //           xl.TextCellValue(r.capturedByName),
+  //           ...paramCells,
+  //         ]);
+  //       }
+  //     }
+
+  //     // ── File name ──────────────────────────────────────────────────────────
+  //     final tankNames = tanksToExport.map((t) => t.tankCode).join('_');
+  //     final suffix =
+  //         tankNames.length > 40 ? '${tankNames.substring(0, 40)}…' : tankNames;
+  //     final fileName =
+  //         'Lubrication_Report_${fromStr}_${toStr}_$suffix.xlsx';
+
+  //     final dir  = await getTemporaryDirectory();
+  //     final file = File('${dir.path}/$fileName');
+  //     await file.writeAsBytes(excel.save()!);
+  //     debugPrint('[Trends] Excel saved → ${file.path}');
+  //     await Share.shareXFiles([XFile(file.path)], text: 'Lubrication Report');
+  //   } catch (e) {
+  //     _snack('Excel export failed: $e');
+  //     debugPrint('[Trends] Excel error: $e');
+  //   } finally {
+  //     if (mounted) setState(() => _exporting = false);
+  //   }
+  // }
+
   // ── Excel export ───────────────────────────────────────────────────────────
   Future<void> _exportExcel() async {
-    if (!_chartReady && _cache.isEmpty) { _snack('Load data first'); return; }
+    // if (!_chartReady && _cache.isEmpty) {
+    //   _snack('Load data first');
+    //   return;
+    // }
     setState(() => _exporting = true);
     try {
       final excel = xl.Excel.createExcel();
 
-      final from    = _rangeFrom;
-      final to      = _rangeTo;
+      final from = _rangeFrom;
+      final to = _rangeTo;
       final fromStr = _fmtFile(from);
-      final toStr   = _fmtFile(to);
+      final toStr = _fmtFile(to);
 
       final tanksToExport = _isAllTanks
           ? widget.tanks
@@ -303,54 +448,83 @@ class _TrendsScreenState extends State<TrendsScreen> {
 
       // ── Sheets 2..N: one per tank ─────────────────────────────────────────
       for (final tank in tanksToExport) {
-        final paramLabels = tank.inspectionProperties
-            .map((p) => p['label'] as String? ?? '')
-            .where((l) => l.isNotEmpty)
-            .toList();
+        // Build column descriptors: each param may produce 1 or 2 columns
+        // depending on whether it has capture_image == true.
+        // Descriptor: { 'label': String, 'id': String, 'hasImage': bool }
+        final colDescs = <Map<String, dynamic>>[];
+        for (final p in tank.inspectionProperties) {
+          final label = p['label'] as String? ?? '';
+          final id = p['id'] as String? ?? '';
+          final hasImage = p['capture_image'] == true;
+          if (label.isEmpty) continue;
+          colDescs.add({'label': label, 'id': id, 'hasImage': hasImage});
+        }
 
-        final sheetName =
-            tank.tankName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-        final sheet = excel[
-            sheetName.length > 31
-                ? sheetName.substring(0, 31)
-                : sheetName];
-        sheet.appendRow([
+        // Build header row
+        final headerCells = <xl.CellValue>[
           xl.TextCellValue('Tank ID'),
           xl.TextCellValue('Tank Name'),
           xl.TextCellValue('Captured At'),
           xl.TextCellValue('Captured By'),
-          ...paramLabels.map((l) => xl.TextCellValue(l)),
-        ]);
+        ];
+        for (final col in colDescs) {
+          headerCells.add(xl.TextCellValue(col['label'] as String));
+          if (col['hasImage'] as bool) {
+            // Extra column immediately after the param value column
+            headerCells.add(xl.TextCellValue('${col['label']} — Photo URL'));
+          }
+        }
 
+        final sheetName =
+            tank.tankName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+        final sheet = excel[
+            sheetName.length > 31 ? sheetName.substring(0, 31) : sheetName];
+        sheet.appendRow(headerCells);
+
+        // Build data rows
         for (final r in _filtered(tank.id)) {
-          final paramCells = paramLabels.map((l) {
-            final v = r.inspectionValues[l];
-            if (v is Map) {
-              return xl.TextCellValue(
-                  '${v['left'] ?? ''} | ${v['right'] ?? ''}');
-            }
-            return xl.TextCellValue(v?.toString() ?? '');
-          }).toList();
-
-          sheet.appendRow([
+          final dataCells = <xl.CellValue>[
             xl.TextCellValue(tank.tankCode),
             xl.TextCellValue(tank.tankName),
             xl.TextCellValue(
                 _fmt(r.capturedAt, pattern: 'dd-MM-yyyy HH:mm:ss')),
             xl.TextCellValue(r.capturedByName),
-            ...paramCells,
-          ]);
+          ];
+
+          for (final col in colDescs) {
+            final label = col['label'] as String;
+            final id = col['id'] as String;
+            final hasImage = col['hasImage'] as bool;
+
+            // Param value cell
+            final v = r.inspectionValues[label];
+            if (v is Map) {
+              dataCells.add(
+                  xl.TextCellValue('${v['left'] ?? ''} | ${v['right'] ?? ''}'));
+            } else {
+              dataCells.add(xl.TextCellValue(v?.toString() ?? ''));
+            }
+
+            // Photo URL cell (immediately after value, only if hasImage)
+            if (hasImage) {
+              // Key convention matches reading_entry_screen: "<id>__image_url"
+              final imageUrl =
+                  r.inspectionValues['${id}__image_url']?.toString() ?? '';
+              dataCells.add(xl.TextCellValue(imageUrl));
+            }
+          }
+
+          sheet.appendRow(dataCells);
         }
       }
 
-      // ── File name ──────────────────────────────────────────────────────────
+      // ── File name ────────────────────────────────────────────────────────
       final tankNames = tanksToExport.map((t) => t.tankCode).join('_');
       final suffix =
           tankNames.length > 40 ? '${tankNames.substring(0, 40)}…' : tankNames;
-      final fileName =
-          'Lubrication_Report_${fromStr}_${toStr}_$suffix.xlsx';
+      final fileName = 'Lubrication_Report_${fromStr}_${toStr}_$suffix.xlsx';
 
-      final dir  = await getTemporaryDirectory();
+      final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/$fileName');
       await file.writeAsBytes(excel.save()!);
       debugPrint('[Trends] Excel saved → ${file.path}');
@@ -368,11 +542,14 @@ class _TrendsScreenState extends State<TrendsScreen> {
     try {
       final boundary = _chartKey.currentContext?.findRenderObject()
           as RenderRepaintBoundary?;
-      if (boundary == null) { _snack('Chart not rendered yet'); return; }
+      if (boundary == null) {
+        _snack('Chart not rendered yet');
+        return;
+      }
       final image = await boundary.toImage(pixelRatio: 3.0);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
       if (bytes == null) throw Exception('PNG encode failed');
-      final dir  = await getTemporaryDirectory();
+      final dir = await getTemporaryDirectory();
       final name = '${_selectedTank?.tankCode ?? 'trends'}_'
           '${_selectedParam?['label'] ?? 'all'}.png';
       final file = File('${dir.path}/$name');
@@ -388,8 +565,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
   // ── QR scan ────────────────────────────────────────────────────────────────
   Future<void> _scanQr() async {
     final result = await Navigator.push<String>(
-        context,
-        MaterialPageRoute(builder: (_) => const _QrScanPage()));
+        context, MaterialPageRoute(builder: (_) => const _QrScanPage()));
     if (result == null || !mounted) return;
     try {
       Map<String, dynamic>? data;
@@ -412,23 +588,25 @@ class _TrendsScreenState extends State<TrendsScreen> {
         }
       } catch (_) {}
 
-      final tankId   = data?['tank_id']   as String?;
+      final tankId = data?['tank_id'] as String?;
       final tankCode = data?['tank_code'] as String?;
 
       TankModel? found;
       if (tankId != null) {
-        found = widget.tanks.cast<TankModel?>().firstWhere(
-            (t) => t!.id == tankId, orElse: () => null);
+        found = widget.tanks
+            .cast<TankModel?>()
+            .firstWhere((t) => t!.id == tankId, orElse: () => null);
       }
       if (found == null && tankCode != null) {
-        found = widget.tanks.cast<TankModel?>().firstWhere(
-            (t) => t!.tankCode == tankCode, orElse: () => null);
+        found = widget.tanks
+            .cast<TankModel?>()
+            .firstWhere((t) => t!.tankCode == tankCode, orElse: () => null);
       }
       if (found != null) {
         setState(() {
           _selectedTankId = found!.id;
-          _selectedParam  = null;
-          _chartReady     = false;
+          _selectedParam = null;
+          _chartReady = false;
         });
         _snack('Tank selected: ${found.tankName}');
       } else {
@@ -444,15 +622,14 @@ class _TrendsScreenState extends State<TrendsScreen> {
       content: Text(msg, style: const TextStyle(color: _kText)),
       backgroundColor: _kCard,
       behavior: SnackBarBehavior.floating,
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
   }
 
   // ── Date picker ────────────────────────────────────────────────────────────
   Future<void> _pickDate(bool isFrom) async {
     final now = DateTime.now();
-    final d   = await showDatePicker(
+    final d = await showDatePicker(
       context: context,
       firstDate: DateTime(2020),
       lastDate: now,
@@ -460,9 +637,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
           colorScheme: const ColorScheme.dark(
-              primary: _kCopper,
-              surface: _kCard,
-              onSurface: _kText),
+              primary: _kCopper, surface: _kCard, onSurface: _kText),
         ),
         child: child!,
       ),
@@ -510,8 +685,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
               _buildParamRow(),
               const SizedBox(height: 6),
               Row(children: [
-                const Icon(Icons.info_outline_rounded,
-                    size: 11, color: _kSubL),
+                const Icon(Icons.info_outline_rounded, size: 11, color: _kSubL),
                 const SizedBox(width: 5),
                 Expanded(
                   child: Text(
@@ -547,7 +721,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
         value: _kAllTanksId,
         child: Row(children: [
           Container(
-            width: 28, height: 28,
+            width: 28,
+            height: 28,
             decoration: BoxDecoration(
               color: _kCopper.withOpacity(0.12),
               shape: BoxShape.circle,
@@ -558,49 +733,51 @@ class _TrendsScreenState extends State<TrendsScreen> {
           const SizedBox(width: 10),
           Text('All Tanks',
               style: GoogleFonts.dmSans(
-                  color: _kText,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600)),
+                  color: _kText, fontSize: 14, fontWeight: FontWeight.w600)),
         ]),
       ),
       ...widget.tanks.map((t) => DropdownMenuItem<String>(
-        value: t.id,
-        child: Row(children: [
-          Container(
-            width: 28, height: 28,
-            decoration: BoxDecoration(
-              color: _kCopper.withOpacity(0.10),
-              shape: BoxShape.circle,
-              border: Border.all(color: _kCopper.withOpacity(0.25)),
-            ),
-            child: Center(
-              child: Text(
-                t.tankCode.isNotEmpty ? t.tankCode[0].toUpperCase() : '?',
-                style: GoogleFonts.spaceGrotesk(
-                    fontSize: 10,
-                    color: _kCopper,
-                    fontWeight: FontWeight.w700),
+            value: t.id,
+            child: Row(children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: _kCopper.withOpacity(0.10),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _kCopper.withOpacity(0.25)),
+                ),
+                child: Center(
+                  child: Text(
+                    t.tankCode.isNotEmpty ? t.tankCode[0].toUpperCase() : '?',
+                    style: GoogleFonts.spaceGrotesk(
+                        fontSize: 10,
+                        color: _kCopper,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
               ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(t.tankName,
-                  overflow: TextOverflow.ellipsis,
-                  style: GoogleFonts.dmSans(
-                      color: _kText,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
-              Text(
-                '${t.tankCode}${t.location != null ? " · ${t.location}" : ""}',
-                overflow: TextOverflow.ellipsis,
-                style: GoogleFonts.spaceGrotesk(fontSize: 9, color: _kSub),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(t.tankName,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.dmSans(
+                              color: _kText,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600)),
+                      Text(
+                        '${t.tankCode}${t.location != null ? " · ${t.location}" : ""}',
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            GoogleFonts.spaceGrotesk(fontSize: 9, color: _kSub),
+                      ),
+                    ]),
               ),
             ]),
-          ),
-        ]),
-      )),
+          )),
     ];
 
     return Row(children: [
@@ -617,8 +794,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
               items: items,
               onChanged: (v) => setState(() {
                 _selectedTankId = v;
-                _selectedParam  = null;
-                _chartReady     = false;
+                _selectedParam = null;
+                _chartReady = false;
               }),
             ),
           ),
@@ -628,7 +805,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
       GestureDetector(
         onTap: _scanQr,
         child: Container(
-          width: 50, height: 50,
+          width: 50,
+          height: 50,
           decoration: BoxDecoration(
             color: _kTeal.withOpacity(0.10),
             borderRadius: BorderRadius.circular(12),
@@ -650,26 +828,23 @@ class _TrendsScreenState extends State<TrendsScreen> {
           final sel = _timeline == t;
           return GestureDetector(
             onTap: () => setState(() {
-              _timeline   = t;
+              _timeline = t;
               _chartReady = false;
             }),
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               margin: const EdgeInsets.only(right: 8),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
               decoration: BoxDecoration(
                 color: sel ? _kCopper.withOpacity(0.13) : _kSurface,
                 borderRadius: BorderRadius.circular(9),
                 border: Border.all(
-                    color: sel ? _kCopper : _kBorder,
-                    width: sel ? 1.5 : 1),
+                    color: sel ? _kCopper : _kBorder, width: sel ? 1.5 : 1),
               ),
               child: Text(t.label,
                   style: GoogleFonts.dmSans(
                     color: sel ? _kCopper : _kSub,
-                    fontWeight:
-                        sel ? FontWeight.w700 : FontWeight.normal,
+                    fontWeight: sel ? FontWeight.w700 : FontWeight.normal,
                     fontSize: 13,
                   )),
             ),
@@ -723,15 +898,15 @@ class _TrendsScreenState extends State<TrendsScreen> {
             style: GoogleFonts.dmSans(color: _kSubL, fontSize: 13),
           ),
           items: params.map((p) {
-            final type  = p['type'] as String? ?? '';
+            final type = p['type'] as String? ?? '';
             final label = p['label'] as String? ?? '';
-            final bc    = _typeColor(type);
+            final bc = _typeColor(type);
             return DropdownMenuItem<Map<String, dynamic>>(
               value: p,
               child: Row(children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 7, vertical: 3),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                   decoration: BoxDecoration(
                     color: bc.withOpacity(0.13),
                     borderRadius: BorderRadius.circular(5),
@@ -760,7 +935,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
               ? null
               : (v) => setState(() {
                     _selectedParam = v;
-                    _chartReady    = false;
+                    _chartReady = false;
                   }),
         ),
       ),
@@ -785,8 +960,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
             const SizedBox(
                 width: 16,
                 height: 16,
-                child: CircularProgressIndicator(
-                    color: _kSuccess, strokeWidth: 2))
+                child:
+                    CircularProgressIndicator(color: _kSuccess, strokeWidth: 2))
           else
             Icon(Icons.table_chart_outlined,
                 color: canExport ? _kSuccess : _kSubL, size: 18),
@@ -827,8 +1002,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
           color: ready ? null : _kSurface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-              color: ready ? _kCopper : _kBorder,
-              width: ready ? 0 : 1),
+              color: ready ? _kCopper : _kBorder, width: ready ? 0 : 1),
           boxShadow: ready
               ? [
                   BoxShadow(
@@ -885,9 +1059,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
           const SizedBox(width: 7),
           Text('Export Chart as PNG',
               style: GoogleFonts.dmSans(
-                  color: _kText,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13)),
+                  color: _kText, fontWeight: FontWeight.w600, fontSize: 13)),
         ]),
       ),
     );
@@ -927,8 +1099,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
     final paramLabel = _isAllTanks
         ? 'Reading Timeline'
         : (_selectedParam?['label'] as String? ?? '—');
-    final type =
-        _isAllTanks ? null : _selectedParam?['type'] as String?;
+    final type = _isAllTanks ? null : _selectedParam?['type'] as String?;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
@@ -942,39 +1113,34 @@ class _TrendsScreenState extends State<TrendsScreen> {
             width: 3,
             height: 40,
             decoration: BoxDecoration(
-                color: _kCopper,
-                borderRadius: BorderRadius.circular(2))),
+                color: _kCopper, borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 12),
         Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(tankLabel,
-                    style: GoogleFonts.dmSans(
-                        color: _kText,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 2),
-                Text(paramLabel,
-                    style: GoogleFonts.spaceGrotesk(
-                        color: _kCopper,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.4)),
-                const SizedBox(height: 4),
-                Row(children: [
-                  _MetaChip(
-                      icon: Icons.calendar_today_outlined,
-                      label: DateFormat('dd MMM yyyy').format(_rangeFrom)),
-                  const SizedBox(width: 6),
-                  const Icon(Icons.arrow_forward_rounded,
-                      size: 10, color: _kSubL),
-                  const SizedBox(width: 6),
-                  _MetaChip(
-                      icon: Icons.event_rounded,
-                      label: DateFormat('dd MMM yyyy').format(_rangeTo)),
-                ]),
-              ]),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(tankLabel,
+                style: GoogleFonts.dmSans(
+                    color: _kText, fontSize: 14, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 2),
+            Text(paramLabel,
+                style: GoogleFonts.spaceGrotesk(
+                    color: _kCopper,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4)),
+            const SizedBox(height: 4),
+            Row(children: [
+              _MetaChip(
+                  icon: Icons.calendar_today_outlined,
+                  label: DateFormat('dd MMM yyyy').format(_rangeFrom)),
+              const SizedBox(width: 6),
+              const Icon(Icons.arrow_forward_rounded, size: 10, color: _kSubL),
+              const SizedBox(width: 6),
+              _MetaChip(
+                  icon: Icons.event_rounded,
+                  label: DateFormat('dd MMM yyyy').format(_rangeTo)),
+            ]),
+          ]),
         ),
         if (type != null)
           Container(
@@ -982,8 +1148,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
             decoration: BoxDecoration(
               color: _typeColor(type).withOpacity(0.13),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                  color: _typeColor(type).withOpacity(0.35)),
+              border: Border.all(color: _typeColor(type).withOpacity(0.35)),
             ),
             child: Text(_typeShort(type),
                 style: GoogleFonts.spaceGrotesk(
@@ -1008,16 +1173,19 @@ class _TrendsScreenState extends State<TrendsScreen> {
   }
 
   Widget _buildParamChart() {
-    final type  = _selectedParam?['type'] as String? ?? 'number';
+    final type = _selectedParam?['type'] as String? ?? 'number';
     final label = _selectedParam?['label'] as String? ?? '';
-    final data  = _filtered(_selectedTankId!);
+    final data = _filtered(_selectedTankId!);
 
     if (data.isEmpty) return _noData('No readings in this time range');
 
     switch (type) {
-      case 'dropdown':  return _barChart(label, data);
-      case 'dual_text': return _dualLineChart(label, data);
-      default:          return _singleLineChart(label, data);
+      case 'dropdown':
+        return _barChart(label, data);
+      case 'dual_text':
+        return _dualLineChart(label, data);
+      default:
+        return _singleLineChart(label, data);
     }
   }
 
@@ -1131,159 +1299,164 @@ class _TrendsScreenState extends State<TrendsScreen> {
   // }
 
   Widget _buildAllTanksChart() {
-  // ── 1. Collect all unique timestamps across all tanks (oldest→newest) ──
-  final allTimes = <DateTime>{};
-  final tankData = <String, List<ReadingModel>>{};
+    // ── 1. Collect all unique timestamps across all tanks (oldest→newest) ──
+    final allTimes = <DateTime>{};
+    final tankData = <String, List<ReadingModel>>{};
 
-  for (final tank in widget.tanks) {
-    final data = _filtered(tank.id);
-    tankData[tank.id] = data;
-    for (final r in data) {
-      final t = DateTime.tryParse(r.capturedAt);
-      if (t != null) allTimes.add(t);
-    }
-  }
-
-  if (allTimes.isEmpty) return _noData('No readings in this time range');
-
-  // ── 2. Sort global timeline oldest → newest ────────────────────────────
-  final globalTimes = allTimes.toList()..sort();
-
-  // ── 3. Map each DateTime → X index (1-based) ──────────────────────────
-  final timeToX = <DateTime, int>{};
-  for (int i = 0; i < globalTimes.length; i++) {
-    timeToX[globalTimes[i]] = i + 1;
-  }
-
-  // ── 4. Build X label map: xIndex → formatted label ────────────────────
-  final xLabels = <int, String>{};
-  for (int i = 0; i < globalTimes.length; i++) {
-    xLabels[i + 1] = _fmt(globalTimes[i].toIso8601String());
-  }
-
-  // ── 5. Build one line per tank ────────────────────────────────────────
-  final lines = <LineChartBarData>[];
-  int colorIdx = 0;
-
-  for (final tank in widget.tanks) {
-    final data = tankData[tank.id] ?? [];
-    if (data.isEmpty) { colorIdx++; continue; }
-
-    final color = _kMultiPalette[colorIdx % _kMultiPalette.length];
-    final spots = <FlSpot>[];
-
-    for (final r in data) {
-      final t = DateTime.tryParse(r.capturedAt);
-      if (t == null) continue;
-      // Find closest match in globalTimes (handles sub-second drift)
-      DateTime bestMatch = globalTimes.first;
-      int bestDiff = (globalTimes.first.difference(t).inMilliseconds).abs();
-      for (final gt in globalTimes) {
-        final diff = (gt.difference(t).inMilliseconds).abs();
-        if (diff < bestDiff) { bestDiff = diff; bestMatch = gt; }
+    for (final tank in widget.tanks) {
+      final data = _filtered(tank.id);
+      tankData[tank.id] = data;
+      for (final r in data) {
+        final t = DateTime.tryParse(r.capturedAt);
+        if (t != null) allTimes.add(t);
       }
-      final xIdx = timeToX[bestMatch];
-      if (xIdx == null) continue;
-      final yValue = (colorIdx + 1).toDouble();
-      spots.add(FlSpot(xIdx.toDouble(), yValue));
     }
 
-    if (spots.isEmpty) { colorIdx++; continue; }
+    if (allTimes.isEmpty) return _noData('No readings in this time range');
 
-    lines.add(LineChartBarData(
-      spots: spots,
-      color: color,
-      barWidth: 3,
-      isCurved: false,
-      dotData: FlDotData(
-        show: true,
-        getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
-            radius: 5,
-            color: color,
-            strokeWidth: 1.5,
-            strokeColor: _kBg),
-      ),
-      belowBarData: BarAreaData(show: false),
-    ));
-    colorIdx++;
-  }
+    // ── 2. Sort global timeline oldest → newest ────────────────────────────
+    final globalTimes = allTimes.toList()..sort();
 
-  if (lines.isEmpty) return _noData('No readings in this time range');
+    // ── 3. Map each DateTime → X index (1-based) ──────────────────────────
+    final timeToX = <DateTime, int>{};
+    for (int i = 0; i < globalTimes.length; i++) {
+      timeToX[globalTimes[i]] = i + 1;
+    }
 
-  final maxX = globalTimes.length.toDouble();
+    // ── 4. Build X label map: xIndex → formatted label ────────────────────
+    final xLabels = <int, String>{};
+    for (int i = 0; i < globalTimes.length; i++) {
+      xLabels[i + 1] = _fmt(globalTimes[i].toIso8601String());
+    }
 
-  return LineChart(LineChartData(
-    borderData: _borderData,
-    gridData:   _gridData,
-    minX: 1,
-    maxX: maxX,
-    minY: 0,
-    maxY: (widget.tanks.length + 1).toDouble(),
-    titlesData: FlTitlesData(
-      topTitles:
-          const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-      rightTitles:
-          const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-      leftTitles: AxisTitles(
-        sideTitles: SideTitles(
-          showTitles: true,
-          reservedSize: 52,
-          interval: 1,
-          getTitlesWidget: (v, _) {
-            final idx = v.toInt();
-            if (idx < 1 || idx > widget.tanks.length) {
-              return const SizedBox.shrink();
-            }
-            final code = widget.tanks[idx - 1].tankCode;
-            return Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: Text(code,
-                  style: GoogleFonts.spaceGrotesk(
-                      fontSize: 8, color: _kSubL)),
-            );
-          },
+    // ── 5. Build one line per tank ────────────────────────────────────────
+    final lines = <LineChartBarData>[];
+    int colorIdx = 0;
+
+    for (final tank in widget.tanks) {
+      final data = tankData[tank.id] ?? [];
+      if (data.isEmpty) {
+        colorIdx++;
+        continue;
+      }
+
+      final color = _kMultiPalette[colorIdx % _kMultiPalette.length];
+      final spots = <FlSpot>[];
+
+      for (final r in data) {
+        final t = DateTime.tryParse(r.capturedAt);
+        if (t == null) continue;
+        // Find closest match in globalTimes (handles sub-second drift)
+        DateTime bestMatch = globalTimes.first;
+        int bestDiff = (globalTimes.first.difference(t).inMilliseconds).abs();
+        for (final gt in globalTimes) {
+          final diff = (gt.difference(t).inMilliseconds).abs();
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestMatch = gt;
+          }
+        }
+        final xIdx = timeToX[bestMatch];
+        if (xIdx == null) continue;
+        final yValue = (colorIdx + 1).toDouble();
+        spots.add(FlSpot(xIdx.toDouble(), yValue));
+      }
+
+      if (spots.isEmpty) {
+        colorIdx++;
+        continue;
+      }
+
+      lines.add(LineChartBarData(
+        spots: spots,
+        color: color,
+        barWidth: 3,
+        isCurved: false,
+        dotData: FlDotData(
+          show: true,
+          getDotPainter: (_, __, ___, ____) => FlDotCirclePainter(
+              radius: 5, color: color, strokeWidth: 1.5, strokeColor: _kBg),
+        ),
+        belowBarData: BarAreaData(show: false),
+      ));
+      colorIdx++;
+    }
+
+    if (lines.isEmpty) return _noData('No readings in this time range');
+
+    final maxX = globalTimes.length.toDouble();
+
+    return LineChart(LineChartData(
+      borderData: _borderData,
+      gridData: _gridData,
+      minX: 1,
+      maxX: maxX,
+      minY: 0,
+      maxY: (widget.tanks.length + 1).toDouble(),
+      titlesData: FlTitlesData(
+        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        rightTitles:
+            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        leftTitles: AxisTitles(
+          sideTitles: SideTitles(
+            showTitles: true,
+            reservedSize: 52,
+            interval: 1,
+            getTitlesWidget: (v, _) {
+              final idx = v.toInt();
+              if (idx < 1 || idx > widget.tanks.length) {
+                return const SizedBox.shrink();
+              }
+              final code = widget.tanks[idx - 1].tankCode;
+              return Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Text(code,
+                    style:
+                        GoogleFonts.spaceGrotesk(fontSize: 8, color: _kSubL)),
+              );
+            },
+          ),
+        ),
+        bottomTitles: AxisTitles(
+          sideTitles: _bottomTitlesSparse(
+              globalTimes.length, (idx) => xLabels[idx] ?? ''),
         ),
       ),
-      bottomTitles: AxisTitles(
-        sideTitles: _bottomTitlesSparse(
-            globalTimes.length, (idx) => xLabels[idx] ?? ''),
+      lineBarsData: lines,
+      lineTouchData: LineTouchData(
+        touchTooltipData: LineTouchTooltipData(
+          getTooltipColor: (_) => _kCard,
+          tooltipBorderRadius: BorderRadius.circular(8),
+          tooltipBorder: const BorderSide(color: _kBorder),
+          getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
+            final tankIdx = s.y.toInt() - 1;
+            final tankName = (tankIdx >= 0 && tankIdx < widget.tanks.length)
+                ? widget.tanks[tankIdx].tankName
+                : '';
+            final dateLabel = xLabels[s.x.toInt()] ?? '';
+            return LineTooltipItem(
+              '$tankName\n$dateLabel',
+              GoogleFonts.spaceGrotesk(
+                  color: _kMultiPalette[tankIdx % _kMultiPalette.length],
+                  fontWeight: FontWeight.w700,
+                  fontSize: 11),
+            );
+          }).toList(),
+        ),
       ),
-    ),
-    lineBarsData: lines,
-    lineTouchData: LineTouchData(
-      touchTooltipData: LineTouchTooltipData(
-        getTooltipColor: (_) => _kCard,
-        tooltipBorderRadius: BorderRadius.circular(8),
-        tooltipBorder: const BorderSide(color: _kBorder),
-        getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
-          final tankIdx = s.y.toInt() - 1;
-          final tankName = (tankIdx >= 0 && tankIdx < widget.tanks.length)
-              ? widget.tanks[tankIdx].tankName
-              : '';
-          final dateLabel = xLabels[s.x.toInt()] ?? '';
-          return LineTooltipItem(
-            '$tankName\n$dateLabel',
-            GoogleFonts.spaceGrotesk(
-                color: _kMultiPalette[tankIdx % _kMultiPalette.length],
-                fontWeight: FontWeight.w700,
-                fontSize: 11),
-          );
-        }).toList(),
-      ),
-    ),
-  ));
-}
+    ));
+  }
 
   // ── Single line chart (number / slider) ───────────────────────────────────
   Widget _singleLineChart(String label, List<ReadingModel> data) {
     // LOCAL variables — NOT class fields
-    final spots   = <FlSpot>[];
+    final spots = <FlSpot>[];
     final xLabels = <int, String>{};
 
     for (int i = 0; i < data.length; i++) {
       final xIdx = i + 1;
-      final raw  = data[i].inspectionValues[label];
-      final v    = _toDouble(raw);
+      final raw = data[i].inspectionValues[label];
+      final v = _toDouble(raw);
       if (v != null) {
         spots.add(FlSpot(xIdx.toDouble(), v));
         xLabels[xIdx] = _fmt(data[i].capturedAt);
@@ -1294,18 +1467,17 @@ class _TrendsScreenState extends State<TrendsScreen> {
 
     return LineChart(LineChartData(
       borderData: _borderData,
-      gridData:   _gridData,
+      gridData: _gridData,
       minX: 1,
       maxX: spots.length.toDouble(),
       titlesData: FlTitlesData(
-        topTitles:
-            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         rightTitles:
             const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        leftTitles:  AxisTitles(sideTitles: _leftTitles),
+        leftTitles: AxisTitles(sideTitles: _leftTitles),
         bottomTitles: AxisTitles(
-            sideTitles: _bottomTitlesSparse(
-                spots.length, (idx) => xLabels[idx] ?? '')),
+            sideTitles:
+                _bottomTitlesSparse(spots.length, (idx) => xLabels[idx] ?? '')),
       ),
       lineBarsData: [
         LineChartBarData(
@@ -1343,13 +1515,13 @@ class _TrendsScreenState extends State<TrendsScreen> {
   // ── Dual line chart (dual_text) ────────────────────────────────────────────
   Widget _dualLineChart(String label, List<ReadingModel> data) {
     // LOCAL variables
-    final leftSpots  = <FlSpot>[];
+    final leftSpots = <FlSpot>[];
     final rightSpots = <FlSpot>[];
-    final xLabels    = <int, String>{};
+    final xLabels = <int, String>{};
 
     for (int i = 0; i < data.length; i++) {
       final raw = data[i].inspectionValues[label];
-      final x   = (i + 1).toDouble();
+      final x = (i + 1).toDouble();
       xLabels[i + 1] = _fmt(data[i].capturedAt);
       if (raw is Map) {
         final lv = _toDouble(raw['left']);
@@ -1363,24 +1535,23 @@ class _TrendsScreenState extends State<TrendsScreen> {
       return _noData('No numeric dual-input values for "$label"');
     }
 
-    final leftLabel  = _selectedParam?['left_label']  as String? ?? 'Left';
+    final leftLabel = _selectedParam?['left_label'] as String? ?? 'Left';
     final rightLabel = _selectedParam?['right_label'] as String? ?? 'Right';
     final totalCount = data.length;
 
     return LineChart(LineChartData(
       borderData: _borderData,
-      gridData:   _gridData,
+      gridData: _gridData,
       minX: 1,
       maxX: totalCount.toDouble(),
       titlesData: FlTitlesData(
-        topTitles:
-            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         rightTitles:
             const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-        leftTitles:  AxisTitles(sideTitles: _leftTitles),
+        leftTitles: AxisTitles(sideTitles: _leftTitles),
         bottomTitles: AxisTitles(
-            sideTitles: _bottomTitlesSparse(
-                totalCount, (idx) => xLabels[idx] ?? '')),
+            sideTitles:
+                _bottomTitlesSparse(totalCount, (idx) => xLabels[idx] ?? '')),
       ),
       lineBarsData: [
         if (leftSpots.isNotEmpty)
@@ -1444,15 +1615,13 @@ class _TrendsScreenState extends State<TrendsScreen> {
           tooltipBorderRadius: BorderRadius.circular(8),
           tooltipBorder: const BorderSide(color: _kBorder),
           getTooltipItems: (touchedSpots) => touchedSpots.map((s) {
-            final isLeft  = s.barIndex == 0;
-            final color   = isLeft ? _kCopper : _kTeal;
+            final isLeft = s.barIndex == 0;
+            final color = isLeft ? _kCopper : _kTeal;
             final seriesL = isLeft ? leftLabel : rightLabel;
             return LineTooltipItem(
               '$seriesL: ${s.y.toStringAsFixed(2)}\n${xLabels[s.x.toInt()] ?? ''}',
               GoogleFonts.spaceGrotesk(
-                  color: color,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 11),
+                  color: color, fontWeight: FontWeight.w700, fontSize: 11),
             );
           }).toList(),
         ),
@@ -1480,12 +1649,11 @@ class _TrendsScreenState extends State<TrendsScreen> {
 
     return BarChart(BarChartData(
       borderData: _borderData,
-      gridData:   _gridData,
-      alignment:  BarChartAlignment.spaceAround,
-      maxY:       maxY * 1.3,
+      gridData: _gridData,
+      alignment: BarChartAlignment.spaceAround,
+      maxY: maxY * 1.3,
       titlesData: FlTitlesData(
-        topTitles:
-            const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         rightTitles:
             const AxisTitles(sideTitles: SideTitles(showTitles: false)),
         // Y axis = occurrence count
@@ -1499,8 +1667,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
                 padding: const EdgeInsets.only(right: 4),
                 child: Text(
                   v.toInt().toString(),
-                  style: GoogleFonts.spaceGrotesk(
-                      fontSize: 9, color: _kSubL),
+                  style: GoogleFonts.spaceGrotesk(fontSize: 9, color: _kSubL),
                 ),
               );
             },
@@ -1516,15 +1683,14 @@ class _TrendsScreenState extends State<TrendsScreen> {
               if (idx < 0 || idx >= entries.length) {
                 return const SizedBox.shrink();
               }
-              final opt   = entries[idx].key;
+              final opt = entries[idx].key;
               final short = opt.length > 9 ? '${opt.substring(0, 8)}…' : opt;
               return Padding(
                 padding: const EdgeInsets.only(top: 5),
                 child: Text(
                   '${idx + 1}\n$short',
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.spaceGrotesk(
-                      fontSize: 8, color: _kSubL),
+                  style: GoogleFonts.spaceGrotesk(fontSize: 8, color: _kSubL),
                 ),
               );
             },
@@ -1532,7 +1698,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
         ),
       ),
       barGroups: entries.asMap().entries.map((e) {
-        final idx   = e.key;
+        final idx = e.key;
         final count = e.value.value.toDouble();
         final color = _kMultiPalette[idx % _kMultiPalette.length];
         return BarChartGroupData(
@@ -1545,9 +1711,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
               borderRadius:
                   const BorderRadius.vertical(top: Radius.circular(6)),
               backDrawRodData: BackgroundBarChartRodData(
-                  show: true,
-                  toY: maxY * 1.3,
-                  color: color.withOpacity(0.07)),
+                  show: true, toY: maxY * 1.3, color: color.withOpacity(0.07)),
             ),
           ],
           showingTooltipIndicators: [],
@@ -1558,10 +1722,10 @@ class _TrendsScreenState extends State<TrendsScreen> {
           getTooltipColor: (_) => _kCard,
           tooltipBorderRadius: BorderRadius.circular(8),
           getTooltipItem: (group, _, rod, __) {
-            final opt   = entries[group.x].key;
-            final cnt   = entries[group.x].value;
+            final opt = entries[group.x].key;
+            final cnt = entries[group.x].value;
             final total = counts.values.fold(0, (a, b) => a + b);
-            final pct   = (cnt / total * 100).toStringAsFixed(1);
+            final pct = (cnt / total * 100).toStringAsFixed(1);
             return BarTooltipItem(
               '$opt\n$cnt readings ($pct%)',
               GoogleFonts.spaceGrotesk(
@@ -1588,25 +1752,25 @@ class _TrendsScreenState extends State<TrendsScreen> {
         }).toList(),
       );
     } else {
-      final type  = _selectedParam?['type'] as String? ?? 'number';
+      final type = _selectedParam?['type'] as String? ?? 'number';
       final label = _selectedParam?['label'] as String? ?? '';
 
       if (type == 'dual_text') {
-        final ll = _selectedParam?['left_label']  as String? ?? 'Left';
+        final ll = _selectedParam?['left_label'] as String? ?? 'Left';
         final rl = _selectedParam?['right_label'] as String? ?? 'Right';
         content = Row(children: [
           _LegendLine(color: _kCopper, label: '← $ll'),
           const SizedBox(width: 16),
-          _LegendLine(color: _kTeal,   label: '→ $rl'),
+          _LegendLine(color: _kTeal, label: '→ $rl'),
         ]);
       } else if (type == 'dropdown') {
-        final data    = _filtered(_selectedTankId!);
-        final counts  = <String, int>{};
+        final data = _filtered(_selectedTankId!);
+        final counts = <String, int>{};
         for (final r in data) {
           final v = r.inspectionValues[label]?.toString() ?? '';
           if (v.isNotEmpty) counts[v] = (counts[v] ?? 0) + 1;
         }
-        final total   = counts.values.fold(0, (a, b) => a + b);
+        final total = counts.values.fold(0, (a, b) => a + b);
         final entries = counts.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
         content = Wrap(
@@ -1614,7 +1778,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
           runSpacing: 6,
           children: entries.asMap().entries.map((e) {
             final color = _kMultiPalette[e.key % _kMultiPalette.length];
-            final pct   = total > 0
+            final pct = total > 0
                 ? (e.value.value / total * 100).toStringAsFixed(1)
                 : '0';
             return _LegendDot(
@@ -1657,18 +1821,18 @@ class _TrendsScreenState extends State<TrendsScreen> {
   FlBorderData get _borderData => FlBorderData(
         show: true,
         border: const Border(
-          left:   BorderSide(color: _kBorderH, width: 1),
+          left: BorderSide(color: _kBorderH, width: 1),
           bottom: BorderSide(color: _kBorderH, width: 1),
-          top:    BorderSide(color: Colors.transparent),
-          right:  BorderSide(color: Colors.transparent),
+          top: BorderSide(color: Colors.transparent),
+          right: BorderSide(color: Colors.transparent),
         ),
       );
 
   FlGridData get _gridData => FlGridData(
         show: true,
         drawVerticalLine: false,
-        getDrawingHorizontalLine: (_) => const FlLine(
-            color: _kBorder, strokeWidth: 1, dashArray: [4, 4]),
+        getDrawingHorizontalLine: (_) =>
+            const FlLine(color: _kBorder, strokeWidth: 1, dashArray: [4, 4]),
       );
 
   SideTitles get _leftTitles => SideTitles(
@@ -1735,7 +1899,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
       );
 
   double? _toDouble(dynamic v) {
-    if (v is num)    return v.toDouble();
+    if (v is num) return v.toDouble();
     if (v is String) return double.tryParse(v);
     return null;
   }
@@ -1769,11 +1933,11 @@ class _QrScanPageState extends State<_QrScanPage>
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(
-        vsync: this, duration: const Duration(seconds: 2))
-      ..repeat(reverse: true);
-    _pulseAnim = Tween(begin: 0.85, end: 1.0).animate(
-        CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _pulse =
+        AnimationController(vsync: this, duration: const Duration(seconds: 2))
+          ..repeat(reverse: true);
+    _pulseAnim = Tween(begin: 0.85, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
   }
 
   @override
@@ -1792,9 +1956,7 @@ class _QrScanPageState extends State<_QrScanPage>
         iconTheme: const IconThemeData(color: _kText),
         title: Text('Scan Tank QR',
             style: GoogleFonts.dmSans(
-                fontWeight: FontWeight.w700,
-                color: _kText,
-                fontSize: 17)),
+                fontWeight: FontWeight.w700, color: _kText, fontSize: 17)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: _kBorder),
@@ -1851,16 +2013,14 @@ class _QrScanPageState extends State<_QrScanPage>
           right: 0,
           child: Center(
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 18, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
               decoration: BoxDecoration(
                 color: _kCard.withOpacity(0.92),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(color: _kBorder),
               ),
               child: Text('Point at tank QR code',
-                  style: GoogleFonts.dmSans(
-                      color: _kText, fontSize: 13)),
+                  style: GoogleFonts.dmSans(color: _kText, fontSize: 13)),
             ),
           ),
         ),
@@ -1875,15 +2035,14 @@ class _OverlayPainter extends CustomPainter {
     final paint = Paint()..color = Colors.black.withOpacity(0.55);
     const cut = 240.0;
     final cx = size.width / 2, cy = size.height / 2;
-    final rect = Rect.fromCenter(
-        center: Offset(cx, cy), width: cut, height: cut);
+    final rect =
+        Rect.fromCenter(center: Offset(cx, cy), width: cut, height: cut);
     canvas.drawPath(
       Path.combine(
         PathOperation.difference,
         Path()..addRect(Offset.zero & size),
         Path()
-          ..addRRect(RRect.fromRectAndRadius(
-              rect, const Radius.circular(16))),
+          ..addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(16))),
       ),
       paint,
     );
@@ -1897,11 +2056,7 @@ class _Corner extends StatelessWidget {
   final double? top, left, right, bottom;
   final double rotate;
   const _Corner(
-      {this.top,
-      this.left,
-      this.right,
-      this.bottom,
-      required this.rotate});
+      {this.top, this.left, this.right, this.bottom, required this.rotate});
 
   @override
   Widget build(BuildContext context) => Positioned(
@@ -1916,7 +2071,7 @@ class _Corner extends StatelessWidget {
             height: 24,
             decoration: const BoxDecoration(
               border: Border(
-                top:  BorderSide(color: _kCopperL, width: 3),
+                top: BorderSide(color: _kCopperL, width: 3),
                 left: BorderSide(color: _kCopperL, width: 3),
               ),
             ),
@@ -1977,21 +2132,15 @@ class _DateBtn extends StatelessWidget {
             border: Border.all(
                 color: active ? _kCopper.withOpacity(0.4) : _kBorder),
           ),
-          child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon,
-                    size: 14,
-                    color: active ? _kCopper : _kSub),
-                const SizedBox(width: 7),
-                Text(label,
-                    style: GoogleFonts.dmSans(
-                        color: active ? _kCopper : _kSub,
-                        fontWeight: active
-                            ? FontWeight.w600
-                            : FontWeight.normal,
-                        fontSize: 12)),
-              ]),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(icon, size: 14, color: active ? _kCopper : _kSub),
+            const SizedBox(width: 7),
+            Text(label,
+                style: GoogleFonts.dmSans(
+                    color: active ? _kCopper : _kSub,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.normal,
+                    fontSize: 12)),
+          ]),
         ),
       );
 }
@@ -2005,8 +2154,7 @@ class _MetaChip extends StatelessWidget {
       Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 10, color: _kSubL),
         const SizedBox(width: 4),
-        Text(label,
-            style: GoogleFonts.dmSans(fontSize: 10, color: _kSubL)),
+        Text(label, style: GoogleFonts.dmSans(fontSize: 10, color: _kSubL)),
       ]);
 }
 
@@ -2020,14 +2168,11 @@ class _LegendDot extends StatelessWidget {
         Container(
             width: 8,
             height: 8,
-            decoration:
-                BoxDecoration(color: color, shape: BoxShape.circle)),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 5),
         Text(label,
             style: GoogleFonts.dmSans(
-                fontSize: 11,
-                color: _kSub,
-                fontWeight: FontWeight.w500)),
+                fontSize: 11, color: _kSub, fontWeight: FontWeight.w500)),
       ]);
 }
 
@@ -2042,13 +2187,10 @@ class _LegendLine extends StatelessWidget {
             width: 18,
             height: 2.5,
             decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(2))),
+                color: color, borderRadius: BorderRadius.circular(2))),
         const SizedBox(width: 6),
         Text(label,
             style: GoogleFonts.dmSans(
-                fontSize: 11,
-                color: _kSub,
-                fontWeight: FontWeight.w500)),
+                fontSize: 11, color: _kSub, fontWeight: FontWeight.w500)),
       ]);
 }
