@@ -320,4 +320,25 @@ class TankRepository {
       "updated_at": DateTime.now().toIso8601String(),
     });
   }
+
+  Future<String> duplicateTank(TankModel tank) async {
+    final newRef = FirebaseDatabase.instance.ref('tanks').push();
+
+    final newId = newRef.key!;
+
+    await newRef.set({
+      'id': newId,
+      'tank_code': tank.tankCode,
+      'tank_name': '${tank.tankName} (Copy)',
+      'location': tank.location,
+      'scale_max': tank.scaleMax,
+      'scale_side': tank.scaleSide,
+      'qr_image_url': tank.qrImageUrl,
+      'qr_json': tank.qrJson,
+      'inspection_properties': tank.inspectionProperties,
+      'created_at': DateTime.now().toIso8601String(),
+    });
+
+    return newId;
+  }
 }

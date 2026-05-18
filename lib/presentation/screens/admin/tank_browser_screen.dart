@@ -1,18 +1,4 @@
 // lib/presentation/screens/admin/tank_browser_screen.dart
-// ══════════════════════════════════════════════════════════════════════════════
-// FEATURES IN THIS VERSION:
-//   ✅ All original features preserved (create/modify/duplicate/delete/QR)
-//   ✅ Drag-to-reorder nodes within any folder (long-press to lift)
-//   ✅ Drag-to-move into a folder — hover a folder node while dragging to
-//      drop inside it (folder glows teal as target)
-//   ✅ Drag out to parent — drag card to the breadcrumb bar to move to parent
-//   ✅ Non-expanding leaf cards — full detail always visible (TankAdminCard style)
-//   ✅ Premium folder cards — icon, gradient, child count, zone badge
-//   ✅ Animated feedback: lift shadow, scale, drag ghost
-//   ✅ Move-to dialog as fallback (long-press context menu → Move to…)
-//   ✅ Same dark industrial palette throughout
-//   ✅ All repository / model contracts unchanged
-// ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
 import 'dart:io';
@@ -37,26 +23,27 @@ import 'create_tank_qr.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 // PALETTE
 // ─────────────────────────────────────────────────────────────────────────────
-const _kBg = Color(0xFF0C0D0F);
-const _kSurface = Color(0xFF141618);
-const _kCard = Color(0xFF1A1C20);
-const _kBorder = Color(0xFF252830);
-const _kBorderH = Color(0xFF38404F);
+const _kBg = Color(0xFF080909);
+const _kSurface = Color(0xFF0F1012);
+const _kCard = Color(0xFF151719);
+const _kBorder = Color(0xFF222529);
+const _kBorderH = Color(0xFF343840);
 const _kCopper = Color(0xFFCB8C3E);
 const _kCopperL = Color(0xFFE8A84E);
-const _kCopperD = Color(0xFF8A5A1E);
+const _kCopperD = Color(0xFF7A5020);
 const _kTeal = Color(0xFF1ABCBD);
-const _kTealD = Color(0xFF0E8A8B);
-const _kText = Color(0xFFF0EEE9);
-const _kSub = Color(0xFF8A8F9C);
-const _kSubL = Color(0xFF6B7280);
+const _kText = Color(0xFFEDEBE6);
+const _kTextD = Color(0xFFB0AEA9);
+const _kSub = Color(0xFF6B7080);
+const _kSubL = Color(0xFF464C5C);
 const _kSuccess = Color(0xFF22C55E);
 const _kWarn = Color(0xFFF59E0B);
 const _kDanger = Color(0xFFEF4444);
-const _kPurple = Color(0xFFAB8FF0);
+const _kPurple = Color(0xFF9B7FE0);
+const _kAmber = Color(0xFFD97706);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DATA CLASS — tracks drag state for a node
+// DRAG PAYLOAD
 // ─────────────────────────────────────────────────────────────────────────────
 class _DragPayload {
   final TankNode node;
@@ -86,33 +73,24 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   bool _loading = true;
 
   // Drag state
-  String? _dragOverFolderId; // which folder is being hovered
+  String? _dragOverFolderId;
   bool _dragOverBreadcrumb = false;
+  int? _reorderHoverIndex;
+  bool _isDragging = false;
 
-  // Folder child counts cache
   final Map<String, int> _childCountCache = {};
 
-  // Animation controller for folder pulse when dragging over
-  late AnimationController _pulseCtrl;
-  late Animation<double> _pulseAnim;
-
   TankNode? get _currentFolder => _pathStack.last;
-  List<TankNode> get _breadcrumbs => _pathStack.whereType<TankNode>().toList();
 
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 700))
-      ..repeat(reverse: true);
-    _pulseAnim = Tween(begin: 0.0, end: 1.0).animate(_pulseCtrl);
     _subscribeToCurrentFolder();
   }
 
   @override
   void dispose() {
     _sub?.cancel();
-    _pulseCtrl.dispose();
     super.dispose();
   }
 
@@ -121,30 +99,39 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   void _subscribeToCurrentFolder() {
     _sub?.cancel();
     setState(() => _loading = true);
-    debugPrint(
-        '[Browser] Subscribing to folder: ${_currentFolder?.id ?? 'ROOT'}');
 
     _sub = _treeRepo.watchChildren(_currentFolder?.id).listen(
       (nodes) async {
-        final missing = nodes
-            .where((n) =>
-                n.isLeaf &&
-                n.tankId != null &&
-                !_tankCache.containsKey(n.tankId))
-            .toList();
-        for (final n in missing) {
-          final t = await _tankRepo.getTankById(n.tankId!);
-          if (t != null) _tankCache[n.tankId!] = t;
-        }
-        // Fetch child counts for folders
-        for (final n in nodes.where((n) => n.isFolder)) {
-          if (!_childCountCache.containsKey(n.id)) {
-            _treeRepo.watchChildren(n.id).first.then((children) {
-              if (mounted) {
-                setState(() => _childCountCache[n.id] = children.length);
-              }
-            });
+        for (final n in nodes) {
+          if (n.isLeaf) {
+            final tid = n.tankId;
+            if (tid != null && !_tankCache.containsKey(tid)) {
+              final t = await _tankRepo.getTankById(tid);
+              if (t != null) _tankCache[tid] = t;
+            }
           }
+        }
+        // for (final n in nodes.where((n) => n.isFolder)) {
+        //   if (!_childCountCache.containsKey(n.id)) {
+        //     _treeRepo.watchChildren(n.id).first.then((children) {
+        //       if (mounted)
+        //         setState(() => _childCountCache[n.id] = children.length);
+        //     });
+        //   }
+        // }
+
+        // for (final n in nodes.where((n) => n.isFolder)) {
+        //   if (_childCountCache.containsKey(n.id)) continue;
+
+        //   final children = await _treeRepo.watchChildren(n.id).first;
+
+        //   _childCountCache[n.id] = children.length;
+        // }
+
+        for (final n in nodes.where((n) => n.isFolder)) {
+          if (_childCountCache.containsKey(n.id)) continue;
+
+          _childCountCache[n.id] = await _treeRepo.countChildren(n.id);
         }
         if (mounted) {
           setState(() {
@@ -153,8 +140,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
           });
         }
       },
-      onError: (e) {
-        debugPrint('[Browser] Stream error: $e');
+      onError: (_) {
         if (mounted) setState(() => _loading = false);
       },
     );
@@ -194,157 +180,207 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     _subscribeToCurrentFolder();
   }
 
-  // ── Drag handlers ──────────────────────────────────────────────────────────
+  // ── Drag → Move into folder ────────────────────────────────────────────────
 
-  /// Called when a drag is dropped onto a folder node.
   Future<void> _moveNodeToFolder(
       _DragPayload payload, TankNode targetFolder) async {
     if (payload.node.id == targetFolder.id) return;
     HapticFeedback.mediumImpact();
-    debugPrint(
-        '[DnD] Moving ${payload.node.id} into folder ${targetFolder.id}');
     try {
       await _treeRepo.moveNode(
-        nodeId: payload.node.id,
-        newParentId: targetFolder.id,
-      );
+          nodeId: payload.node.id, newParentId: targetFolder.id);
     } catch (e) {
-      debugPrint('[DnD] Move failed: $e');
       if (mounted) _snack('Move failed: $e', _kDanger);
     }
   }
 
-  /// Called when a drag is dropped on the breadcrumb (move to parent).
   Future<void> _moveNodeToParent(_DragPayload payload) async {
     HapticFeedback.mediumImpact();
     final newParentId =
         _pathStack.length >= 2 ? _pathStack[_pathStack.length - 2]?.id : null;
-    debugPrint(
-        '[DnD] Moving ${payload.node.id} to parent: ${newParentId ?? 'ROOT'}');
     try {
       await _treeRepo.moveNode(
-        nodeId: payload.node.id,
-        newParentId: newParentId,
-      );
+          nodeId: payload.node.id, newParentId: newParentId);
     } catch (e) {
-      debugPrint('[DnD] Move to parent failed: $e');
       if (mounted) _snack('Move failed: $e', _kDanger);
     }
   }
 
-  /// Reorder within current folder.
-  Future<void> _reorderNodes(int oldIndex, int newIndex) async {
-    if (oldIndex == newIndex) return;
+  // ── Drag → Reorder ─────────────────────────────────────────────────────────
+
+  Future<void> _reorderDrop(_DragPayload payload, int gapIndex) async {
+    final fromIndex = payload.fromIndex;
+    if (fromIndex == gapIndex || fromIndex == gapIndex - 1) return;
     HapticFeedback.selectionClick();
+
     setState(() {
-      final item = _nodes.removeAt(oldIndex);
-      _nodes.insert(newIndex > oldIndex ? newIndex - 1 : newIndex, item);
+      final item = _nodes.removeAt(fromIndex);
+      final insertAt = gapIndex > fromIndex ? gapIndex - 1 : gapIndex;
+      _nodes.insert(insertAt, item);
     });
-    // Persist order
+
     try {
-      final ids = _nodes.map((n) => n.id).toList();
-      await _treeRepo.reorderNodes(ids);
-    } catch (e) {
-      debugPrint('[Reorder] Failed: $e');
+      await _treeRepo.reorderNodes(_nodes.map((n) => n.id).toList());
+    } catch (_) {}
+  }
+
+  // ── Folder deep-clone ──────────────────────────────────────────────────────
+
+  Future<void> _deepCloneFolder({
+    required TankNode sourceNode,
+    required String? destParentId,
+    required List<String> siblingNames,
+  }) async {
+    assert(sourceNode.isFolder);
+    final newName = _uniqueName(sourceNode.name, siblingNames);
+    final clonedFolder = await _treeRepo.createFolder(
+      name: newName,
+      description: sourceNode.description,
+      zone: sourceNode.zone,
+      parentId: destParentId,
+    );
+    final children = await _treeRepo.watchChildren(sourceNode.id).first;
+    final childNames = children.map((c) => c.name).toList();
+    for (final child in children) {
+      if (child.isFolder) {
+        await _deepCloneFolder(
+          sourceNode: child,
+          destParentId: clonedFolder.id,
+          siblingNames: childNames,
+        );
+      } else {
+        final tid = child.tankId;
+        if (tid == null) continue;
+        await _deepCloneLeaf(
+          sourceNode: child,
+          sourceTankId: tid,
+          destParentId: clonedFolder.id,
+          siblingNames: childNames,
+        );
+      }
     }
   }
 
-  // ── FAB / Create ───────────────────────────────────────────────────────────
+  Future<void> _deepCloneLeaf({
+    required TankNode sourceNode,
+    required String sourceTankId,
+    required String? destParentId,
+    required List<String> siblingNames,
+  }) async {
+    TankModel? sourceTank = _tankCache[sourceTankId];
+    sourceTank ??= await _tankRepo.getTankById(sourceTankId);
+    if (sourceTank == null) return;
+    final newName = _uniqueName(sourceTank.tankName, siblingNames);
+    final newTankId = await _tankRepo.duplicateTank(sourceTank);
+    await _treeRepo.createLeaf(
+      name: newName,
+      tankId: newTankId,
+      zone: sourceNode.zone ?? sourceTank.location,
+      parentId: destParentId,
+    );
+  }
+
+  String _uniqueName(String base, List<String> existing) {
+    final stripped = base.replaceAll(RegExp(r'\s*\(\d+\)$'), '');
+    if (!existing.contains(stripped)) return stripped;
+    int i = 1;
+    while (existing.contains('$stripped ($i)')) i++;
+    return '$stripped ($i)';
+  }
+
+  Future<void> _duplicateFolder(TankNode node) async {
+    _snack('Cloning "${node.name}"…', _kCopper);
+    try {
+      final siblingNames = _nodes.map((n) => n.name).toList();
+      await _deepCloneFolder(
+        sourceNode: node,
+        destParentId: _currentFolder?.id,
+        siblingNames: siblingNames,
+      );
+      if (mounted) _snack('"${node.name}" cloned successfully', _kSuccess);
+    } catch (e) {
+      if (mounted) _snack('Clone failed: $e', _kDanger);
+    }
+  }
+
+  // ── FAB ────────────────────────────────────────────────────────────────────
+  // Uses a plain InkWell inside a Stack so no Flutter FAB theme issues.
 
   void _showFabMenu() {
+    HapticFeedback.lightImpact();
     showModalBottomSheet(
       context: context,
-      backgroundColor: _kCard,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 24),
-                decoration: BoxDecoration(
-                    color: _kBorderH, borderRadius: BorderRadius.circular(2)),
-              ),
-              _SheetOption(
-                icon: Icons.folder_open_outlined,
-                label: 'New Group',
-                sub: 'Organise tanks into folders',
-                color: _kCopper,
-                onTap: () {
-                  Navigator.pop(context);
-                  _showCreateFolderDialog();
-                },
-              ),
-              const SizedBox(height: 12),
-              _SheetOption(
-                icon: Icons.water_outlined,
-                label: 'New Tank',
-                sub: 'Add a tank to this group',
-                color: _kTeal,
-                onTap: () {
-                  Navigator.pop(context);
-                  _showCreateLeafFlow();
-                },
-              ),
-            ],
-          ),
-        ),
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      enableDrag: true,
+      builder: (sheetCtx) => _FabSheet(
+        onNewGroup: () {
+          Navigator.pop(sheetCtx);
+          // slight delay so sheet fully closes before dialog opens
+          Future.delayed(const Duration(milliseconds: 120), () {
+            if (mounted) _showCreateFolderDialog();
+          });
+        },
+        onNewTank: () {
+          Navigator.pop(sheetCtx);
+          Future.delayed(const Duration(milliseconds: 120), () {
+            if (mounted) _showCreateLeafFlow();
+          });
+        },
       ),
     );
   }
+
+  // ── Create folder dialog ────────────────────────────────────────────────────
 
   Future<void> _showCreateFolderDialog() async {
     final nameCtrl = TextEditingController();
     final descCtrl = TextEditingController();
     final zoneCtrl = TextEditingController();
-    bool saving = false;
-    String? error;
 
     await showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setDlg) => _StyledDialog(
-          title: 'New Group',
-          icon: Icons.folder_open_outlined,
-          iconColor: _kCopper,
-          onConfirm: () async {
-            final name = nameCtrl.text.trim();
-            if (name.isEmpty) {
-              setDlg(() => error = 'Name is required');
-              return;
-            }
-            setDlg(() {
-              saving = true;
-              error = null;
-            });
-            try {
-              await _treeRepo.createFolder(
-                name: name,
-                description:
-                    descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
-                zone:
-                    zoneCtrl.text.trim().isEmpty ? null : zoneCtrl.text.trim(),
-                parentId: _currentFolder?.id,
-              );
-              if (ctx.mounted) Navigator.pop(ctx);
-            } catch (e) {
+      builder: (_) {
+        bool saving = false;
+        String? error;
+        return StatefulBuilder(
+          builder: (ctx, setDlg) => _StyledDialog(
+            title: 'New Group',
+            icon: Icons.folder_open_outlined,
+            iconColor: _kCopper,
+            onConfirm: () async {
+              final name = nameCtrl.text.trim();
+              if (name.isEmpty) {
+                setDlg(() => error = 'Name is required');
+                return;
+              }
               setDlg(() {
-                saving = false;
-                error = e.toString();
+                saving = true;
+                error = null;
               });
-            }
-          },
-          confirmLabel: saving ? null : 'Create',
-          saving: saving,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+              try {
+                await _treeRepo.createFolder(
+                  name: name,
+                  description: descCtrl.text.trim().isEmpty
+                      ? null
+                      : descCtrl.text.trim(),
+                  zone: zoneCtrl.text.trim().isEmpty
+                      ? null
+                      : zoneCtrl.text.trim(),
+                  parentId: _currentFolder?.id,
+                );
+                if (ctx.mounted) Navigator.pop(ctx);
+              } catch (e) {
+                setDlg(() {
+                  saving = false;
+                  error = e.toString();
+                });
+              }
+            },
+            confirmLabel: saving ? null : 'Create',
+            saving: saving,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
               _DarkField(
                   ctrl: nameCtrl,
                   label: 'Group Name *',
@@ -361,13 +397,17 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                   icon: Icons.location_on_outlined),
               if (error != null) ...[
                 const SizedBox(height: 10),
-                _ErrorText(error!),
+                _ErrorText(error!)
               ],
-            ],
+            ]),
           ),
-        ),
-      ),
+        );
+      },
     );
+
+    nameCtrl.dispose();
+    descCtrl.dispose();
+    zoneCtrl.dispose();
   }
 
   Future<void> _showCreateLeafFlow() async {
@@ -393,7 +433,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
       context,
       title: 'Delete ${node.isFolder ? 'Group' : 'Tank'}',
       message: node.isFolder
-          ? 'This will delete "${node.name}" and all its contents. Cannot be undone.'
+          ? 'Delete "${node.name}" and all its contents? Cannot be undone.'
           : 'Remove "${node.name}" from this group? The tank record is preserved.',
     );
     if (!confirmed) return;
@@ -404,49 +444,50 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     final nameCtrl = TextEditingController(text: node.name);
     final descCtrl = TextEditingController(text: node.description ?? '');
     final zoneCtrl = TextEditingController(text: node.zone ?? '');
-    bool saving = false;
-    String? error;
 
     await showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setDlg) => _StyledDialog(
-          title: 'Modify Group',
-          icon: Icons.edit_outlined,
-          iconColor: _kTeal,
-          onConfirm: () async {
-            final name = nameCtrl.text.trim();
-            if (name.isEmpty) {
-              setDlg(() => error = 'Name is required');
-              return;
-            }
-            setDlg(() {
-              saving = true;
-              error = null;
-            });
-            try {
-              await _treeRepo.updateFolder(
-                id: node.id,
-                name: name,
-                description:
-                    descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
-                zone:
-                    zoneCtrl.text.trim().isEmpty ? null : zoneCtrl.text.trim(),
-              );
-              if (ctx.mounted) Navigator.pop(ctx);
-            } catch (e) {
+      builder: (_) {
+        bool saving = false;
+        String? error;
+        return StatefulBuilder(
+          builder: (ctx, setDlg) => _StyledDialog(
+            title: 'Edit Group',
+            icon: Icons.edit_outlined,
+            iconColor: _kTeal,
+            onConfirm: () async {
+              final name = nameCtrl.text.trim();
+              if (name.isEmpty) {
+                setDlg(() => error = 'Name is required');
+                return;
+              }
               setDlg(() {
-                saving = false;
-                error = e.toString();
+                saving = true;
+                error = null;
               });
-            }
-          },
-          confirmLabel: saving ? null : 'Save',
-          saving: saving,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
+              try {
+                await _treeRepo.updateFolder(
+                  id: node.id,
+                  name: name,
+                  description: descCtrl.text.trim().isEmpty
+                      ? null
+                      : descCtrl.text.trim(),
+                  zone: zoneCtrl.text.trim().isEmpty
+                      ? null
+                      : zoneCtrl.text.trim(),
+                );
+                if (ctx.mounted) Navigator.pop(ctx);
+              } catch (e) {
+                setDlg(() {
+                  saving = false;
+                  error = e.toString();
+                });
+              }
+            },
+            confirmLabel: saving ? null : 'Save',
+            saving: saving,
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
               _DarkField(
                   ctrl: nameCtrl,
                   label: 'Group Name *',
@@ -463,39 +504,37 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                   icon: Icons.location_on_outlined),
               if (error != null) ...[
                 const SizedBox(height: 10),
-                _ErrorText(error!),
+                _ErrorText(error!)
               ],
-            ],
+            ]),
           ),
-        ),
-      ),
+        );
+      },
     );
+
+    nameCtrl.dispose();
+    descCtrl.dispose();
+    zoneCtrl.dispose();
   }
 
-  /// Show a move-to dialog (fallback for users who prefer tapping over dragging)
   Future<void> _showMoveDialog(TankNode node) async {
-    // Collect folders at current level excluding this node
     final folders = _nodes.where((n) => n.isFolder && n.id != node.id).toList();
-
     if (folders.isEmpty && _pathStack.length <= 1) {
       _snack('No other folders to move to', _kWarn);
       return;
     }
-
     await showDialog<void>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: _kCard,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: Text('Move "${node.name}" to…',
-            style:
-                GoogleFonts.dmSans(color: _kText, fontWeight: FontWeight.w700)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Move to…',
+            style: GoogleFonts.raleway(
+                color: _kText, fontWeight: FontWeight.w800)),
         content: SizedBox(
           width: double.maxFinite,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
               if (_pathStack.length > 1) ...[
                 _MoveTarget(
                   label: '↑ Parent folder',
@@ -520,13 +559,13 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                       },
                     ),
                   )),
-            ],
+            ]),
           ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text('Cancel', style: GoogleFonts.dmSans(color: _kSub)),
+            child: Text('Cancel', style: GoogleFonts.raleway(color: _kSub)),
           ),
         ],
       ),
@@ -534,189 +573,269 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   }
 
   void _snack(String msg, Color bg) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: const TextStyle(color: _kText)),
+      content: Text(msg,
+          style:
+              GoogleFonts.raleway(color: _kText, fontWeight: FontWeight.w600)),
       backgroundColor: bg,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.all(16),
     ));
   }
 
   // ── BUILD ──────────────────────────────────────────────────────────────────
+  // FAB is built manually inside a Stack so it is completely theme-independent.
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: _kBg,
-      floatingActionButton: _buildFab(),
-      body: Column(
+      body: Stack(
         children: [
-          // ── Breadcrumb bar (also a drag target for moving to parent) ──────
-          _buildBreadcrumb(),
-
-          // ── Back row ──────────────────────────────────────────────────────
-          if (_pathStack.length > 1)
-            _BackRow(
-              folderName: _currentFolder?.name ?? '',
-              onBack: _navigateUp,
+          // ── Main content column ──────────────────────────────────────
+          Column(children: [
+            _buildBreadcrumb(),
+            if (_pathStack.length > 1)
+              _BackRow(
+                  folderName: _currentFolder?.name ?? '', onBack: _navigateUp),
+            if (_isDragging) _buildDragHintBanner(),
+            Expanded(
+              child: _loading
+                  ? const Center(child: _LoadingPulse())
+                  : _nodes.isEmpty
+                      ? _EmptyState(onAdd: _showFabMenu)
+                      : _buildNodeList(),
             ),
+          ]),
 
-          // ── Content ───────────────────────────────────────────────────────
-          Expanded(
-            child: _loading
-                ? const Center(
-                    child: CircularProgressIndicator(color: _kCopper))
-                : _nodes.isEmpty
-                    ? _EmptyState(onAdd: _showFabMenu)
-                    : _buildNodeList(),
+          // ── FAB (theme-independent, always visible) ──────────────────
+          Positioned(
+            right: 20,
+            bottom: 28,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: _showFabMenu,
+                borderRadius: BorderRadius.circular(28),
+                child: Ink(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: const LinearGradient(
+                      colors: [_kCopperL, _kCopper, _kCopperD],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    // boxShadow: [
+                    //   // BoxShadow(
+                    //   //   color: _kCopper.withOpacity(0.55),
+                    //   //   blurRadius: 22,
+                    //   //   offset: const Offset(0, 7),
+                    //   // ),
+                    //   // BoxShadow(
+                    //   //   color: _kCopper.withOpacity(0.18),
+                    //   //   blurRadius: 44,
+                    //   //   spreadRadius: 6,
+                    //   // ),
+                    // ],
+                  ),
+                  child: const Center(
+                    child:
+                        Icon(Icons.add_rounded, color: Colors.white, size: 30),
+                  ),
+                ),
+              ),
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ── FAB ────────────────────────────────────────────────────────────────────
+  // ── Drag hint banner ───────────────────────────────────────────────────────
 
-  Widget _buildFab() {
-    return FloatingActionButton.extended(
-      backgroundColor: _kCopper,
-      onPressed: _showFabMenu,
-      icon: const Icon(Icons.add_rounded, color: Colors.white),
-      label: Text('Add',
-          style: GoogleFonts.dmSans(
-              color: Colors.white, fontWeight: FontWeight.w700)),
-      elevation: 8,
-      extendedPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
+  Widget _buildDragHintBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: _kSurface,
+      child: Row(children: [
+        const Icon(Icons.info_outline_rounded, size: 12, color: _kSub),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Drop ON a folder → move inside it   ·   Drop BETWEEN cards → reorder',
+            style: GoogleFonts.raleway(fontSize: 10, color: _kSub),
+          ),
+        ),
+      ]),
     );
   }
 
-  // ── Breadcrumb bar ─────────────────────────────────────────────────────────
+  // ── Breadcrumb ─────────────────────────────────────────────────────────────
 
   Widget _buildBreadcrumb() {
     return DragTarget<_DragPayload>(
-      onWillAcceptWithDetails: (details) {
+      onWillAcceptWithDetails: (d) {
         setState(() => _dragOverBreadcrumb = true);
         return _pathStack.length > 1;
       },
       onLeave: (_) => setState(() => _dragOverBreadcrumb = false),
-      onAcceptWithDetails: (details) {
+      onAcceptWithDetails: (d) {
         setState(() => _dragOverBreadcrumb = false);
-        _moveNodeToParent(details.data);
+        _moveNodeToParent(d.data);
       },
       builder: (_, candidateData, __) {
         final isTarget = candidateData.isNotEmpty && _pathStack.length > 1;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          color: isTarget ? _kTeal.withOpacity(0.15) : _kSurface,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            children: [
-              if (isTarget)
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: Icon(Icons.drive_file_move_outline,
-                      size: 14, color: _kTeal),
-                ),
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: [
-                      // Root
-                      GestureDetector(
-                        onTap: _pathStack.length > 1
-                            ? () => _navigateToBreadcrumb(0)
-                            : null,
-                        child: Row(children: [
-                          Icon(Icons.storage_outlined,
-                              size: 13,
-                              color: _pathStack.length > 1 ? _kCopper : _kText),
-                          const SizedBox(width: 4),
-                          Text('Tanks',
-                              style: GoogleFonts.dmSans(
-                                  color:
-                                      _pathStack.length > 1 ? _kCopper : _kText,
-                                  fontSize: 12,
-                                  fontWeight: _pathStack.length == 1
-                                      ? FontWeight.w700
-                                      : FontWeight.w500)),
-                        ]),
-                      ),
-                      // Folder crumbs
-                      ..._pathStack.skip(1).toList().asMap().entries.map((e) {
-                        final idx = e.key + 1;
-                        final node = e.value as TankNode;
-                        final isLast = idx == _pathStack.length - 1;
-                        return Row(children: [
-                          const Padding(
-                            padding: EdgeInsets.symmetric(horizontal: 5),
-                            child: Icon(Icons.chevron_right_rounded,
-                                size: 14, color: _kSubL),
-                          ),
-                          GestureDetector(
-                            onTap: isLast
-                                ? null
-                                : () => _navigateToBreadcrumb(idx),
-                            child: Text(node.name,
-                                style: GoogleFonts.dmSans(
-                                    color: isLast ? _kText : _kCopper,
-                                    fontSize: 12,
-                                    fontWeight: isLast
-                                        ? FontWeight.w700
-                                        : FontWeight.w500)),
-                          ),
-                        ]);
-                      }),
-                    ],
-                  ),
-                ),
-              ),
-              if (isTarget)
-                Text('Drop to move up',
-                    style: GoogleFonts.dmSans(fontSize: 11, color: _kTeal)),
-            ],
+          decoration: BoxDecoration(
+            color: isTarget ? _kTeal.withOpacity(0.1) : _kSurface,
+            border: Border(
+                bottom: BorderSide(
+                    color: isTarget ? _kTeal.withOpacity(0.4) : _kBorder)),
           ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+          child: Row(children: [
+            if (isTarget)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Icon(Icons.drive_file_move_outline,
+                    size: 13, color: _kTeal),
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(children: [
+                  GestureDetector(
+                    onTap: _pathStack.length > 1
+                        ? () => _navigateToBreadcrumb(0)
+                        : null,
+                    child: Row(children: [
+                      Icon(Icons.storage_outlined,
+                          size: 12,
+                          color: _pathStack.length > 1 ? _kCopper : _kText),
+                      const SizedBox(width: 5),
+                      Text('Tanks',
+                          style: GoogleFonts.raleway(
+                              color: _pathStack.length > 1 ? _kCopper : _kText,
+                              fontSize: 12,
+                              fontWeight: _pathStack.length == 1
+                                  ? FontWeight.w800
+                                  : FontWeight.w600)),
+                    ]),
+                  ),
+                  ..._pathStack.skip(1).toList().asMap().entries.map((e) {
+                    final stackIdx = e.key + 1;
+                    final node = e.value as TankNode;
+                    final isLast = stackIdx == _pathStack.length - 1;
+                    return Row(children: [
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6),
+                        child: Icon(Icons.chevron_right_rounded,
+                            size: 13, color: _kSubL),
+                      ),
+                      GestureDetector(
+                        onTap: isLast
+                            ? null
+                            : () => _navigateToBreadcrumb(stackIdx),
+                        child: Text(node.name,
+                            style: GoogleFonts.raleway(
+                                color: isLast ? _kText : _kCopper,
+                                fontSize: 12,
+                                fontWeight: isLast
+                                    ? FontWeight.w800
+                                    : FontWeight.w600)),
+                      ),
+                    ]);
+                  }),
+                ]),
+              ),
+            ),
+            if (isTarget)
+              Text('drop to move up',
+                  style: GoogleFonts.raleway(fontSize: 10, color: _kTeal)),
+          ]),
         );
       },
     );
   }
 
-  // ── Node list with drag-to-reorder ─────────────────────────────────────────
+  // ── Node list ──────────────────────────────────────────────────────────────
+  // Interleaved gaps for reorder + folder DragTargets for move-into.
 
   Widget _buildNodeList() {
-    return ReorderableListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 120),
-      itemCount: _nodes.length,
-      onReorder: _reorderNodes,
-      proxyDecorator: (child, index, animation) {
-        // Elevated ghost during drag
-        return AnimatedBuilder(
-          animation: animation,
-          builder: (_, __) {
-            final elevation = Tween(begin: 0.0, end: 16.0).evaluate(
-                    CurvedAnimation(parent: animation, curve: Curves.easeOut)) *
-                animation.value;
-            return Material(
-              elevation: elevation,
-              color: Colors.transparent,
-              shadowColor: _kCopper.withOpacity(0.4),
-              borderRadius: BorderRadius.circular(16),
-              child: Transform.scale(
-                scale: 1.0 +
-                    0.03 *
-                        Tween(begin: 0.0, end: 1.0).evaluate(CurvedAnimation(
-                            parent: animation, curve: Curves.easeOut)),
-                child: child,
-              ),
-            );
-          },
-        );
+    final count = _nodes.length;
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 130),
+      // 2*count+1 items: gap, card, gap, card … gap
+      itemCount: count * 2 + 1,
+      itemBuilder: (_, listIdx) {
+        if (listIdx.isEven) {
+          return _buildReorderGap(listIdx ~/ 2);
+        } else {
+          final nodeIndex = listIdx ~/ 2;
+          final node = _nodes[nodeIndex];
+          return node.isFolder
+              ? _buildFolderCard(node, nodeIndex)
+              : _buildLeafCard(node, nodeIndex);
+        }
       },
-      itemBuilder: (_, i) {
-        final node = _nodes[i];
-        return node.isFolder
-            ? _buildFolderCard(node, i)
-            : _buildLeafCard(node, i);
+    );
+  }
+
+  // ── Reorder gap ────────────────────────────────────────────────────────────
+
+  Widget _buildReorderGap(int gapIndex) {
+    return DragTarget<_DragPayload>(
+      onWillAcceptWithDetails: (details) {
+        setState(() {
+          _reorderHoverIndex = gapIndex;
+          _isDragging = true;
+        });
+        return true;
+      },
+      onLeave: (_) => setState(() {
+        if (_reorderHoverIndex == gapIndex) _reorderHoverIndex = null;
+      }),
+      onAcceptWithDetails: (details) {
+        setState(() {
+          _reorderHoverIndex = null;
+          _isDragging = false;
+        });
+        _reorderDrop(details.data, gapIndex);
+      },
+      builder: (_, candidateData, __) {
+        final active = candidateData.isNotEmpty;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          height: active ? 52 : 8,
+          margin: EdgeInsets.symmetric(vertical: active ? 4 : 0),
+          decoration: active
+              ? BoxDecoration(
+                  color: _kCopper.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(10),
+                  border:
+                      Border.all(color: _kCopper.withOpacity(0.50), width: 1.5),
+                )
+              : null,
+          child: active
+              ? Center(
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    const Icon(Icons.swap_vert_rounded,
+                        size: 14, color: _kCopper),
+                    const SizedBox(width: 6),
+                    Text('Drop here to reorder',
+                        style: GoogleFonts.raleway(
+                            fontSize: 11,
+                            color: _kCopper,
+                            fontWeight: FontWeight.w700)),
+                  ]),
+                )
+              : const SizedBox.shrink(),
+        );
       },
     );
   }
@@ -724,33 +843,46 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   // ── Folder card ────────────────────────────────────────────────────────────
 
   Widget _buildFolderCard(TankNode node, int index) {
-    final isDropTarget = _dragOverFolderId == node.id;
-    final childCount = _childCountCache[node.id];
-
     return DragTarget<_DragPayload>(
-      key: ValueKey('folder-${node.id}'),
-      onWillAcceptWithDetails: (details) {
-        if (details.data.node.id == node.id) return false;
+      key: ValueKey('folder-drop-${node.id}'),
+      onWillAcceptWithDetails: (d) {
+        if (d.data.node.id == node.id) return false;
         HapticFeedback.selectionClick();
-        setState(() => _dragOverFolderId = node.id);
+        setState(() {
+          _dragOverFolderId = node.id;
+          _reorderHoverIndex = null; // stop gap from also lighting up
+          _isDragging = true;
+        });
         return true;
       },
-      onLeave: (_) {
+      onLeave: (_) => setState(() {
+        if (_dragOverFolderId == node.id) _dragOverFolderId = null;
+      }),
+      onAcceptWithDetails: (d) {
         setState(() {
-          if (_dragOverFolderId == node.id) _dragOverFolderId = null;
+          _dragOverFolderId = null;
+          _isDragging = false;
         });
-      },
-      onAcceptWithDetails: (details) {
-        setState(() => _dragOverFolderId = null);
-        _moveNodeToFolder(details.data, node);
+        _moveNodeToFolder(d.data, node);
       },
       builder: (_, candidateData, __) {
-        final glowing = candidateData.isNotEmpty;
+        final isDropTarget = candidateData.isNotEmpty;
+        final childCount = _childCountCache[node.id];
 
         return LongPressDraggable<_DragPayload>(
           data: _DragPayload(node, index),
           hapticFeedbackOnStart: true,
+          onDragStarted: () => setState(() => _isDragging = true),
+          onDragEnd: (_) => setState(() {
+            _isDragging = false;
+            _dragOverFolderId = null;
+          }),
+          onDraggableCanceled: (_, __) => setState(() {
+            _isDragging = false;
+            _dragOverFolderId = null;
+          }),
           feedback: _DragGhost(
+            width: MediaQuery.of(context).size.width - 32,
             child: _FolderCardContent(
               node: node,
               childCount: childCount,
@@ -760,44 +892,46 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
               onRename: () {},
               onDelete: () {},
               onMove: () {},
+              onDuplicate: () {},
             ),
           ),
           childWhenDragging: Opacity(
-            opacity: 0.35,
+            opacity: 0.25,
             child: _FolderCardContent(
               node: node,
               childCount: childCount,
               isDropTarget: false,
-              isGhost: false,
+              isGhost: true,
               onOpen: () {},
               onRename: () {},
               onDelete: () {},
               onMove: () {},
+              onDuplicate: () {},
             ),
           ),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 220),
-            margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: glowing
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: isDropTarget
                   ? [
                       BoxShadow(
-                          color: _kTeal.withOpacity(0.4),
-                          blurRadius: 20,
-                          spreadRadius: 2)
+                          color: _kTeal.withOpacity(0.45),
+                          blurRadius: 24,
+                          spreadRadius: 3)
                     ]
                   : [],
             ),
             child: _FolderCardContent(
               node: node,
               childCount: childCount,
-              isDropTarget: glowing,
+              isDropTarget: isDropTarget,
               isGhost: false,
               onOpen: () => _openFolder(node),
               onRename: () => _showRenameDialog(node),
               onDelete: () => _deleteNode(node),
               onMove: () => _showMoveDialog(node),
+              onDuplicate: () => _duplicateFolder(node),
             ),
           ),
         );
@@ -808,13 +942,17 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   // ── Leaf card ──────────────────────────────────────────────────────────────
 
   Widget _buildLeafCard(TankNode node, int index) {
-    final tank = _tankCache[node.tankId];
+    final tank = node.tankId != null ? _tankCache[node.tankId] : null;
 
     return LongPressDraggable<_DragPayload>(
-      key: ValueKey('leaf-${node.id}'),
+      key: ValueKey('leaf-drag-${node.id}'),
       data: _DragPayload(node, index),
       hapticFeedbackOnStart: true,
+      onDragStarted: () => setState(() => _isDragging = true),
+      onDragEnd: (_) => setState(() => _isDragging = false),
+      onDraggableCanceled: (_, __) => setState(() => _isDragging = false),
       feedback: _DragGhost(
+        width: MediaQuery.of(context).size.width - 32,
         child: _LeafCardContent(
           node: node,
           tank: tank,
@@ -828,11 +966,11 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
         ),
       ),
       childWhenDragging: Opacity(
-        opacity: 0.35,
+        opacity: 0.25,
         child: _LeafCardContent(
           node: node,
           tank: tank,
-          isGhost: false,
+          isGhost: true,
           treeRepo: _treeRepo,
           tankRepo: _tankRepo,
           currentParentId: _currentFolder?.id,
@@ -841,26 +979,77 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
           onTankCacheUpdate: (_, __) {},
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: _LeafCardContent(
-          node: node,
-          tank: tank,
-          isGhost: false,
-          treeRepo: _treeRepo,
-          tankRepo: _tankRepo,
-          currentParentId: _currentFolder?.id,
-          onDelete: () => _deleteNode(node),
-          onMove: () => _showMoveDialog(node),
-          onTankCacheUpdate: (id, t) => setState(() => _tankCache[id] = t),
-        ),
+      child: _LeafCardContent(
+        node: node,
+        tank: tank,
+        isGhost: false,
+        treeRepo: _treeRepo,
+        tankRepo: _tankRepo,
+        currentParentId: _currentFolder?.id,
+        onDelete: () => _deleteNode(node),
+        onMove: () => _showMoveDialog(node),
+        onTankCacheUpdate: (id, t) => setState(() => _tankCache[id] = t),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FOLDER CARD CONTENT — the premium folder card
+// FAB SHEET
+// ─────────────────────────────────────────────────────────────────────────────
+class _FabSheet extends StatelessWidget {
+  final VoidCallback onNewGroup;
+  final VoidCallback onNewTank;
+  const _FabSheet({required this.onNewGroup, required this.onNewTank});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 36),
+      child: SafeArea(
+        top: false,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 36,
+            height: 3,
+            decoration: BoxDecoration(
+                color: _kBorderH, borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(height: 22),
+          Text('Add Content',
+              style: GoogleFonts.raleway(
+                  color: _kTextD,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5)),
+          const SizedBox(height: 16),
+          _SheetOption(
+            icon: Icons.folder_open_outlined,
+            label: 'New Group',
+            sub: 'Organise tanks into folders',
+            color: _kCopper,
+            onTap: onNewGroup,
+          ),
+          const SizedBox(height: 10),
+          _SheetOption(
+            icon: Icons.water_outlined,
+            label: 'New Tank',
+            sub: 'Add a tank to this group',
+            color: _kTeal,
+            onTap: onNewTank,
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FOLDER CARD CONTENT
 // ─────────────────────────────────────────────────────────────────────────────
 class _FolderCardContent extends StatelessWidget {
   final TankNode node;
@@ -871,6 +1060,7 @@ class _FolderCardContent extends StatelessWidget {
   final VoidCallback onRename;
   final VoidCallback onDelete;
   final VoidCallback onMove;
+  final VoidCallback onDuplicate;
 
   const _FolderCardContent({
     required this.node,
@@ -881,225 +1071,162 @@ class _FolderCardContent extends StatelessWidget {
     required this.onRename,
     required this.onDelete,
     required this.onMove,
+    required this.onDuplicate,
   });
 
   @override
   Widget build(BuildContext context) {
-    final accentColor = isDropTarget ? _kTeal : _kCopper;
-
+    final accent = isDropTarget ? _kTeal : _kCopper;
     return GestureDetector(
       onTap: isGhost ? null : onOpen,
       child: Container(
         decoration: BoxDecoration(
-          color: isDropTarget ? _kTeal.withOpacity(0.08) : _kCard,
-          borderRadius: BorderRadius.circular(16),
+          color: isDropTarget ? _kTeal.withOpacity(0.06) : _kCard,
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-              color: isDropTarget ? _kTeal.withOpacity(0.6) : _kBorder,
-              width: isDropTarget ? 1.5 : 1),
+            color: isDropTarget ? _kTeal.withOpacity(0.55) : _kBorder,
+            width: isDropTarget ? 1.5 : 1,
+          ),
         ),
-        child: Column(
-          children: [
-            // ── Header gradient strip ──────────────────────────────────
-            Container(
-              padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: isDropTarget
-                      ? [
-                          _kTeal.withOpacity(0.18),
-                          _kTeal.withOpacity(0.06),
-                        ]
-                      : [
-                          _kCopper.withOpacity(0.14),
-                          _kCard,
-                        ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(16)),
+        child: Column(children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: isDropTarget
+                    ? [_kTeal.withOpacity(0.15), _kTeal.withOpacity(0.03)]
+                    : [_kCopper.withOpacity(0.12), _kCard],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              child: Row(
-                children: [
-                  // Folder icon with animated drop cue
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Container(
-                        width: 52,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          color: accentColor.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(12),
-                          border:
-                              Border.all(color: accentColor.withOpacity(0.3)),
-                        ),
-                      ),
-                      Icon(
-                        isDropTarget
-                            ? Icons.folder_open_rounded
-                            : Icons.folder_rounded,
-                        color: accentColor,
-                        size: 30,
-                      ),
-                      if (isDropTarget)
-                        Positioned(
-                          bottom: 2,
-                          right: 2,
-                          child: Container(
-                            width: 16,
-                            height: 16,
-                            decoration: BoxDecoration(
-                                color: _kTeal, shape: BoxShape.circle),
-                            child: const Icon(Icons.add_rounded,
-                                size: 10, color: Colors.white),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          node.name,
-                          style: GoogleFonts.dmSans(
-                              color: _kText,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 15),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(children: [
-                          if ((node.zone ?? '').isNotEmpty) ...[
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: accentColor.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                    color: accentColor.withOpacity(0.3)),
-                              ),
-                              child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.location_on_outlined,
-                                        size: 9, color: accentColor),
-                                    const SizedBox(width: 3),
-                                    Text(node.zone!,
-                                        style: GoogleFonts.dmSans(
-                                            fontSize: 10,
-                                            color: accentColor,
-                                            fontWeight: FontWeight.w500)),
-                                  ]),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                          if (childCount != null)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: _kSurface,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: _kBorder),
-                              ),
-                              child: Text(
-                                '$childCount item${childCount == 1 ? '' : 's'}',
-                                style: GoogleFonts.spaceGrotesk(
-                                    fontSize: 9,
-                                    color: _kSub,
-                                    fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                        ]),
-                        if ((node.description ?? '').isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(node.description!,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.dmSans(
-                                  fontSize: 11, color: _kSubL)),
-                        ],
-                      ],
-                    ),
-                  ),
-                  // Chevron / drop cue
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        isDropTarget
-                            ? Icons.download_rounded
-                            : Icons.chevron_right_rounded,
-                        color: accentColor,
-                        size: 22,
-                      ),
-                      const SizedBox(height: 2),
-                      Container(
-                        width: 4,
-                        height: 4,
-                        decoration: BoxDecoration(
-                            color: accentColor.withOpacity(0.4),
-                            shape: BoxShape.circle),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(18)),
             ),
-            // ── Action bar ─────────────────────────────────────────────
-            if (!isGhost)
+            child: Row(children: [
               Container(
-                padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+                width: 54,
+                height: 54,
                 decoration: BoxDecoration(
-                  color: _kSurface.withOpacity(0.5),
-                  borderRadius:
-                      const BorderRadius.vertical(bottom: Radius.circular(16)),
-                  border: const Border(top: BorderSide(color: _kBorder)),
+                  color: accent.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: accent.withOpacity(0.25)),
                 ),
-                child: Row(
-                  children: [
-                    // Drag hint
-                    Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.drag_indicator_rounded,
-                          size: 14, color: _kSubL),
-                      const SizedBox(width: 4),
-                      Text('Hold to drag',
-                          style:
-                              GoogleFonts.dmSans(fontSize: 10, color: _kSubL)),
-                    ]),
-                    const Spacer(),
-                    _MiniAction(
-                        icon: Icons.drive_file_move_outline,
-                        label: 'Move',
-                        color: _kPurple,
-                        onTap: onMove),
-                    const SizedBox(width: 8),
-                    _MiniAction(
-                        icon: Icons.edit_outlined,
-                        label: 'Edit',
-                        color: _kTeal,
-                        onTap: onRename),
-                    const SizedBox(width: 8),
-                    _MiniAction(
-                        icon: Icons.delete_outline_rounded,
-                        label: 'Delete',
-                        color: _kDanger,
-                        onTap: onDelete),
-                  ],
-                ),
+                child: Stack(alignment: Alignment.center, children: [
+                  Icon(
+                    isDropTarget
+                        ? Icons.folder_open_rounded
+                        : Icons.folder_rounded,
+                    color: accent,
+                    size: 28,
+                  ),
+                  if (isDropTarget)
+                    Positioned(
+                      bottom: 3,
+                      right: 3,
+                      child: Container(
+                        width: 15,
+                        height: 15,
+                        decoration: const BoxDecoration(
+                            color: _kTeal, shape: BoxShape.circle),
+                        child: const Icon(Icons.add_rounded,
+                            size: 9, color: Colors.white),
+                      ),
+                    ),
+                ]),
               ),
-          ],
-        ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(node.name,
+                          style: GoogleFonts.raleway(
+                              color: _kText,
+                              fontWeight: FontWeight.w800,
+                              fontSize: 15)),
+                      const SizedBox(height: 5),
+                      Wrap(spacing: 5, runSpacing: 4, children: [
+                        if ((node.zone ?? '').isNotEmpty)
+                          _Pill(
+                              label: node.zone!,
+                              icon: Icons.location_on_outlined,
+                              color: accent),
+                        if (childCount != null)
+                          _Pill(
+                            label:
+                                '$childCount item${childCount == 1 ? '' : 's'}',
+                            icon: Icons.layers_outlined,
+                            color: _kSubL,
+                          ),
+                      ]),
+                      if ((node.description ?? '').isNotEmpty) ...[
+                        const SizedBox(height: 5),
+                        Text(node.description!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.raleway(
+                                fontSize: 11, color: _kSub)),
+                      ],
+                    ]),
+              ),
+              Icon(
+                isDropTarget
+                    ? Icons.download_rounded
+                    : Icons.chevron_right_rounded,
+                color: accent.withOpacity(0.7),
+                size: 20,
+              ),
+            ]),
+          ),
+          if (!isGhost)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius:
+                    const BorderRadius.vertical(bottom: Radius.circular(18)),
+                border: const Border(top: BorderSide(color: _kBorder)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.drag_indicator_rounded,
+                    size: 13, color: _kSubL),
+                const SizedBox(width: 4),
+                Text('hold to drag',
+                    style: GoogleFonts.raleway(fontSize: 9, color: _kSubL)),
+                const Spacer(),
+                _ActionChip(
+                    icon: Icons.copy_outlined,
+                    label: 'Clone',
+                    color: _kAmber,
+                    onTap: onDuplicate),
+                const SizedBox(width: 6),
+                _ActionChip(
+                    icon: Icons.drive_file_move_outline,
+                    label: 'Move',
+                    color: _kPurple,
+                    onTap: onMove),
+                const SizedBox(width: 6),
+                _ActionChip(
+                    icon: Icons.edit_outlined,
+                    label: 'Edit',
+                    color: _kTeal,
+                    onTap: onRename),
+                const SizedBox(width: 6),
+                _ActionChip(
+                    icon: Icons.delete_outline_rounded,
+                    label: 'Del',
+                    color: _kDanger,
+                    onTap: onDelete),
+              ]),
+            ),
+        ]),
       ),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LEAF CARD CONTENT — always-visible tank card (TankAdminCard style)
+// LEAF CARD CONTENT
 // ─────────────────────────────────────────────────────────────────────────────
 class _LeafCardContent extends StatefulWidget {
   final TankNode node;
@@ -1149,21 +1276,20 @@ class _LeafCardContentState extends State<_LeafCardContent> {
     try {
       await fn();
     } catch (e) {
-      if (mounted) {
+      if (mounted)
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('Error: $e'),
           backgroundColor: _kDanger,
           behavior: SnackBarBehavior.floating,
         ));
-      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _modify() => _run(() async {
-        if (widget.tank == null) return;
-        final t = widget.tank!;
+        final t = widget.tank;
+        if (t == null) return;
         final tankMap = {
           'id': t.id,
           'tank_code': t.tankCode,
@@ -1178,50 +1304,40 @@ class _LeafCardContentState extends State<_LeafCardContent> {
               .toList(),
         };
         final ok = await Navigator.push<bool>(
-          context,
-          MaterialPageRoute(
-              builder: (_) => CreateTankScreen(existingTank: tankMap)),
-        );
-        if (ok == true && widget.node.tankId != null && mounted) {
-          final updated =
-              await widget.tankRepo.getTankById(widget.node.tankId!);
-          if (updated != null) {
-            widget.onTankCacheUpdate(widget.node.tankId!, updated);
-          }
+            context,
+            MaterialPageRoute(
+                builder: (_) => CreateTankScreen(existingTank: tankMap)));
+        final tid = widget.node.tankId;
+        if (ok == true && tid != null && mounted) {
+          final updated = await widget.tankRepo.getTankById(tid);
+          if (updated != null) widget.onTankCacheUpdate(tid, updated);
         }
       });
 
   Future<void> _duplicate() => _run(() async {
-        if (widget.tank == null) return;
-        final t = widget.tank!;
-        final dupMap = {
-          'tank_code': '${t.tankCode} (copy)',
-          'tank_name': '${t.tankName} (copy)',
-          'location': t.location ?? '',
-          'scale_max': t.scaleMax,
-          'scale_side': t.scaleSide,
-          'inspection_properties': t.inspectionProperties
-              .map((p) => Map<String, dynamic>.from(p))
-              .toList(),
-        };
-        final ok = await Navigator.push<bool>(
-          context,
-          MaterialPageRoute(
-            builder: (_) =>
-                CreateTankScreen(existingTank: dupMap, isDuplicate: true),
-          ),
+        final t = widget.tank;
+        final tid = widget.node.tankId;
+        if (t == null || tid == null) return;
+        final base = t.tankName.replaceAll(RegExp(r'\s*\(\d+\)$'), '');
+        final newName = '$base (1)';
+        final newTankId = await widget.tankRepo.duplicateTank(t);
+        await widget.treeRepo.createLeaf(
+          name: newName,
+          tankId: newTankId,
+          zone: widget.node.zone ?? t.location,
+          parentId: widget.currentParentId,
         );
-        if (ok == true && mounted) {
-          final allTanks = await widget.tankRepo.getAllTanks();
-          allTanks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
-          final newTank = allTanks.first;
-          await widget.treeRepo.createLeaf(
-            name: newTank.tankName,
-            tankId: newTank.id,
-            zone: newTank.location,
-            parentId: widget.currentParentId,
-          );
-        }
+        if (mounted)
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Cloned as "$newName"',
+                style: GoogleFonts.raleway(
+                    color: _kText, fontWeight: FontWeight.w600)),
+            backgroundColor: _kSuccess,
+            behavior: SnackBarBehavior.floating,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            margin: const EdgeInsets.all(16),
+          ));
       });
 
   Future<void> _downloadQr() => _run(() async {
@@ -1232,9 +1348,10 @@ class _LeafCardContentState extends State<_LeafCardContent> {
           pixelRatio: 3.0,
         );
         final qrUrl = await uploadBytesToCloudinary(bytes, folder: folderMain);
-        if (widget.node.tankId != null) {
+        final tid = widget.node.tankId;
+        if (tid != null) {
           await FirebaseDatabase.instance
-              .ref('tanks/${widget.node.tankId}')
+              .ref('tanks/$tid')
               .update({'qr_image_url': qrUrl});
         }
         final dir = await getApplicationDocumentsDirectory();
@@ -1256,192 +1373,169 @@ class _LeafCardContentState extends State<_LeafCardContent> {
     return Container(
       decoration: BoxDecoration(
         color: _kCard,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: _kBorder),
         boxShadow: widget.isGhost
             ? []
             : [
                 BoxShadow(
-                    color: Colors.black.withOpacity(0.14),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3)),
+                    color: Colors.black.withOpacity(0.18),
+                    blurRadius: 10,
+                    offset: const Offset(0, 4))
               ],
       ),
-      child: Column(
-        children: [
-          // ── Main info row ────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Row(
-              children: [
-                // QR thumbnail
-                Container(
-                  width: 58,
-                  height: 58,
-                  padding: const EdgeInsets.all(3),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(10),
-                    boxShadow: [
-                      BoxShadow(
-                          color: Colors.black.withOpacity(0.1), blurRadius: 4)
-                    ],
-                  ),
-                  child: QrImageView(
-                    data: _qrData,
-                    version: QrVersions.auto,
-                    backgroundColor: Colors.white,
-                    padding: EdgeInsets.zero,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                // Info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(name,
-                          style: GoogleFonts.dmSans(
-                              color: _kText,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14)),
-                      const SizedBox(height: 3),
-                      Text(code,
-                          style: GoogleFonts.spaceGrotesk(
-                              color: _kCopper,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.8)),
-                      if (zone.isNotEmpty) ...[
-                        const SizedBox(height: 3),
-                        Row(children: [
-                          const Icon(Icons.location_on_outlined,
-                              size: 11, color: _kSub),
-                          const SizedBox(width: 3),
-                          Expanded(
-                              child: Text(zone,
-                                  style: GoogleFonts.dmSans(
-                                      color: _kSub, fontSize: 11),
-                                  overflow: TextOverflow.ellipsis)),
-                        ]),
-                      ],
-                      if (paramCount > 0) ...[
-                        const SizedBox(height: 5),
-                        Wrap(
-                          spacing: 5,
-                          children: [
-                            _ParamBadge(
-                                label:
-                                    '$paramCount param${paramCount == 1 ? '' : 's'}',
-                                color: _kTeal),
-                            if (t?.scaleSide != null)
-                              _ParamBadge(
-                                  label: 'Scale ${t!.scaleSide}',
-                                  color: _kPurple),
-                          ],
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                // Drag hint column
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.drag_indicator_rounded,
-                        size: 20, color: _kSubL),
-                    const SizedBox(height: 6),
-                    if (_busy)
-                      const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                              color: _kCopper, strokeWidth: 2)),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          // ── Action bar ───────────────────────────────────────────
-          if (!widget.isGhost)
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(children: [
             Container(
-              padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
-              decoration: const BoxDecoration(
-                color: _kSurface,
-                borderRadius:
-                    BorderRadius.vertical(bottom: Radius.circular(16)),
-                border: Border(top: BorderSide(color: _kBorder)),
+              width: 60,
+              height: 60,
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                      color: Colors.black.withOpacity(0.12), blurRadius: 6)
+                ],
               ),
-              child: _busy
-                  ? const Center(
-                      child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 2),
-                      child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                              color: _kCopper, strokeWidth: 2)),
-                    ))
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        _MiniAction(
+              child: QrImageView(
+                data: _qrData,
+                version: QrVersions.auto,
+                backgroundColor: Colors.white,
+                padding: EdgeInsets.zero,
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        style: GoogleFonts.raleway(
+                            color: _kText,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14)),
+                    const SizedBox(height: 3),
+                    Text(code,
+                        style: GoogleFonts.sourceCodePro(
+                            color: _kCopper,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.2)),
+                    if (zone.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Row(children: [
+                        const Icon(Icons.location_on_outlined,
+                            size: 11, color: _kSub),
+                        const SizedBox(width: 3),
+                        Expanded(
+                            child: Text(zone,
+                                style: GoogleFonts.raleway(
+                                    color: _kSub, fontSize: 11),
+                                overflow: TextOverflow.ellipsis)),
+                      ]),
+                    ],
+                    if (paramCount > 0) ...[
+                      const SizedBox(height: 6),
+                      Wrap(spacing: 5, children: [
+                        _Pill(
+                            label:
+                                '$paramCount param${paramCount == 1 ? '' : 's'}',
+                            icon: Icons.tune_rounded,
+                            color: _kTeal),
+                        if (t?.scaleSide != null)
+                          _Pill(
+                              label: 'Scale ${t!.scaleSide}',
+                              icon: Icons.straighten_rounded,
+                              color: _kPurple),
+                      ]),
+                    ],
+                  ]),
+            ),
+            Column(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.drag_indicator_rounded, size: 18, color: _kSubL),
+              if (_busy) ...[
+                const SizedBox(height: 8),
+                const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        color: _kCopper, strokeWidth: 1.8)),
+              ],
+            ]),
+          ]),
+        ),
+        if (!widget.isGhost)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: const BoxDecoration(
+              color: _kSurface,
+              borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
+              border: Border(top: BorderSide(color: _kBorder)),
+            ),
+            child: _busy
+                ? const Center(
+                    child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            color: _kCopper, strokeWidth: 2)))
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                        _ActionChip(
                             icon: Icons.edit_outlined,
-                            label: 'Modify',
+                            label: 'Edit',
                             color: _kTeal,
                             onTap: _modify),
-                        _MiniAction(
+                        _ActionChip(
                             icon: Icons.copy_outlined,
-                            label: 'Duplicate',
-                            color: _kWarn,
+                            label: 'Clone',
+                            color: _kAmber,
                             onTap: _duplicate),
-                        _MiniAction(
-                            icon: Icons.download_rounded,
+                        _ActionChip(
+                            icon: Icons.qr_code_rounded,
                             label: 'QR',
                             color: _kCopper,
                             onTap: _downloadQr),
-                        _MiniAction(
+                        _ActionChip(
                             icon: Icons.drive_file_move_outline,
                             label: 'Move',
                             color: _kPurple,
                             onTap: widget.onMove),
-                        _MiniAction(
+                        _ActionChip(
                             icon: Icons.delete_outline_rounded,
-                            label: 'Delete',
+                            label: 'Del',
                             color: _kDanger,
                             onTap: widget.onDelete),
-                      ],
-                    ),
-            ),
-        ],
-      ),
+                      ]),
+          ),
+      ]),
     );
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DRAG GHOST — material elevation wrapper shown while dragging
+// DRAG GHOST
 // ─────────────────────────────────────────────────────────────────────────────
 class _DragGhost extends StatelessWidget {
   final Widget child;
-  const _DragGhost({required this.child});
+  final double width;
+  const _DragGhost({required this.child, required this.width});
 
   @override
-  Widget build(BuildContext context) {
-    return Opacity(
-      opacity: 0.9,
-      child: Material(
-        color: Colors.transparent,
-        elevation: 20,
-        shadowColor: _kCopper.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(16),
-        child: SizedBox(
-          width: MediaQuery.of(context).size.width - 32,
-          child: child,
+  Widget build(BuildContext context) => Opacity(
+        opacity: 0.88,
+        child: Material(
+          color: Colors.transparent,
+          elevation: 24,
+          shadowColor: _kCopper.withOpacity(0.45),
+          borderRadius: BorderRadius.circular(18),
+          child: SizedBox(width: width, child: child),
         ),
-      ),
-    );
-  }
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1469,60 +1563,107 @@ class _PrintableQr extends StatelessWidget {
     final name = t?.tankName ?? node.name;
     final code = t?.tankCode ?? '';
     final zone = node.zone ?? t?.location ?? '';
-
     return Container(
       width: 280,
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          QrImageView(
-              data: _data,
-              version: QrVersions.auto,
-              size: 220,
-              backgroundColor: Colors.white,
-              padding: EdgeInsets.zero),
-          Container(
-            width: 220,
-            padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
-            decoration: const BoxDecoration(
-                border: Border(
-                    top: BorderSide(color: Color(0xFFCCCCCC), width: 0.8))),
-            child: Column(children: [
-              Text(name,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        QrImageView(
+            data: _data,
+            version: QrVersions.auto,
+            size: 220,
+            backgroundColor: Colors.white,
+            padding: EdgeInsets.zero),
+        Container(
+          width: 220,
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
+          decoration: const BoxDecoration(
+              border: Border(
+                  top: BorderSide(color: Color(0xFFCCCCCC), width: 0.8))),
+          child: Column(children: [
+            Text(name,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Colors.black,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900)),
+            if (code.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text('ID: $code',
                   textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                      color: Colors.black,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w900)),
-              if (code.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Text('ID: $code',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        color: Colors.black87,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.8)),
-              ],
-              if (zone.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text('Zone: $zone',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        color: Colors.black54,
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold)),
-              ],
-            ]),
-          ),
-        ],
-      ),
+                      color: Colors.black87,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.8)),
+            ],
+            if (zone.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text('Zone: $zone',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: Colors.black54,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold)),
+            ],
+          ]),
+        ),
+      ]),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOADING PULSE
+// ─────────────────────────────────────────────────────────────────────────────
+class _LoadingPulse extends StatefulWidget {
+  const _LoadingPulse();
+  @override
+  State<_LoadingPulse> createState() => _LoadingPulseState();
+}
+
+class _LoadingPulseState extends State<_LoadingPulse>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1000))
+      ..repeat(reverse: true);
+    _anim = Tween(begin: 0.3, end: 1.0)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+        opacity: _anim,
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: _kCopper.withOpacity(0.5), width: 1.5),
+            ),
+            child:
+                const Icon(Icons.storage_outlined, color: _kCopper, size: 22),
+          ),
+          const SizedBox(height: 14),
+          Text('Loading…',
+              style: GoogleFonts.raleway(color: _kSub, fontSize: 13)),
+        ]),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1533,66 +1674,57 @@ class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.onAdd});
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
+  Widget build(BuildContext context) => Center(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
           Container(
-            width: 80,
-            height: 80,
+            width: 78,
+            height: 78,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [_kSurface, _kCard],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
               shape: BoxShape.circle,
+              color: _kSurface,
               border: Border.all(color: _kBorder),
             ),
             child:
-                const Icon(Icons.folder_open_outlined, size: 36, color: _kSubL),
+                const Icon(Icons.folder_open_outlined, size: 34, color: _kSubL),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 20),
           Text('Nothing here yet',
-              style: GoogleFonts.dmSans(
-                  color: _kText, fontWeight: FontWeight.w700, fontSize: 16)),
+              style: GoogleFonts.raleway(
+                  color: _kText, fontWeight: FontWeight.w800, fontSize: 17)),
           const SizedBox(height: 6),
           Text('Tap + to add a group or a tank',
-              style: GoogleFonts.dmSans(color: _kSub, fontSize: 13)),
-          const SizedBox(height: 24),
+              style: GoogleFonts.raleway(color: _kSub, fontSize: 13)),
+          const SizedBox(height: 28),
           GestureDetector(
             onTap: onAdd,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 13),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
-                    colors: [_kCopperD, _kCopper],
+                    colors: [_kCopperD, _kCopper, _kCopperL],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight),
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(14),
                 boxShadow: [
                   BoxShadow(
                       color: _kCopper.withOpacity(0.4),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6))
+                      blurRadius: 20,
+                      offset: const Offset(0, 7))
                 ],
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 const Icon(Icons.add_rounded, color: Colors.white, size: 18),
                 const SizedBox(width: 8),
                 Text('Add Content',
-                    style: GoogleFonts.dmSans(
+                    style: GoogleFonts.raleway(
                         color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 13)),
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14)),
               ]),
             ),
           ),
-        ],
-      ),
-    );
-  }
+        ]),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1604,195 +1736,205 @@ class _BackRow extends StatelessWidget {
   const _BackRow({required this.folderName, required this.onBack});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onBack,
-      child: Container(
-        color: _kBg,
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-        child: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: _kSurface,
-              borderRadius: BorderRadius.circular(9),
-              border: Border.all(color: _kBorder),
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onBack,
+        child: Container(
+          color: _kBg,
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(7),
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kBorder),
+              ),
+              child: const Icon(Icons.arrow_back_rounded,
+                  size: 14, color: _kCopper),
             ),
-            child:
-                const Icon(Icons.arrow_back_rounded, size: 15, color: _kCopper),
-          ),
-          const SizedBox(width: 10),
-          const Icon(Icons.folder_rounded, size: 15, color: _kCopper),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(folderName,
-                style: GoogleFonts.dmSans(
-                    color: _kText, fontWeight: FontWeight.w600, fontSize: 14)),
-          ),
-          Text('Tap to go up',
-              style: GoogleFonts.dmSans(fontSize: 11, color: _kSubL)),
-          const SizedBox(width: 4),
-          const Icon(Icons.keyboard_arrow_up_rounded, size: 16, color: _kSubL),
-        ]),
-      ),
-    );
-  }
+            const SizedBox(width: 10),
+            const Icon(Icons.folder_rounded, size: 14, color: _kCopper),
+            const SizedBox(width: 7),
+            Expanded(
+                child: Text(folderName,
+                    style: GoogleFonts.raleway(
+                        color: _kText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13))),
+            Text('tap to go up',
+                style: GoogleFonts.raleway(fontSize: 10, color: _kSubL)),
+            const SizedBox(width: 3),
+            const Icon(Icons.keyboard_arrow_up_rounded,
+                size: 15, color: _kSubL),
+          ]),
+        ),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHEET OPTION (FAB menu)
+// SHEET OPTION
 // ─────────────────────────────────────────────────────────────────────────────
 class _SheetOption extends StatelessWidget {
   final IconData icon;
   final String label, sub;
   final Color color;
   final VoidCallback onTap;
-  const _SheetOption(
-      {required this.icon,
-      required this.label,
-      required this.sub,
-      required this.color,
-      required this.onTap});
+  const _SheetOption({
+    required this.icon,
+    required this.label,
+    required this.sub,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.07),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: color.withOpacity(0.3)),
-          ),
-          child: Row(children: [
-            Container(
-              width: 46,
-              height: 46,
-              decoration: BoxDecoration(
-                  color: color.withOpacity(0.14),
-                  borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: color, size: 22),
+  Widget build(BuildContext context) => Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Ink(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: color.withOpacity(0.25)),
             ),
-            const SizedBox(width: 14),
-            Expanded(
-                child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: GoogleFonts.dmSans(
-                        color: _kText,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14)),
-                Text(sub,
-                    style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
-              ],
-            )),
-            Icon(Icons.arrow_forward_ios_rounded, size: 14, color: color),
-          ]),
+            child: Row(children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                    color: color.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(11)),
+                child: Icon(icon, color: color, size: 20),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(label,
+                        style: GoogleFonts.raleway(
+                            color: _kText,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 14)),
+                    Text(sub,
+                        style: GoogleFonts.raleway(color: _kSub, fontSize: 12)),
+                  ])),
+              Icon(Icons.arrow_forward_ios_rounded,
+                  size: 12, color: color.withOpacity(0.7)),
+            ]),
+          ),
         ),
       );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOVE TARGET (move-to dialog row)
+// MOVE TARGET
 // ─────────────────────────────────────────────────────────────────────────────
 class _MoveTarget extends StatelessWidget {
   final String label;
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  const _MoveTarget(
-      {required this.label,
-      required this.icon,
-      required this.color,
-      required this.onTap});
+  const _MoveTarget({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(12),
+          child: Ink(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: color.withOpacity(0.25)),
+            ),
+            child: Row(children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(label,
+                      style: GoogleFonts.raleway(
+                          color: _kText,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700))),
+              Icon(Icons.arrow_forward_rounded,
+                  size: 13, color: color.withOpacity(0.7)),
+            ]),
+          ),
+        ),
+      );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTION CHIP
+// ─────────────────────────────────────────────────────────────────────────────
+class _ActionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  const _ActionChip({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) => GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.07),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: color.withOpacity(0.3)),
+            color: color.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(color: color.withOpacity(0.22)),
           ),
-          child: Row(children: [
-            Icon(icon, size: 16, color: color),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(label,
-                  style: GoogleFonts.dmSans(
-                      color: _kText,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
-            ),
-            Icon(Icons.arrow_forward_rounded, size: 14, color: color),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(height: 2),
+            Text(label,
+                style: GoogleFonts.raleway(
+                    fontSize: 8, color: color, fontWeight: FontWeight.w700)),
           ]),
         ),
       );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MINI ACTION BUTTON (action bar)
+// PILL BADGE
 // ─────────────────────────────────────────────────────────────────────────────
-class _MiniAction extends StatelessWidget {
+class _Pill extends StatelessWidget {
+  final String label;
   final IconData icon;
-  final String label;
   final Color color;
-  final VoidCallback onTap;
-  const _MiniAction(
-      {required this.icon,
-      required this.label,
-      required this.color,
-      required this.onTap});
-
-  @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(0.3)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: color),
-              const SizedBox(height: 2),
-              Text(label,
-                  style: GoogleFonts.dmSans(
-                      fontSize: 9, color: color, fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ),
-      );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// PARAM BADGE
-// ─────────────────────────────────────────────────────────────────────────────
-class _ParamBadge extends StatelessWidget {
-  final String label;
-  final Color color;
-  const _ParamBadge({required this.label, required this.color});
+  const _Pill({required this.label, required this.icon, required this.color});
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(5),
-          border: Border.all(color: color.withOpacity(0.3)),
+          color: color.withOpacity(0.09),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.28)),
         ),
-        child: Text(label,
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 8,
-                color: color,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.4)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 9, color: color),
+          const SizedBox(width: 3),
+          Text(label,
+              style: GoogleFonts.raleway(
+                  fontSize: 9, color: color, fontWeight: FontWeight.w700)),
+        ]),
       );
 }
 
@@ -1822,77 +1964,69 @@ class _StyledDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: _kCard,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
-            decoration: const BoxDecoration(
-              color: _kSurface,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-              border: Border(bottom: BorderSide(color: _kBorder)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
+          decoration: const BoxDecoration(
+            color: _kSurface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+            border: Border(bottom: BorderSide(color: _kBorder)),
+          ),
+          child: Row(children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                  color: iconColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(9)),
+              child: Icon(icon, color: iconColor, size: 15),
             ),
-            child: Row(children: [
-              Container(
-                width: 32,
-                height: 32,
+            const SizedBox(width: 10),
+            Expanded(
+                child: Text(title,
+                    style: GoogleFonts.raleway(
+                        color: _kText,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15))),
+            GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: const Icon(Icons.close_rounded, color: _kSub, size: 17),
+            ),
+          ]),
+        ),
+        Padding(padding: const EdgeInsets.all(20), child: child),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+          child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: GoogleFonts.raleway(color: _kSub)),
+            ),
+            const SizedBox(width: 10),
+            GestureDetector(
+              onTap: saving ? null : onConfirm,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
                 decoration: BoxDecoration(
-                    color: iconColor.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(8)),
-                child: Icon(icon, color: iconColor, size: 16),
+                    color: iconColor, borderRadius: BorderRadius.circular(10)),
+                child: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            color: Colors.white, strokeWidth: 2))
+                    : Text(confirmLabel ?? 'OK',
+                        style: GoogleFonts.raleway(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13)),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                  child: Text(title,
-                      style: GoogleFonts.dmSans(
-                          color: _kText,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 15))),
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: const Icon(Icons.close_rounded, color: _kSub, size: 18),
-              ),
-            ]),
-          ),
-          Padding(padding: const EdgeInsets.all(20), child: child),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child:
-                      Text('Cancel', style: GoogleFonts.dmSans(color: _kSub)),
-                ),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  onTap: saving ? null : onConfirm,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 18, vertical: 10),
-                    decoration: BoxDecoration(
-                        color: iconColor,
-                        borderRadius: BorderRadius.circular(9)),
-                    child: saving
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(
-                                color: Colors.white, strokeWidth: 2))
-                        : Text(confirmLabel ?? 'OK',
-                            style: GoogleFonts.dmSans(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                                fontSize: 13)),
-                  ),
-                ),
-              ],
             ),
-          ),
-        ],
-      ),
+          ]),
+        ),
+      ]),
     );
   }
 }
@@ -1910,23 +2044,23 @@ class _DarkField extends StatelessWidget {
   @override
   Widget build(BuildContext context) => TextField(
         controller: ctrl,
-        style: GoogleFonts.dmSans(color: _kText, fontSize: 14),
+        style: GoogleFonts.raleway(color: _kText, fontSize: 14),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: GoogleFonts.dmSans(color: _kSub, fontSize: 13),
-          prefixIcon: Icon(icon, color: _kSub, size: 18),
+          labelStyle: GoogleFonts.raleway(color: _kSub, fontSize: 12),
+          prefixIcon: Icon(icon, color: _kSub, size: 17),
           filled: true,
           fillColor: _kSurface,
           contentPadding:
               const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
           border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(11),
               borderSide: const BorderSide(color: _kBorder)),
           enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(11),
               borderSide: const BorderSide(color: _kBorder)),
           focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(11),
               borderSide: const BorderSide(color: _kCopper, width: 1.5)),
         ),
       );
@@ -1938,20 +2072,21 @@ class _DarkField extends StatelessWidget {
 class _ErrorText extends StatelessWidget {
   final String text;
   const _ErrorText(this.text);
+
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: _kDanger.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _kDanger.withOpacity(0.3)),
+          color: _kDanger.withOpacity(0.07),
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(color: _kDanger.withOpacity(0.28)),
         ),
         child: Row(children: [
-          const Icon(Icons.error_outline_rounded, color: _kDanger, size: 14),
-          const SizedBox(width: 6),
+          const Icon(Icons.error_outline_rounded, color: _kDanger, size: 13),
+          const SizedBox(width: 7),
           Expanded(
               child: Text(text,
-                  style: GoogleFonts.dmSans(color: _kDanger, fontSize: 12))),
+                  style: GoogleFonts.raleway(color: _kDanger, fontSize: 12))),
         ]),
       );
 }
@@ -1968,21 +2103,23 @@ Future<bool> _confirmDialog(
     context: context,
     builder: (_) => AlertDialog(
       backgroundColor: _kCard,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       title: Text(title,
           style:
-              GoogleFonts.dmSans(color: _kText, fontWeight: FontWeight.w700)),
+              GoogleFonts.raleway(color: _kText, fontWeight: FontWeight.w800)),
       content:
-          Text(message, style: GoogleFonts.dmSans(color: _kSub, fontSize: 14)),
+          Text(message, style: GoogleFonts.raleway(color: _kSub, fontSize: 14)),
       actions: [
         TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancel', style: GoogleFonts.dmSans(color: _kSub))),
+          onPressed: () => Navigator.pop(context, false),
+          child: Text('Cancel', style: GoogleFonts.raleway(color: _kSub)),
+        ),
         TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text('Delete',
-                style: GoogleFonts.dmSans(
-                    color: _kDanger, fontWeight: FontWeight.bold))),
+          onPressed: () => Navigator.pop(context, true),
+          child: Text('Delete',
+              style: GoogleFonts.raleway(
+                  color: _kDanger, fontWeight: FontWeight.w800)),
+        ),
       ],
     ),
   );

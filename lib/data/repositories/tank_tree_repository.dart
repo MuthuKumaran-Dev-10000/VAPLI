@@ -377,5 +377,15 @@ class TankTreeRepository {
       );
     }
   }
+
+  Future<int> countChildren(String parentId) async {
+    final snap = await _ref.orderByChild('parent_id').equalTo(parentId).get();
+
+    if (!snap.exists) return 0;
+
+    final map = Map<dynamic, dynamic>.from(snap.value as Map);
+
+    return map.length;
+  }
 }
 //

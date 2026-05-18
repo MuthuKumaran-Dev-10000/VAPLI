@@ -5,6 +5,7 @@ import 'package:lubrication_indicator/data/models/reading_model.dart';
 import 'package:lubrication_indicator/data/repositories/reading_repository.dart';
 import 'package:lubrication_indicator/presentation/screens/admin/admin_dashboard.dart';
 import 'package:lubrication_indicator/presentation/screens/dashboard/dashboard_tab.dart';
+import 'package:lubrication_indicator/presentation/screens/main/tank_input_browser.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/session_manager.dart';
@@ -345,17 +346,20 @@ class _HomeScreenState extends State<HomeScreen>
       body: TabBarView(
         controller: _tabCtrl,
         children: [
-          _InputTab(
-            tanks: _tanks,
-            selectedTank: _selectedTank,
-            loadingTanks: _loadingTanks,
+          // _InputTab(
+          //   tanks: _tanks,
+          //   selectedTank: _selectedTank,
+          //   loadingTanks: _loadingTanks,
+          //   currentUser: _currentUser,
+          //   onTankSelected: (t) {
+          //     setState(() {
+          //       _selectedTank = t;
+          //     });
+          //   },
+          //   onScanQr: _scanQr,
+          // ),
+          TankInputBrowser(
             currentUser: _currentUser,
-            onTankSelected: (t) {
-              setState(() {
-                _selectedTank = t;
-              });
-            },
-            onScanQr: _scanQr,
           ),
           TrendsScreen(
             tanks: _tanks,

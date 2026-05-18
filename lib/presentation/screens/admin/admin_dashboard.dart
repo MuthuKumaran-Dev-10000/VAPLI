@@ -35,6 +35,10 @@ class _AdminDashboardState extends State<AdminDashboard>
       vsync: this,
     );
 
+    // _tabController.addListener(() {
+    //   if (mounted) setState(() {});
+    // });
+
     _load();
   }
 
@@ -263,6 +267,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         ),
         bottom: TabBar(
           controller: _tabController,
+          onTap: (_) {
+            if (mounted) setState(() {});
+          },
           tabs: const [
             Tab(
               text: 'Tanks',
@@ -275,16 +282,22 @@ class _AdminDashboardState extends State<AdminDashboard>
       ),
 
       // Browser has its own +
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          if (_tabController.index == 1) {
-            await _createUser();
-          }
-        },
-        child: Icon(
-          _tabController.index == 0 ? Icons.folder : Icons.add,
-        ),
-      ),
+      // floatingActionButton: FloatingActionButton(
+      //   onPressed: () async {
+      //     if (_tabController.index == 1) {
+      //       await _createUser();
+      //     }
+      //   },
+      //   child: Icon(
+      //     _tabController.index == 0 ? Icons.folder : Icons.add,
+      //   ),
+      // ),
+      floatingActionButton: _tabController.index == 1
+          ? FloatingActionButton(
+              onPressed: _createUser,
+              child: const Icon(Icons.person_add_alt_1),
+            )
+          : null,
 
       body: TabBarView(
         controller: _tabController,
