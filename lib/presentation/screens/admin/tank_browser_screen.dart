@@ -718,7 +718,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                           size: 12,
                           color: _pathStack.length > 1 ? _kCopper : _kText),
                       const SizedBox(width: 5),
-                      Text('Tanks',
+                      Text('Root',
                           style: GoogleFonts.raleway(
                               color: _pathStack.length > 1 ? _kCopper : _kText,
                               fontSize: 12,

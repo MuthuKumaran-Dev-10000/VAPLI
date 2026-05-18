@@ -35,6 +35,7 @@ import '../../../data/models/tank_model.dart';
 import '../../../data/models/user_model.dart';
 import '../../../data/repositories/dashboard_stats_repository.dart';
 import '../../../data/repositories/reading_repository.dart';
+import 'image_marker_screen.dart';
 
 // ── Palette (matches app_theme.dart AppColors) ────────────────────────────────
 const _kBg = Color(0xFF0C0D0F);
@@ -294,14 +295,39 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── camera ────────────────────────────────────────────────────────────────
 
+  // Future<void> _captureParamImage(String paramId) async {
+  //   final img =
+  //       await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+  //   if (img == null) return;
+  //   setState(() {
+  //     _paramPhoto[paramId] = File(img.path);
+  //     _uploadError = null;
+  //   });
+  // }
+
   Future<void> _captureParamImage(String paramId) async {
+    // 1. Capture raw photo
     final img =
         await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
     if (img == null) return;
-    setState(() {
-      _paramPhoto[paramId] = File(img.path);
-      _uploadError = null;
-    });
+
+    // 2. Push marker screen — user draws the oil-level line
+    if (!mounted) return;
+    final annotated = await Navigator.push<File>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ImageMarkerScreen(imageFile: File(img.path)),
+      ),
+    );
+
+    // 3. If user tapped "Use Photo", store the annotated file
+    //    If user tapped "Discard" annotated == null → do nothing
+    if (annotated != null && mounted) {
+      setState(() {
+        _paramPhoto[paramId] = annotated;
+        _uploadError = null;
+      });
+    }
   }
 
   // ── Cloudinary ────────────────────────────────────────────────────────────
