@@ -243,5 +243,139 @@ class TankTreeRepository {
     }
     return result;
   }
+
+  // ─────────────────────────────────────────────────────────────
+  // MOVE NODE
+  //
+  // Supports:
+  //  root → folder
+  //  folder → root
+  //  folder → folder
+  //  leaf → folder
+  //
+  // Also rebuilds full path recursively.
+  // ─────────────────────────────────────────────────────────────
+  Future<void> moveNode({
+    required String nodeId,
+    required String? newParentId,
+  }) async {
+    final nodeSnap = await _ref.child(nodeId).get();
+
+    if (!nodeSnap.exists) {
+      throw Exception('Node not found');
+    }
+
+    final node = TankNode.fromMap(
+      nodeId,
+      Map<dynamic, dynamic>.from(nodeSnap.value as Map),
+    );
+
+    // same parent → ignore
+    if (node.parentId == newParentId) return;
+
+    // prevent moving into itself
+    if (node.id == newParentId) {
+      throw Exception('Cannot move into itself');
+    }
+
+    String newPath = node.name;
+
+    // build parent path
+    if (newParentId != null) {
+      final parentSnap = await _ref.child(newParentId).get();
+
+      if (!parentSnap.exists) {
+        throw Exception('Parent not found');
+      }
+
+      final parent = TankNode.fromMap(
+        newParentId,
+        Map<dynamic, dynamic>.from(parentSnap.value as Map),
+      );
+
+      // prevent cycles
+      if (parent.path.startsWith(node.path)) {
+        throw Exception('Cannot move into child folder');
+      }
+
+      newPath = '${parent.path}/${node.name}';
+    }
+
+    await _ref.child(nodeId).update({
+      'parent_id': newParentId,
+      'path': newPath,
+    });
+
+    // rebuild descendants
+    await _updateDescendantPaths(
+      parentId: nodeId,
+      parentPath: newPath,
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // REORDER SIBLINGS
+  //
+  // Input:
+  // [id1,id2,id3,id4]
+  // ─────────────────────────────────────────────────────────────
+  Future<void> reorderNodes(List<String> nodeIds) async {
+    final updates = <String, dynamic>{};
+
+    for (int i = 0; i < nodeIds.length; i++) {
+      updates['${nodeIds[i]}/order'] = i;
+    }
+
+    await _ref.update(updates);
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // INTERNAL:
+  // recursively fixes child paths
+  //
+  // Example:
+  // A/B/C
+  //
+  // move B → X
+  //
+  // becomes:
+  // X/B/C
+  // ─────────────────────────────────────────────────────────────
+  Future<void> _updateDescendantPaths({
+    required String parentId,
+    required String parentPath,
+  }) async {
+    final childrenSnap = await _ref.get();
+
+    if (!childrenSnap.exists) return;
+
+    final all = Map<dynamic, dynamic>.from(
+      childrenSnap.value as Map,
+    );
+
+    for (final entry in all.entries) {
+      final id = entry.key.toString();
+
+      final node = TankNode.fromMap(
+        id,
+        Map<dynamic, dynamic>.from(entry.value),
+      );
+
+      if (node.parentId != parentId) {
+        continue;
+      }
+
+      final childPath = '$parentPath/${node.name}';
+
+      await _ref.child(id).update({
+        'path': childPath,
+      });
+
+      await _updateDescendantPaths(
+        parentId: id,
+        parentPath: childPath,
+      );
+    }
+  }
 }
-// 
+//
