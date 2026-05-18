@@ -1,19 +1,14 @@
 // lib/presentation/screens/admin/tank_browser_screen.dart
 // ══════════════════════════════════════════════════════════════════════════════
-// TankBrowserScreen — infinite hierarchical tank browser
-//
-// Looks like "This PC" / a file explorer.
-// Each level shows:
-//   • Folder nodes  → folder icon, name, zone, description, [Rename][Delete]
-//   • Leaf nodes    → QR card, tank name, code, zone, [Modify][Duplicate][Delete][Download QR]
-//
-// Navigation:
-//   • Tap a folder  → pushes a new TankBrowserScreen for that folder
-//   • Breadcrumb bar shows current path; tap any crumb to pop back to that level
-//
-// FAB shows two options:
-//   ➕ New Group (folder)
-//   ➕ New Tank  (leaf → opens CreateTankScreen then links the new tank here)
+// FIXES IN THIS VERSION:
+//   ✅ Root query fix — Firebase RTDB can't query equalTo(null).
+//      Root nodes are fetched by getting ALL nodes and filtering parent_id==null
+//      client-side. Child queries use orderByChild('parent_id').equalTo(id).
+//   ✅ No Navigator.push for folder drill-down — uses an internal _pathStack
+//      so there is NO back button / new route inside the tab. Breadcrumb bar
+//      handles all navigation. Completely stays within the tab.
+//   ✅ Stream re-subscribes correctly when folder changes (via _pathStack).
+//   ✅ All create/modify/duplicate/delete features preserved exactly.
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
@@ -36,7 +31,7 @@ import 'create_tank_screen_main.dart';
 import 'create_tank_qr.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Palette — matches existing dark industrial theme throughout the app
+// Palette
 // ─────────────────────────────────────────────────────────────────────────────
 const _kBg = Color(0xFF0C0D0F);
 const _kSurface = Color(0xFF141618);
@@ -55,20 +50,12 @@ const _kDanger = Color(0xFFEF4444);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TankBrowserScreen
+// Self-contained — NO Navigator.push for folder drill-down.
+// Uses an internal _pathStack (list of TankNode?) to track current folder.
+// null in the stack = root level.
 // ─────────────────────────────────────────────────────────────────────────────
 class TankBrowserScreen extends StatefulWidget {
-  /// The node whose children we are displaying.
-  /// null = root level.
-  final TankNode? parent;
-
-  /// Breadcrumb trail from root → current parent.
-  final List<TankNode> breadcrumbs;
-
-  const TankBrowserScreen({
-    super.key,
-    this.parent,
-    this.breadcrumbs = const [],
-  });
+  const TankBrowserScreen({super.key});
 
   @override
   State<TankBrowserScreen> createState() => _TankBrowserScreenState();
@@ -78,15 +65,27 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
   final _treeRepo = TankTreeRepository();
   final _tankRepo = TankRepository();
 
+  // Navigation stack: each entry is a TankNode? (null = root).
+  // We always display the LAST item.
+  final List<TankNode?> _pathStack = [null]; // start at root
+
   List<TankNode> _nodes = [];
-  Map<String, TankModel> _tankCache = {}; // tankId → TankModel
+  Map<String, TankModel> _tankCache = {};
   StreamSubscription<List<TankNode>>? _sub;
   bool _loading = true;
+
+  // ── Current folder ─────────────────────────────────────────────────────────
+  TankNode? get _currentFolder => _pathStack.last;
+
+  // Breadcrumb list = everything except the root null
+  List<TankNode> get _breadcrumbs => _pathStack.whereType<TankNode>().toList();
+
+  // ── lifecycle ──────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
-    _subscribe();
+    _subscribeToCurrentFolder();
   }
 
   @override
@@ -95,37 +94,81 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
     super.dispose();
   }
 
-  void _subscribe() {
-    _sub = _treeRepo.watchChildren(widget.parent?.id).listen((nodes) async {
-      if (!mounted) return;
-      // Fetch TankModel for any leaf nodes not yet in cache
+  // ── Subscribe to current folder's children ─────────────────────────────────
+
+  void _subscribeToCurrentFolder() {
+    _sub?.cancel();
+    setState(() => _loading = true);
+
+    debugPrint('[Browser] Subscribing to folder: '
+        '${_currentFolder?.id ?? 'ROOT'}');
+
+    final stream = _treeRepo.watchChildren(_currentFolder?.id);
+
+    _sub = stream.listen((nodes) async {
+      debugPrint('[Browser] Got ${nodes.length} nodes for folder '
+          '${_currentFolder?.id ?? 'ROOT'}');
+
+      // Fetch TankModel for any unseen leaf nodes
       final missing = nodes
-          .where((n) =>
-              n.isLeaf && n.tankId != null && !_tankCache.containsKey(n.tankId))
+          .where(
+            (n) =>
+                n.isLeaf &&
+                n.tankId != null &&
+                !_tankCache.containsKey(n.tankId),
+          )
           .toList();
+
       for (final n in missing) {
         final t = await _tankRepo.getTankById(n.tankId!);
         if (t != null) _tankCache[n.tankId!] = t;
       }
-      setState(() {
-        _nodes = nodes;
-        _loading = false;
-      });
+
+      if (mounted) {
+        setState(() {
+          _nodes = nodes;
+          _loading = false;
+        });
+      }
+    }, onError: (e) {
+      debugPrint('[Browser] Stream error: $e');
+      if (mounted) setState(() => _loading = false);
     });
   }
 
-  // ── Navigation ─────────────────────────────────────────────────────────────
+  // ── Navigation (no Navigator.push — all internal) ──────────────────────────
 
   void _openFolder(TankNode folder) {
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => TankBrowserScreen(
-          parent: folder,
-          breadcrumbs: [...widget.breadcrumbs, folder],
-        ),
-      ),
-    );
+    debugPrint('[Browser] Opening folder: ${folder.name} (${folder.id})');
+    setState(() {
+      _pathStack.add(folder);
+      _nodes = [];
+      _loading = true;
+    });
+    _subscribeToCurrentFolder();
+  }
+
+  void _navigateToBreadcrumb(int stackIndex) {
+    // stackIndex 0 = root null; 1+ = folder nodes
+    if (stackIndex >= _pathStack.length - 1) return; // already there
+    debugPrint('[Browser] Breadcrumb nav to stack index $stackIndex');
+    setState(() {
+      _pathStack.removeRange(stackIndex + 1, _pathStack.length);
+      _nodes = [];
+      _loading = true;
+    });
+    _subscribeToCurrentFolder();
+  }
+
+  void _navigateUp() {
+    if (_pathStack.length <= 1) return;
+    debugPrint('[Browser] Navigate up from ${_currentFolder?.name}');
+    setState(() {
+      _pathStack.removeLast();
+      _nodes = [];
+      _loading = true;
+    });
+    _subscribeToCurrentFolder();
   }
 
   // ── CREATE FOLDER dialog ───────────────────────────────────────────────────
@@ -162,10 +205,12 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
                     descCtrl.text.trim().isEmpty ? null : descCtrl.text.trim(),
                 zone:
                     zoneCtrl.text.trim().isEmpty ? null : zoneCtrl.text.trim(),
-                parentId: widget.parent?.id,
+                parentId: _currentFolder?.id,
               );
+              debugPrint('[Browser] Folder created successfully');
               if (ctx.mounted) Navigator.pop(ctx);
             } catch (e) {
+              debugPrint('[Browser] Folder create error: $e');
               setDlg(() {
                 saving = false;
                 error = e.toString();
@@ -205,25 +250,22 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
   // ── CREATE LEAF (Tank) ─────────────────────────────────────────────────────
 
   Future<void> _showCreateLeafFlow() async {
-    // 1. Open CreateTankScreen — it returns bool true when tank is created
     final ok = await Navigator.push<bool>(
       context,
       MaterialPageRoute(builder: (_) => const CreateTankScreen()),
     );
     if (ok != true || !mounted) return;
 
-    // 2. The newly created tank is the most recent one — fetch it
     final allTanks = await _tankRepo.getAllTanks();
     if (allTanks.isEmpty) return;
     allTanks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final newTank = allTanks.first;
 
-    // 3. Create the leaf node pointing at this tank
     await _treeRepo.createLeaf(
       name: newTank.tankName,
       tankId: newTank.id,
       zone: newTank.location,
-      parentId: widget.parent?.id,
+      parentId: _currentFolder?.id,
     );
     debugPrint('[Browser] Leaf created for tank ${newTank.id}');
   }
@@ -247,9 +289,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
                 height: 4,
                 margin: const EdgeInsets.only(bottom: 18),
                 decoration: BoxDecoration(
-                  color: _kBorderH,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+                    color: _kBorderH, borderRadius: BorderRadius.circular(2)),
               ),
               _FabOption(
                 icon: Icons.folder_open_outlined,
@@ -359,7 +399,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
                   icon: Icons.location_on_outlined),
               if (error != null) ...[
                 const SizedBox(height: 10),
-                _ErrorText(error!),
+                _ErrorText(error!)
               ],
             ],
           ),
@@ -372,41 +412,28 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.parent?.name ?? 'Tanks';
-
     return Scaffold(
       backgroundColor: _kBg,
-
-      // ── App bar ────────────────────────────────────────────────────────────
-      appBar: AppBar(
-        backgroundColor: _kBg,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        iconTheme: const IconThemeData(color: _kText),
-        title: Text(
-          title,
-          style: GoogleFonts.dmSans(
-              color: _kText, fontWeight: FontWeight.w700, fontSize: 17),
-        ),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(1),
-          child: Container(height: 1, color: _kBorder),
-        ),
-      ),
-
-      // ── FAB ────────────────────────────────────────────────────────────────
+      // NO AppBar — this lives inside a tab. The tab bar provides the title.
       floatingActionButton: FloatingActionButton(
         backgroundColor: _kCopper,
         onPressed: _showFabMenu,
         child: const Icon(Icons.add_rounded, color: Colors.white, size: 26),
       ),
-
-      // ── Body ───────────────────────────────────────────────────────────────
       body: Column(
         children: [
-          // ── Breadcrumb bar ──────────────────────────────────────────────────
-          if (widget.breadcrumbs.isNotEmpty)
-            _BreadcrumbBar(breadcrumbs: widget.breadcrumbs),
+          // ── Breadcrumb bar ─────────────────────────────────────────────────
+          _BreadcrumbBar(
+            pathStack: _pathStack,
+            onNavigate: _navigateToBreadcrumb,
+          ),
+
+          // ── Back row (when inside a folder) ───────────────────────────────
+          if (_pathStack.length > 1)
+            _BackRow(
+              folderName: _currentFolder?.name ?? '',
+              onBack: _navigateUp,
+            ),
 
           // ── Content ────────────────────────────────────────────────────────
           Expanded(
@@ -414,10 +441,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
                 ? const Center(
                     child: CircularProgressIndicator(color: _kCopper))
                 : _nodes.isEmpty
-                    ? _EmptyState(
-                        isRoot: widget.parent == null,
-                        onAdd: _showFabMenu,
-                      )
+                    ? _EmptyState(onAdd: _showFabMenu)
                     : ListView.builder(
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
                         itemCount: _nodes.length,
@@ -435,7 +459,11 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
                                   tank: _tankCache[node.tankId],
                                   treeRepo: _treeRepo,
                                   tankRepo: _tankRepo,
+                                  currentParentId: _currentFolder?.id,
                                   onDelete: () => _deleteNode(node),
+                                  onTankCacheUpdate: (id, t) {
+                                    setState(() => _tankCache[id] = t);
+                                  },
                                 );
                         },
                       ),
@@ -447,8 +475,112 @@ class _TankBrowserScreenState extends State<TankBrowserScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Breadcrumb bar — purely presentational, calls onNavigate(stackIndex)
+// ─────────────────────────────────────────────────────────────────────────────
+class _BreadcrumbBar extends StatelessWidget {
+  final List<TankNode?> pathStack;
+  final void Function(int stackIndex) onNavigate;
+
+  const _BreadcrumbBar({required this.pathStack, required this.onNavigate});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: _kSurface,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            // Root crumb
+            GestureDetector(
+              onTap: pathStack.length > 1 ? () => onNavigate(0) : null,
+              child: Row(children: [
+                Icon(Icons.storage_outlined,
+                    size: 13, color: pathStack.length > 1 ? _kCopper : _kText),
+                const SizedBox(width: 4),
+                Text('Tanks',
+                    style: GoogleFonts.dmSans(
+                        color: pathStack.length > 1 ? _kCopper : _kText,
+                        fontSize: 12,
+                        fontWeight: pathStack.length == 1
+                            ? FontWeight.w700
+                            : FontWeight.w500)),
+              ]),
+            ),
+            // Folder crumbs
+            ...pathStack.skip(1).toList().asMap().entries.map((e) {
+              final idx = e.key + 1; // index in pathStack
+              final node = e.value as TankNode;
+              final isLast = idx == pathStack.length - 1;
+              return Row(children: [
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 5),
+                  child: const Icon(Icons.chevron_right_rounded,
+                      size: 14, color: _kSubL),
+                ),
+                GestureDetector(
+                  onTap: isLast ? null : () => onNavigate(idx),
+                  child: Text(node.name,
+                      style: GoogleFonts.dmSans(
+                          color: isLast ? _kText : _kCopper,
+                          fontSize: 12,
+                          fontWeight:
+                              isLast ? FontWeight.w700 : FontWeight.w500)),
+                ),
+              ]);
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Back row — shown when inside a folder; single tap goes up one level
+// ─────────────────────────────────────────────────────────────────────────────
+class _BackRow extends StatelessWidget {
+  final String folderName;
+  final VoidCallback onBack;
+
+  const _BackRow({required this.folderName, required this.onBack});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onBack,
+      child: Container(
+        color: _kBg,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+        child: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: _kSurface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: _kBorder),
+            ),
+            child:
+                const Icon(Icons.arrow_back_rounded, size: 16, color: _kCopper),
+          ),
+          const SizedBox(width: 10),
+          const Icon(Icons.folder_rounded, size: 16, color: _kCopper),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(folderName,
+                style: GoogleFonts.dmSans(
+                    color: _kText, fontWeight: FontWeight.w600, fontSize: 14)),
+          ),
+          const Icon(Icons.keyboard_arrow_up_rounded, size: 18, color: _kSubL),
+        ]),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // FOLDER CARD
-// Actions: tap to open, [Modify (rename/desc/zone)], [Delete]
 // ─────────────────────────────────────────────────────────────────────────────
 class _FolderCard extends StatelessWidget {
   final TankNode node;
@@ -475,17 +607,16 @@ class _FolderCard extends StatelessWidget {
           border: Border.all(color: _kBorder),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.12),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
+                color: Colors.black.withOpacity(0.12),
+                blurRadius: 6,
+                offset: const Offset(0, 2)),
           ],
         ),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
             children: [
-              // ── Folder icon + child indicator ──────────────────────────────
+              // Folder icon
               Container(
                 width: 52,
                 height: 52,
@@ -494,44 +625,37 @@ class _FolderCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: _kCopper.withOpacity(0.25)),
                 ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    const Icon(Icons.folder_rounded, color: _kCopper, size: 28),
-                    // Collection-of-machines icon overlay (bottom-right)
-                    Positioned(
-                      bottom: 4,
-                      right: 4,
-                      child: Container(
-                        width: 16,
-                        height: 16,
-                        decoration: BoxDecoration(
-                          color: _kBg,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: _kCopper.withOpacity(0.4)),
-                        ),
-                        child: const Icon(Icons.storage_rounded,
-                            size: 9, color: _kCopper),
+                child: Stack(alignment: Alignment.center, children: [
+                  const Icon(Icons.folder_rounded, color: _kCopper, size: 28),
+                  Positioned(
+                    bottom: 4,
+                    right: 4,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: _kBg,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: _kCopper.withOpacity(0.4)),
                       ),
+                      child: const Icon(Icons.storage_rounded,
+                          size: 9, color: _kCopper),
                     ),
-                  ],
-                ),
+                  ),
+                ]),
               ),
               const SizedBox(width: 14),
 
-              // ── Info ────────────────────────────────────────────────────────
+              // Info
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      node.name,
-                      style: GoogleFonts.dmSans(
-                        color: _kText,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                      ),
-                    ),
+                    Text(node.name,
+                        style: GoogleFonts.dmSans(
+                            color: _kText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15)),
                     if ((node.zone ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
                       Row(children: [
@@ -545,39 +669,34 @@ class _FolderCard extends StatelessWidget {
                     ],
                     if ((node.description ?? '').isNotEmpty) ...[
                       const SizedBox(height: 3),
-                      Text(
-                        node.description!,
-                        style: GoogleFonts.dmSans(color: _kSubL, fontSize: 11),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      Text(node.description!,
+                          style:
+                              GoogleFonts.dmSans(color: _kSubL, fontSize: 11),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
                     ],
                   ],
                 ),
               ),
 
-              // ── Actions ─────────────────────────────────────────────────────
+              // Actions
               Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Chevron
                   const Icon(Icons.chevron_right_rounded,
                       color: _kSubL, size: 22),
                   const SizedBox(height: 4),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _SmallBtn(
-                          icon: Icons.edit_outlined,
-                          color: _kTeal,
-                          onTap: onRename),
-                      const SizedBox(width: 6),
-                      _SmallBtn(
-                          icon: Icons.delete_outline_rounded,
-                          color: _kDanger,
-                          onTap: onDelete),
-                    ],
-                  ),
+                  Row(mainAxisSize: MainAxisSize.min, children: [
+                    _SmallBtn(
+                        icon: Icons.edit_outlined,
+                        color: _kTeal,
+                        onTap: onRename),
+                    const SizedBox(width: 6),
+                    _SmallBtn(
+                        icon: Icons.delete_outline_rounded,
+                        color: _kDanger,
+                        onTap: onDelete),
+                  ]),
                 ],
               ),
             ],
@@ -590,22 +709,24 @@ class _FolderCard extends StatelessWidget {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LEAF CARD
-// Actions: [Modify] [Duplicate] [Delete] [Download QR]
-// QR encodes: full path + tank_code + tank_name + zone
 // ─────────────────────────────────────────────────────────────────────────────
 class _LeafCard extends StatefulWidget {
   final TankNode node;
   final TankModel? tank;
   final TankTreeRepository treeRepo;
   final TankRepository tankRepo;
+  final String? currentParentId;
   final VoidCallback onDelete;
+  final void Function(String tankId, TankModel t) onTankCacheUpdate;
 
   const _LeafCard({
     required this.node,
     required this.tank,
     required this.treeRepo,
     required this.tankRepo,
+    required this.currentParentId,
     required this.onDelete,
+    required this.onTankCacheUpdate,
   });
 
   @override
@@ -614,21 +735,18 @@ class _LeafCard extends StatefulWidget {
 
 class _LeafCardState extends State<_LeafCard> {
   final _shotCtrl = ScreenshotController();
-  final _qrKey = GlobalKey();
   bool _busy = false;
   bool _expanded = false;
 
-  // QR data encodes full tree path + tank identity
   String get _qrData {
     final t = widget.tank;
-    final payload = <String, dynamic>{
+    final payload = {
       'path': widget.node.path,
       'tank_id': widget.node.tankId ?? '',
       'tank_code': t?.tankCode ?? '',
       'tank_name': t?.tankName ?? widget.node.name,
       'zone': widget.node.zone ?? t?.location ?? '',
     };
-    // Compact JSON for QR efficiency
     return payload.entries.map((e) => '${e.key}:${e.value}').join('|');
   }
 
@@ -649,11 +767,17 @@ class _LeafCardState extends State<_LeafCard> {
           .map((p) => Map<String, dynamic>.from(p))
           .toList(),
     };
-    await Navigator.push<bool>(
+    final ok = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
           builder: (_) => CreateTankScreen(existingTank: tankMap)),
     );
+    if (ok == true && widget.node.tankId != null && mounted) {
+      // Refresh cache
+      final updated = await widget.tankRepo.getTankById(widget.node.tankId!);
+      if (updated != null)
+        widget.onTankCacheUpdate(widget.node.tankId!, updated);
+    }
   }
 
   // ── DUPLICATE ──────────────────────────────────────────────────────────────
@@ -680,7 +804,6 @@ class _LeafCardState extends State<_LeafCard> {
         ),
       );
       if (ok == true && mounted) {
-        // Create a leaf for the duplicate in the same folder
         final allTanks = await widget.tankRepo.getAllTanks();
         allTanks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
         final newTank = allTanks.first;
@@ -688,7 +811,7 @@ class _LeafCardState extends State<_LeafCard> {
           name: newTank.tankName,
           tankId: newTank.id,
           zone: newTank.location,
-          parentId: widget.node.parentId,
+          parentId: widget.currentParentId,
         );
       }
     } finally {
@@ -706,16 +829,12 @@ class _LeafCardState extends State<_LeafCard> {
         Material(color: Colors.white, child: _buildPrintableQr()),
         pixelRatio: 3.0,
       );
-
-      // Upload to Cloudinary + persist URL on the tank record
       final qrUrl = await uploadBytesToCloudinary(bytes, folder: folderMain);
       if (widget.node.tankId != null) {
         await FirebaseDatabase.instance
             .ref('tanks/${widget.node.tankId}')
             .update({'qr_image_url': qrUrl});
       }
-
-      // Save locally and share
       final dir = await getApplicationDocumentsDirectory();
       final file =
           File('${dir.path}/qr_${widget.tank?.tankCode ?? widget.node.id}.png');
@@ -734,7 +853,6 @@ class _LeafCardState extends State<_LeafCard> {
     }
   }
 
-  // ── Printable QR (name + code + zone below the QR) ─────────────────────────
   Widget _buildPrintableQr() {
     final t = widget.tank;
     final name = t?.tankName ?? widget.node.name;
@@ -749,61 +867,48 @@ class _LeafCardState extends State<_LeafCard> {
         mainAxisSize: MainAxisSize.min,
         children: [
           QrImageView(
-            data: _qrData,
-            version: QrVersions.auto,
-            size: 220,
-            backgroundColor: Colors.white,
-            padding: EdgeInsets.zero,
-          ),
+              data: _qrData,
+              version: QrVersions.auto,
+              size: 220,
+              backgroundColor: Colors.white,
+              padding: EdgeInsets.zero),
           Container(
             width: 220,
             padding: const EdgeInsets.fromLTRB(4, 8, 4, 2),
             decoration: const BoxDecoration(
-              border:
-                  Border(top: BorderSide(color: Color(0xFFCCCCCC), width: 0.8)),
-            ),
-            child: Column(
-              children: [
-                Text(
-                  name,
+                border: Border(
+                    top: BorderSide(color: Color(0xFFCCCCCC), width: 0.8))),
+            child: Column(children: [
+              Text(name,
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: Colors.black,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 0.3,
-                  ),
-                ),
-                if (code.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    'ID: $code',
+                      color: Colors.black,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.3)),
+              if (code.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text('ID: $code',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
-                      color: Colors.black87,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                ],
-                if (zone.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    'Zone: $zone',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.black54,
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ],
+                        color: Colors.black87,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8)),
               ],
-            ),
+              if (zone.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text('Zone: $zone',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5)),
+              ],
+            ]),
           ),
         ],
       ),
@@ -827,12 +932,12 @@ class _LeafCardState extends State<_LeafCard> {
           BoxShadow(
               color: Colors.black.withOpacity(0.12),
               blurRadius: 6,
-              offset: const Offset(0, 2)),
+              offset: const Offset(0, 2))
         ],
       ),
       child: Column(
         children: [
-          // ── Collapsed row ─────────────────────────────────────────────────
+          // ── Collapsed row ──────────────────────────────────────────────────
           InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
             borderRadius: BorderRadius.circular(14),
@@ -846,19 +951,15 @@ class _LeafCardState extends State<_LeafCard> {
                     height: 52,
                     padding: const EdgeInsets.all(3),
                     decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(8)),
                     child: QrImageView(
-                      data: _qrData,
-                      version: QrVersions.auto,
-                      backgroundColor: Colors.white,
-                      padding: EdgeInsets.zero,
-                    ),
+                        data: _qrData,
+                        version: QrVersions.auto,
+                        backgroundColor: Colors.white,
+                        padding: EdgeInsets.zero),
                   ),
                   const SizedBox(width: 14),
-
-                  // Info
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -901,55 +1002,47 @@ class _LeafCardState extends State<_LeafCard> {
             ),
           ),
 
-          // ── Expanded: large QR + actions ──────────────────────────────────
+          // ── Expanded ───────────────────────────────────────────────────────
           if (_expanded) ...[
             Container(height: 1, color: _kBorder),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
               child: Column(
                 children: [
-                  // Large printable QR
                   Center(child: _buildPrintableQr()),
                   const SizedBox(height: 18),
-
                   if (_busy)
                     const Center(
-                      child: SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                              color: _kCopper, strokeWidth: 2)),
-                    )
+                        child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                                color: _kCopper, strokeWidth: 2)))
                   else
-                    // Actions row
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
                       children: [
                         _ActionBtn(
-                          icon: Icons.edit_outlined,
-                          label: 'Modify',
-                          color: _kTeal,
-                          onTap: _modify,
-                        ),
+                            icon: Icons.edit_outlined,
+                            label: 'Modify',
+                            color: _kTeal,
+                            onTap: _modify),
                         _ActionBtn(
-                          icon: Icons.copy_outlined,
-                          label: 'Duplicate',
-                          color: _kWarn,
-                          onTap: _duplicate,
-                        ),
+                            icon: Icons.copy_outlined,
+                            label: 'Duplicate',
+                            color: _kWarn,
+                            onTap: _duplicate),
                         _ActionBtn(
-                          icon: Icons.download_rounded,
-                          label: 'Save QR',
-                          color: _kCopper,
-                          onTap: _downloadQr,
-                        ),
+                            icon: Icons.download_rounded,
+                            label: 'Save QR',
+                            color: _kCopper,
+                            onTap: _downloadQr),
                         _ActionBtn(
-                          icon: Icons.delete_outline_rounded,
-                          label: 'Delete',
-                          color: _kDanger,
-                          onTap: widget.onDelete,
-                        ),
+                            icon: Icons.delete_outline_rounded,
+                            label: 'Delete',
+                            color: _kDanger,
+                            onTap: widget.onDelete),
                       ],
                     ),
                 ],
@@ -963,86 +1056,11 @@ class _LeafCardState extends State<_LeafCard> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BREADCRUMB BAR
-// ─────────────────────────────────────────────────────────────────────────────
-class _BreadcrumbBar extends StatelessWidget {
-  final List<TankNode> breadcrumbs;
-  const _BreadcrumbBar({required this.breadcrumbs});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: _kSurface,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            // Root
-            GestureDetector(
-              onTap: () {
-                // Pop all the way back to root
-                int pops = breadcrumbs.length;
-                for (int i = 0; i < pops; i++) {
-                  Navigator.pop(context);
-                }
-              },
-              child: Row(children: [
-                const Icon(Icons.storage_outlined, size: 13, color: _kCopper),
-                const SizedBox(width: 4),
-                Text('Tanks',
-                    style: GoogleFonts.dmSans(
-                        color: _kCopper,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600)),
-              ]),
-            ),
-            // Each crumb
-            ...breadcrumbs.asMap().entries.map((e) {
-              final idx = e.key;
-              final crumb = e.value;
-              final isLast = idx == breadcrumbs.length - 1;
-              return Row(children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: const Icon(Icons.chevron_right_rounded,
-                      size: 14, color: _kSubL),
-                ),
-                GestureDetector(
-                  onTap: isLast
-                      ? null
-                      : () {
-                          // Pop back to this crumb's level
-                          int pops = breadcrumbs.length - idx;
-                          for (int i = 0; i < pops; i++) {
-                            Navigator.pop(context);
-                          }
-                        },
-                  child: Text(
-                    crumb.name,
-                    style: GoogleFonts.dmSans(
-                      color: isLast ? _kText : _kSub,
-                      fontSize: 12,
-                      fontWeight: isLast ? FontWeight.w700 : FontWeight.normal,
-                    ),
-                  ),
-                ),
-              ]);
-            }),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // EMPTY STATE
 // ─────────────────────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
-  final bool isRoot;
   final VoidCallback onAdd;
-  const _EmptyState({required this.isRoot, required this.onAdd});
+  const _EmptyState({required this.onAdd});
 
   @override
   Widget build(BuildContext context) {
@@ -1058,23 +1076,16 @@ class _EmptyState extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(color: _kBorder),
             ),
-            child: Icon(
-              isRoot ? Icons.storage_outlined : Icons.folder_open_outlined,
-              size: 32,
-              color: _kSubL,
-            ),
+            child:
+                const Icon(Icons.folder_open_outlined, size: 32, color: _kSubL),
           ),
           const SizedBox(height: 16),
-          Text(
-            isRoot ? 'No tanks or groups yet' : 'This group is empty',
-            style: GoogleFonts.dmSans(
-                color: _kText, fontWeight: FontWeight.w700, fontSize: 15),
-          ),
+          Text('Nothing here yet',
+              style: GoogleFonts.dmSans(
+                  color: _kText, fontWeight: FontWeight.w700, fontSize: 15)),
           const SizedBox(height: 6),
-          Text(
-            'Tap + to add a group or a tank',
-            style: GoogleFonts.dmSans(color: _kSub, fontSize: 12),
-          ),
+          Text('Tap + to add a group or a tank',
+              style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
           const SizedBox(height: 20),
           GestureDetector(
             onTap: onAdd,
@@ -1087,7 +1098,7 @@ class _EmptyState extends StatelessWidget {
                   BoxShadow(
                       color: _kCopper.withOpacity(0.3),
                       blurRadius: 10,
-                      offset: const Offset(0, 4)),
+                      offset: const Offset(0, 4))
                 ],
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -1112,8 +1123,7 @@ class _EmptyState extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _FabOption extends StatelessWidget {
   final IconData icon;
-  final String label;
-  final String sub;
+  final String label, sub;
   final Color color;
   final VoidCallback onTap;
 
@@ -1126,29 +1136,27 @@ class _FabOption extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.08),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Row(children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: color, size: 22),
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: color.withOpacity(0.3)),
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
+          child: Row(children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+                child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label,
@@ -1159,17 +1167,15 @@ class _FabOption extends StatelessWidget {
                 Text(sub,
                     style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
               ],
-            ),
-          ),
-          Icon(Icons.arrow_forward_rounded, size: 16, color: color),
-        ]),
-      ),
-    );
-  }
+            )),
+            Icon(Icons.arrow_forward_rounded, size: 16, color: color),
+          ]),
+        ),
+      );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SHARED MICRO-WIDGETS
+// MICRO-WIDGETS
 // ─────────────────────────────────────────────────────────────────────────────
 
 class _SmallBtn extends StatelessWidget {
@@ -1186,10 +1192,9 @@ class _SmallBtn extends StatelessWidget {
           width: 30,
           height: 30,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(7),
-            border: Border.all(color: color.withOpacity(0.3)),
-          ),
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(color: color.withOpacity(0.3))),
           child: Icon(icon, size: 15, color: color),
         ),
       );
@@ -1200,12 +1205,11 @@ class _ActionBtn extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
-  const _ActionBtn({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
+  const _ActionBtn(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.onTap});
 
   @override
   Widget build(BuildContext context) => GestureDetector(
@@ -1213,10 +1217,9 @@ class _ActionBtn extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: color.withOpacity(0.35)),
-          ),
+              color: color.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withOpacity(0.35))),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 14, color: color),
             const SizedBox(width: 5),
@@ -1229,7 +1232,7 @@ class _ActionBtn extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STYLED DIALOG (reusable dark-theme modal)
+// STYLED DIALOG
 // ─────────────────────────────────────────────────────────────────────────────
 class _StyledDialog extends StatelessWidget {
   final String title;
@@ -1258,45 +1261,36 @@ class _StyledDialog extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Header
           Container(
             padding: const EdgeInsets.fromLTRB(20, 18, 20, 14),
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               color: _kSurface,
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(18)),
-              border: const Border(bottom: BorderSide(color: _kBorder)),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+              border: Border(bottom: BorderSide(color: _kBorder)),
             ),
             child: Row(children: [
               Container(
                 width: 32,
                 height: 32,
                 decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+                    color: iconColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(8)),
                 child: Icon(icon, color: iconColor, size: 16),
               ),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(title,
-                    style: GoogleFonts.dmSans(
-                        color: _kText,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15)),
-              ),
+                  child: Text(title,
+                      style: GoogleFonts.dmSans(
+                          color: _kText,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15))),
               GestureDetector(
                 onTap: () => Navigator.pop(context),
                 child: const Icon(Icons.close_rounded, color: _kSub, size: 18),
               ),
             ]),
           ),
-          // Body
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: child,
-          ),
-          // Footer
+          Padding(padding: const EdgeInsets.all(20), child: child),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
             child: Row(
@@ -1314,9 +1308,8 @@ class _StyledDialog extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(
                         horizontal: 18, vertical: 10),
                     decoration: BoxDecoration(
-                      color: iconColor,
-                      borderRadius: BorderRadius.circular(9),
-                    ),
+                        color: iconColor,
+                        borderRadius: BorderRadius.circular(9)),
                     child: saving
                         ? const SizedBox(
                             width: 16,
@@ -1377,27 +1370,24 @@ class _ErrorText extends StatelessWidget {
   final String text;
   const _ErrorText(this.text);
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: _kDanger.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _kDanger.withOpacity(0.3)),
-      ),
-      child: Row(children: [
-        const Icon(Icons.error_outline_rounded, color: _kDanger, size: 14),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(text,
-              style: GoogleFonts.dmSans(color: _kDanger, fontSize: 12)),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: _kDanger.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: _kDanger.withOpacity(0.3)),
         ),
-      ]),
-    );
-  }
+        child: Row(children: [
+          const Icon(Icons.error_outline_rounded, color: _kDanger, size: 14),
+          const SizedBox(width: 6),
+          Expanded(
+              child: Text(text,
+                  style: GoogleFonts.dmSans(color: _kDanger, fontSize: 12))),
+        ]),
+      );
 }
 
-// ── confirm dialog helper ─────────────────────────────────────────────────────
+// ── confirm dialog helper ──────────────────────────────────────────────────────
 Future<bool> _confirmDialog(BuildContext context,
     {required String title, required String message}) async {
   final result = await showDialog<bool>(

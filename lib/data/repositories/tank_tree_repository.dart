@@ -1,17 +1,13 @@
 // lib/data/repositories/tank_tree_repository.dart
 // ══════════════════════════════════════════════════════════════════════════════
-// TankTreeRepository
+// CRITICAL FIX:
+//   Firebase RTDB does NOT support orderByChild().equalTo(null).
+//   Root nodes (parent_id == null) must be fetched differently:
+//     • Fetch ALL nodes, then filter client-side for parent_id == null
+//   Child nodes (parent_id == someId) work fine with equalTo(id).
 //
-// Firebase RTDB schema:
-//   /tank_tree/{nodeId}/
-//       type, name, description, zone, parent_id, path,
-//       order, tank_id, created_at
-//
-// Design:
-//   • Root nodes   → parent_id == null
-//   • Children     → parent_id == parent's nodeId
-//   • path field   → always maintained as full slash-chain; used in QR
-//   • order        → position among siblings; repository reorders on demand
+// This is the ONLY change needed to fix the "creates but doesn't show" bug.
+// All other logic is preserved exactly.
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'package:firebase_database/firebase_database.dart';
@@ -26,29 +22,61 @@ class TankTreeRepository {
   // ── READ ──────────────────────────────────────────────────────────────────
 
   /// Returns a live stream of direct children of [parentId].
-  /// Pass null for [parentId] to get root-level nodes.
+  ///
+  /// IMPORTANT: Pass null for [parentId] to get root-level nodes.
+  /// Firebase RTDB cannot query equalTo(null), so root nodes are fetched
+  /// by listening to the entire collection and filtering client-side.
+  /// Non-root children use the efficient orderByChild query.
   Stream<List<TankNode>> watchChildren(String? parentId) {
-    final query = parentId == null
-        ? _ref.orderByChild('parent_id').equalTo(null)
-        : _ref.orderByChild('parent_id').equalTo(parentId);
-
-    return query.onValue.map((event) {
-      if (!event.snapshot.exists || event.snapshot.value == null) return [];
-      final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
-      final nodes = raw.entries
-          .map((e) => TankNode.fromMap(
-                e.key.toString(),
-                Map<dynamic, dynamic>.from(e.value as Map),
-              ))
-          .toList()
-        ..sort((a, b) => a.order.compareTo(b.order));
+    if (parentId == null) {
+      // ── ROOT: listen to entire collection, filter client-side ─────────────
       debugPrint(
-          '[TankTree] watchChildren(parentId=$parentId) → ${nodes.length} nodes');
-      return nodes;
-    });
+          '[TankTree] watchChildren(ROOT) — full scan, filter parent_id==null');
+      return _ref.onValue.map((event) {
+        if (!event.snapshot.exists || event.snapshot.value == null) {
+          debugPrint('[TankTree] Root: snapshot empty');
+          return <TankNode>[];
+        }
+        final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+        final nodes = raw.entries
+            .map((e) => TankNode.fromMap(
+                  e.key.toString(),
+                  Map<dynamic, dynamic>.from(e.value as Map),
+                ))
+            .where((n) => n.parentId == null) // ← client-side filter
+            .toList()
+          ..sort((a, b) => a.order.compareTo(b.order));
+        debugPrint('[TankTree] Root nodes found: ${nodes.length}');
+        return nodes;
+      });
+    } else {
+      // ── NON-ROOT: use indexed query — efficient ───────────────────────────
+      debugPrint(
+          '[TankTree] watchChildren(parentId=$parentId) — indexed query');
+      return _ref
+          .orderByChild('parent_id')
+          .equalTo(parentId)
+          .onValue
+          .map((event) {
+        if (!event.snapshot.exists || event.snapshot.value == null) {
+          debugPrint('[TankTree] Children of $parentId: snapshot empty');
+          return <TankNode>[];
+        }
+        final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+        final nodes = raw.entries
+            .map((e) => TankNode.fromMap(
+                  e.key.toString(),
+                  Map<dynamic, dynamic>.from(e.value as Map),
+                ))
+            .toList()
+          ..sort((a, b) => a.order.compareTo(b.order));
+        debugPrint('[TankTree] Children of $parentId: ${nodes.length} nodes');
+        return nodes;
+      });
+    }
   }
 
-  /// One-shot fetch of all nodes (used for path computation).
+  /// One-shot fetch of all nodes (used for path computation + deleteNode).
   Future<List<TankNode>> fetchAll() async {
     final snap = await _ref.get();
     if (!snap.exists || snap.value == null) return [];
@@ -82,17 +110,21 @@ class TankTreeRepository {
     final path = await _buildPath(parentId, name);
     final newRef = _ref.push();
     final id = newRef.key!;
+
     final node = TankNode(
       id: id,
       type: 'folder',
       name: name,
       description: description,
       zone: zone,
-      parentId: parentId,
+      parentId: parentId, // null for root → stored as null in Firebase
       path: path,
       order: order,
       createdAt: DateTime.now().toIso8601String(),
     );
+
+    // IMPORTANT: toMap() must NOT write the key 'parent_id' when parentId==null,
+    // OR write it as null — both work for the client-side filter above.
     await newRef.set(node.toMap());
     debugPrint('[TankTree] Folder created: id=$id path=$path');
     return node;
@@ -111,6 +143,7 @@ class TankTreeRepository {
     final path = await _buildPath(parentId, name);
     final newRef = _ref.push();
     final id = newRef.key!;
+
     final node = TankNode(
       id: id,
       type: 'leaf',
@@ -122,6 +155,7 @@ class TankTreeRepository {
       tankId: tankId,
       createdAt: DateTime.now().toIso8601String(),
     );
+
     await newRef.set(node.toMap());
     debugPrint('[TankTree] Leaf created: id=$id path=$path tankId=$tankId');
     return node;
@@ -150,7 +184,6 @@ class TankTreeRepository {
     });
     debugPrint('[TankTree] Folder updated: id=$id new path=$newPath');
 
-    // Propagate path change to all descendants
     if (oldPath != newPath) {
       await _propagatePath(id, oldPath, newPath);
     }
@@ -162,15 +195,12 @@ class TankTreeRepository {
     final all = await fetchAll();
     final toDelete = _collectDescendants(id, all)..add(id);
     debugPrint('[TankTree] Deleting ${toDelete.length} node(s)');
-    final updates = <String, Object?>{
-      for (final nid in toDelete) nid: null,
-    };
+    final updates = <String, Object?>{for (final nid in toDelete) nid: null};
     await _ref.update(updates);
   }
 
   // ── HELPERS ───────────────────────────────────────────────────────────────
 
-  /// Returns the next order value for a new sibling under [parentId].
   Future<int> _nextOrder(String? parentId) async {
     final all = await fetchAll();
     final siblings = all.where((n) => n.parentId == parentId);
@@ -178,7 +208,6 @@ class TankTreeRepository {
     return siblings.map((n) => n.order).reduce((a, b) => a > b ? a : b) + 1;
   }
 
-  /// Builds the full slash-path for a node: "Parent / GrandParent / name"
   Future<String> _buildPath(String? parentId, String name) async {
     if (parentId == null) return name;
     final parent = await fetchNode(parentId);
@@ -186,7 +215,6 @@ class TankTreeRepository {
     return '${parent.path}/$name';
   }
 
-  /// Propagates a path rename to every descendant of [nodeId].
   Future<void> _propagatePath(
       String nodeId, String oldPath, String newPath) async {
     final all = await fetchAll();
@@ -195,15 +223,13 @@ class TankTreeRepository {
     final updates = <String, Object?>{};
     for (final did in descendants) {
       final d = all.firstWhere((n) => n.id == did);
-      final updatedPath = d.path.replaceFirst(oldPath, newPath);
-      updates['$did/path'] = updatedPath;
+      updates['$did/path'] = d.path.replaceFirst(oldPath, newPath);
     }
     await _ref.update(updates);
     debugPrint(
         '[TankTree] Propagated path to ${descendants.length} descendants');
   }
 
-  /// Returns ids of all descendants of [nodeId] (BFS).
   List<String> _collectDescendants(String nodeId, List<TankNode> all) {
     final result = <String>[];
     final queue = <String>[nodeId];
@@ -218,3 +244,4 @@ class TankTreeRepository {
     return result;
   }
 }
+// 
