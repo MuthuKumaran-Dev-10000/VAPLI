@@ -415,24 +415,21 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     });
 
     if (newViolation != null) {
-      // ── Violation just fired (or still firing) ─────────────────────
-      final wasAlreadyFired =
-          prevViolation?.constraintId == newViolation.constraintId;
+      final already =
+          _alreadyLoggedConstraints[id]?.contains(newViolation.constraintId) ??
+              false;
 
-      if (!wasAlreadyFired) {
-        // Reset sound + violation photo because it's a NEW violation
-        _soundFired[id] = false;
-        // Discard old violation photo if the constraint changed
-        if (_violationPhoto[id] != null) {
-          setState(() => _violationPhoto[id] = null);
-        }
-      }
+      if (!already) {
+        _alreadyLoggedConstraints.putIfAbsent(id, () => {});
 
-      if (newViolation.playSoundOnViolation && _soundFired[id] == false) {
-        _soundFired[id] = true;
-        SystemSound.play(SystemSoundType.alert);
-        HapticFeedback.heavyImpact();
-        debugPrint('[Constraint] Sound fired for param $id');
+        _alreadyLoggedConstraints[id]!.add(newViolation.constraintId);
+
+        _handleViolationTriggered(
+          paramId: id,
+          param: p,
+          value: val,
+          violation: newViolation,
+        );
       }
     } else {
       // ── Violation cleared ──────────────────────────────────────────
@@ -443,6 +440,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               '[Constraint] Violation cleared → discarding violation photo for $id');
           setState(() => _violationPhoto[id] = null);
         }
+        _alreadyLoggedConstraints[id]?.clear();
         _soundFired[id] = false;
       }
     }
@@ -678,6 +676,87 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     };
     debugPrint('[Alert] Writing violation history: $id');
     await _db.child('violations/$id').set(record);
+  }
+
+  Future<void> _handleViolationTriggered({
+    required String paramId,
+    required Map<String, dynamic> param,
+    required dynamic value,
+    required _Violation violation,
+  }) async {
+    try {
+      final label = param['label']?.toString() ?? paramId;
+
+      String? imageUrl;
+
+      // upload evidence photo if exists
+      if (_violationPhoto[paramId] != null) {
+        imageUrl = await _uploadFile(_violationPhoto[paramId]!);
+      }
+
+      // collect ALL current values
+      final snapshot = _collectValues();
+
+      // fill defaults for missing fields
+      for (final p in _props) {
+        final lbl = p['label']?.toString() ?? '';
+
+        if (!snapshot.containsKey(lbl) ||
+            snapshot[lbl] == null ||
+            snapshot[lbl].toString().trim().isEmpty) {
+          snapshot[lbl] = p['default_value'] ?? '';
+        }
+      }
+
+      // write dashboard alert
+      await _writeDashboardAlert(
+        paramId: paramId,
+        paramLabel: label,
+        paramValue: value,
+        violation: violation,
+        imageUrl: imageUrl,
+      );
+
+      // write history
+      await _writeViolationHistory(
+        paramId: paramId,
+        paramLabel: label,
+        paramValue: value,
+        violation: violation,
+        imageUrl: imageUrl,
+      );
+
+      // FULL enterprise alert object
+      final alertId =
+          '${DateTime.now().millisecondsSinceEpoch}_${violation.constraintId}';
+
+      await _db.child('alerts_full/$alertId').set({
+        'id': alertId,
+        'tank_id': widget.tank.id,
+        'tank_name': widget.tank.tankName,
+        'tank_code': widget.tank.tankCode,
+        'param_id': paramId,
+        'param_label': label,
+        'constraint_id': violation.constraintId,
+        'constraint_snapshot': {
+          'message': violation.message,
+          'severity': violation.severity,
+          'alert_title': violation.alertTitle,
+        },
+        'actual_value': value,
+        'all_values_snapshot': snapshot,
+        'captured_by': widget.currentUser.id,
+        'captured_by_name': widget.currentUser.fullName,
+        'image_url': imageUrl ?? '',
+        'created_at': DateTime.now().toIso8601String(),
+        'acknowledged': false,
+        'resolved': false,
+      });
+    } catch (e) {
+      debugPrint(
+        '[Violation Trigger Error] $e',
+      );
+    }
   }
 
   // ── Save ───────────────────────────────────────────────────────────────
