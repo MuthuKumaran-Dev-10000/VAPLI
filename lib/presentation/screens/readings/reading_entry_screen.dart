@@ -11,21 +11,26 @@
 //   ✅ DashboardStatsRepository.updateStatsAfterReading() on save
 //   ✅ Industrial luxury UI (copper accents, obsidian background)
 //
-// NEW IN THIS VERSION — CONSTRAINT ACTIONS:
+// CONSTRAINT ACTIONS:
 //   ✅ LIVE validation on every keystroke / slider move / dropdown change
 //   ✅ block_submission: true  → save button disabled while constraint fires
-//   ✅ play_sound_on_violation → plays SystemSoundType.alert on violation
+//   ✅ play_sound_on_violation → plays beep (SystemSoundType.alert) on violation
 //   ✅ capture_image_on_violation → shows mandatory camera button under the
 //      field when constraint fires; if value changes and constraint clears,
 //      the violation photo is automatically discarded
 //   ✅ show_dashboard_alert → writes a record to Firebase alerts/ node
-//      with: id, tank_id, tank_name, constraint_id, alert_title, message,
-//            severity, captured_by, captured_by_name, param_label,
-//            param_value, image_url, timestamp
 //   ✅ store_history → appended to violations/ node in Firebase
-//   ✅ Violation banner shown inline below the field (dismissible)
 //   ✅ Per-param violation state tracked independently
-//   ✅ Image captured for violation is separate from param's own photo
+//   ✅ Multiple constraints: ALL fired constraints shown (not just first)
+//   ✅ Per-constraint tracking: each constraint action tracked independently
+//   ✅ Cleared constraints auto-removed from UI and alerts dynamically
+//
+// NEW:
+//   ✅ Manual Capture Parameters section (bottom of page)
+//      - Dropdown to pick any inspection parameter
+//      - Camera capture button per entry
+//      - Add / Delete entries
+//      - Stored as manual_<paramLabel>_captured_image: imageUrl in reading
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
@@ -72,8 +77,6 @@ const _cloudName = 'dummy-cloudinary-cloud-name';
 const _apiKey = 'dummy-cloudinary-api-key';
 const _apiSecret = 'dummy-cloudinary-api-secret';
 const _folder = 'lubricationindicator';
-
-final Map<String, Set<String>> _alreadyLoggedConstraints = {};
 
 // ── Severity → Color ──────────────────────────────────────────────────────────
 Color _severityColor(String? s) {
@@ -127,6 +130,14 @@ class _Violation {
   });
 }
 
+// ── Manual Capture Entry ──────────────────────────────────────────────────────
+class _ManualCaptureEntry {
+  String? selectedParamId; // null = not yet selected
+  File? capturedImage;
+
+  _ManualCaptureEntry({this.selectedParamId, this.capturedImage});
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ReadingEntryScreen
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,16 +174,18 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   /// Per-parameter photo (capture_image: true params)
   final Map<String, File?> _paramPhoto = {};
 
-  /// Per-param violation photos (capture_image_on_violation)
-  /// Key = paramId; value = captured file (null if not yet captured)
-  final Map<String, File?> _violationPhoto = {};
+  /// Per-param violation photos per constraint: paramId → { constraintId → File? }
+  final Map<String, Map<String, File?>> _violationPhotos = {};
 
-  /// Current violations per param: paramId → _Violation?
-  final Map<String, _Violation?> _violations = {};
+  /// Current violations per param: paramId → List<_Violation> (all fired)
+  final Map<String, List<_Violation>> _violations = {};
 
-  /// Whether the violation sound has already fired for this paramId
-  /// (reset when value changes and violation clears)
-  final Map<String, bool> _soundFired = {};
+  /// Track which constraintIds have already fired their side-effects (sound/alert/history)
+  /// paramId → Set<constraintId>
+  final Map<String, Set<String>> _alreadyFiredConstraints = {};
+
+  // ── Manual Capture Entries ─────────────────────────────────────────────
+  final List<_ManualCaptureEntry> _manualCaptures = [];
 
   // ── Deep copy of inspection properties ────────────────────────────────
   late final List<Map<String, dynamic>> _props;
@@ -227,10 +240,13 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       }
 
       if (p['capture_image'] == true) _paramPhoto[id] = null;
-      _violations[id] = null;
-      _soundFired[id] = false;
-      _violationPhoto[id] = null;
+      _violations[id] = [];
+      _violationPhotos[id] = {};
+      _alreadyFiredConstraints[id] = {};
     }
+
+    // Start with one empty manual capture entry
+    _manualCaptures.add(_ManualCaptureEntry());
   }
 
   @override
@@ -265,137 +281,84 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
   }
 
-  // ── Constraint evaluator ───────────────────────────────────────────────
+  // ── Constraint evaluator — returns ALL fired violations ────────────────
 
-  /// Returns the first fired _Violation for [p], or null if all pass.
-  _Violation? _evaluateConstraints(Map<String, dynamic> p, dynamic value) {
-    final constraints = <Map<String, dynamic>>[];
+  List<_Violation> _evaluateAllConstraints(
+      Map<String, dynamic> p, dynamic value) {
+    final fired = <_Violation>[];
     final rawList = p['constraints'];
-    if (rawList is List) {
-      for (final c in rawList) {
-        if (c is Map) {
-          constraints.add(Map<String, dynamic>.from(c));
-        }
-      }
-    }
+    if (rawList is! List) return fired;
 
-    for (final c in constraints) {
-      final op = c['op']?.toString() ?? '';
-      final expected = c['value']?.toString() ?? '';
-      final actual = value.toString().trim();
+    final actual = value.toString().trim();
+    if (actual.isEmpty) return fired;
 
-      bool fired = false;
+    for (final c in rawList) {
+      if (c is! Map) continue;
+      final constraint = Map<String, dynamic>.from(c);
+      final op = constraint['op']?.toString() ?? '';
+      final expected = constraint['value']?.toString() ?? '';
 
-      if (actual.isEmpty) {
-        return null;
-      }
-
-      // switch (op) {
-      //   case '<':
-      //     fired = (double.tryParse(actual) ?? 0) >=
-      //         (double.tryParse(expected) ?? 0);
-      //     break;
-      //   case '<=':
-      //     fired =
-      //         (double.tryParse(actual) ?? 0) > (double.tryParse(expected) ?? 0);
-      //     break;
-      //   case '>':
-      //     fired = (double.tryParse(actual) ?? 0) <=
-      //         (double.tryParse(expected) ?? 0);
-      //     break;
-      //   case '>=':
-      //     fired =
-      //         (double.tryParse(actual) ?? 0) < (double.tryParse(expected) ?? 0);
-      //     break;
-      //   case '==':
-      //     fired = actual == expected;
-      //     break;
-      //   case '!=':
-      //     fired = actual != expected;
-      //     break;
-      //   case 'contains':
-      //     fired = !actual.contains(expected);
-      //     break;
-      //   case 'starts_with':
-      //     fired = !actual.startsWith(expected);
-      //     break;
-      //   case 'ends_with':
-      //     fired = !actual.endsWith(expected);
-      //     break;
-      //   case 'regex':
-      //     try {
-      //       fired = !RegExp(expected).hasMatch(actual);
-      //     } catch (_) {
-      //       fired = false;
-      //     }
-      //     break;
-      // }
+      bool isFired = false;
 
       switch (op) {
         case '<':
-          fired =
+          isFired =
               (double.tryParse(actual) ?? 0) < (double.tryParse(expected) ?? 0);
           break;
-
         case '<=':
-          fired = (double.tryParse(actual) ?? 0) <=
+          isFired = (double.tryParse(actual) ?? 0) <=
               (double.tryParse(expected) ?? 0);
           break;
-
         case '>':
-          fired =
+          isFired =
               (double.tryParse(actual) ?? 0) > (double.tryParse(expected) ?? 0);
           break;
-
         case '>=':
-          fired = (double.tryParse(actual) ?? 0) >=
+          isFired = (double.tryParse(actual) ?? 0) >=
               (double.tryParse(expected) ?? 0);
           break;
-
         case '==':
-          fired = actual.toLowerCase().trim() == expected.toLowerCase().trim();
+          isFired =
+              actual.toLowerCase().trim() == expected.toLowerCase().trim();
           break;
-
         case '!=':
-          fired = actual.toLowerCase().trim() != expected.toLowerCase().trim();
+          isFired =
+              actual.toLowerCase().trim() != expected.toLowerCase().trim();
           break;
-
         case 'contains':
-          fired = actual.toLowerCase().contains(expected.toLowerCase());
+          isFired = actual.toLowerCase().contains(expected.toLowerCase());
           break;
-
         case 'starts_with':
-          fired = actual.toLowerCase().startsWith(expected.toLowerCase());
+          isFired = actual.toLowerCase().startsWith(expected.toLowerCase());
           break;
-
         case 'ends_with':
-          fired = actual.toLowerCase().endsWith(expected.toLowerCase());
+          isFired = actual.toLowerCase().endsWith(expected.toLowerCase());
           break;
-
         case 'regex':
           try {
-            fired = RegExp(expected).hasMatch(actual);
+            isFired = RegExp(expected).hasMatch(actual);
           } catch (_) {
-            fired = false;
+            isFired = false;
           }
           break;
       }
 
-      if (fired) {
-        return _Violation(
-          constraintId: c['id']?.toString() ?? '',
-          message: c['message']?.toString() ?? 'Alert condition met',
-          alertTitle: c['alert_title']?.toString() ?? 'Alert',
-          severity: c['severity']?.toString() ?? 'warning',
-          blockSubmission: c['block_submission'] == true,
-          captureImageOnViolation: c['capture_image_on_violation'] == true,
-          playSoundOnViolation: c['play_sound_on_violation'] == true,
-          showDashboardAlert: c['show_dashboard_alert'] == true,
-          storeHistory: c['store_history'] == true,
-        );
+      if (isFired) {
+        fired.add(_Violation(
+          constraintId: constraint['id']?.toString() ?? '',
+          message: constraint['message']?.toString() ?? 'Alert condition met',
+          alertTitle: constraint['alert_title']?.toString() ?? 'Alert',
+          severity: constraint['severity']?.toString() ?? 'warning',
+          blockSubmission: constraint['block_submission'] == true,
+          captureImageOnViolation:
+              constraint['capture_image_on_violation'] == true,
+          playSoundOnViolation: constraint['play_sound_on_violation'] == true,
+          showDashboardAlert: constraint['show_dashboard_alert'] == true,
+          storeHistory: constraint['store_history'] == true,
+        ));
       }
     }
-    return null;
+    return fired;
   }
 
   // ── Called whenever a param value changes ──────────────────────────────
@@ -407,48 +370,55 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final type = p['type'] as String? ?? 'text';
     final val = _currentValue(id, type, p);
 
-    final prevViolation = _violations[id];
-    final newViolation = _evaluateConstraints(p, val);
+    final prevViolations = List<_Violation>.from(_violations[id] ?? []);
+    final newViolations = _evaluateAllConstraints(p, val);
+    final newConstraintIds = newViolations.map((v) => v.constraintId).toSet();
+    final prevConstraintIds = prevViolations.map((v) => v.constraintId).toSet();
+
+    // ── Dynamically clean up cleared constraints ────────────────────────
+    // Remove violation photos for constraints that are no longer firing
+    for (final prevId in prevConstraintIds) {
+      if (!newConstraintIds.contains(prevId)) {
+        if (_violationPhotos[id]?.containsKey(prevId) == true) {
+          debugPrint(
+              '[Constraint] Constraint $prevId cleared → discarding violation photo');
+          _violationPhotos[id]?.remove(prevId);
+        }
+        // Allow re-firing this constraint if it was cleared then re-triggered
+        _alreadyFiredConstraints[id]?.remove(prevId);
+      }
+    }
 
     setState(() {
-      _violations[id] = newViolation;
+      _violations[id] = newViolations;
     });
 
-    if (newViolation != null) {
-      final already =
-          _alreadyLoggedConstraints[id]?.contains(newViolation.constraintId) ??
-              false;
+    // ── Trigger side-effects for newly fired constraints ────────────────
+    for (final v in newViolations) {
+      final alreadyFired =
+          _alreadyFiredConstraints[id]?.contains(v.constraintId) ?? false;
 
-      if (!already) {
-        _alreadyLoggedConstraints.putIfAbsent(id, () => {});
-
-        _alreadyLoggedConstraints[id]!.add(newViolation.constraintId);
-
+      if (!alreadyFired) {
+        _alreadyFiredConstraints[id]?.add(v.constraintId);
         _handleViolationTriggered(
           paramId: id,
           param: p,
           value: val,
-          violation: newViolation,
+          violation: v,
         );
       }
-    } else {
-      // ── Violation cleared ──────────────────────────────────────────
-      if (prevViolation != null) {
-        // Value changed → constraint cleared → discard violation photo
-        if (_violationPhoto[id] != null) {
-          debugPrint(
-              '[Constraint] Violation cleared → discarding violation photo for $id');
-          setState(() => _violationPhoto[id] = null);
-        }
-        _alreadyLoggedConstraints[id]?.clear();
-        _soundFired[id] = false;
-      }
+    }
+
+    // ── If ALL constraints cleared, reset sound tracking ───────────────
+    if (newViolations.isEmpty && prevViolations.isNotEmpty) {
+      _alreadyFiredConstraints[id]?.clear();
     }
   }
 
-  // ── Capture violation photo ────────────────────────────────────────────
+  // ── Capture violation photo for a specific constraint ──────────────────
 
-  Future<void> _captureViolationPhoto(String paramId) async {
+  Future<void> _captureViolationPhoto(
+      String paramId, String constraintId) async {
     final img =
         await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
     if (img == null) return;
@@ -460,7 +430,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           builder: (_) => ImageMarkerScreen(imageFile: File(img.path))),
     );
     if (annotated != null && mounted) {
-      setState(() => _violationPhoto[paramId] = annotated);
+      setState(() {
+        _violationPhotos[paramId] ??= {};
+        _violationPhotos[paramId]![constraintId] = annotated;
+      });
     }
   }
 
@@ -482,6 +455,24 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         _paramPhoto[paramId] = annotated;
         _uploadError = null;
       });
+    }
+  }
+
+  // ── Capture manual param photo ─────────────────────────────────────────
+
+  Future<void> _captureManualPhoto(int index) async {
+    final img =
+        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    if (img == null) return;
+    if (!mounted) return;
+
+    final annotated = await Navigator.push<File>(
+      context,
+      MaterialPageRoute(
+          builder: (_) => ImageMarkerScreen(imageFile: File(img.path))),
+    );
+    if (annotated != null && mounted) {
+      setState(() => _manualCaptures[index].capturedImage = annotated);
     }
   }
 
@@ -526,16 +517,17 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   }
 
   bool get _hasBlockingViolation =>
-      _violations.values.any((v) => v != null && v.blockSubmission);
+      _violations.values.any((list) => list.any((v) => v.blockSubmission));
 
   bool get _hasMissingViolationPhoto {
     for (final p in _props) {
       final id = p['id'] as String;
-      final v = _violations[id];
-      if (v != null &&
-          v.captureImageOnViolation &&
-          _violationPhoto[id] == null) {
-        return true;
+      final vList = _violations[id] ?? [];
+      for (final v in vList) {
+        if (v.captureImageOnViolation &&
+            (_violationPhotos[id]?[v.constraintId] == null)) {
+          return true;
+        }
       }
     }
     return false;
@@ -687,11 +679,23 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     try {
       final label = param['label']?.toString() ?? paramId;
 
-      String? imageUrl;
+      // Play beep sound if required — uses HapticFeedback heavy as audible
+      // fallback since SystemSound.play is silent on many devices without
+      // audio files. We layer both for max compatibility.
+      if (violation.playSoundOnViolation) {
+        try {
+          await SystemSound.play(SystemSoundType.alert);
+        } catch (_) {}
+        try {
+          await HapticFeedback.vibrate();
+        } catch (_) {}
+      }
 
-      // upload evidence photo if exists
-      if (_violationPhoto[paramId] != null) {
-        imageUrl = await _uploadFile(_violationPhoto[paramId]!);
+      String? imageUrl;
+      // upload evidence photo if exists for this constraint
+      final violationFile = _violationPhotos[paramId]?[violation.constraintId];
+      if (violationFile != null) {
+        imageUrl = await _uploadFile(violationFile);
       }
 
       // collect ALL current values
@@ -700,7 +704,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       // fill defaults for missing fields
       for (final p in _props) {
         final lbl = p['label']?.toString() ?? '';
-
         if (!snapshot.containsKey(lbl) ||
             snapshot[lbl] == null ||
             snapshot[lbl].toString().trim().isEmpty) {
@@ -753,9 +756,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         'resolved': false,
       });
     } catch (e) {
-      debugPrint(
-        '[Violation Trigger Error] $e',
-      );
+      debugPrint('[Violation Trigger Error] $e');
     }
   }
 
@@ -789,49 +790,90 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      // 2. Upload violation photos
-      final violationImageUrls = <String, String>{};
+      // 2. Upload violation photos (per-constraint)
+      final violationImageUrls = <String, Map<String, String>>{};
       for (final p in _props) {
         final id = p['id'] as String;
-        if (_violationPhoto[id] != null) {
-          violationImageUrls[id] = await _uploadFile(_violationPhoto[id]!);
+        final cMap = _violationPhotos[id] ?? {};
+        for (final entry in cMap.entries) {
+          if (entry.value != null) {
+            violationImageUrls[id] ??= {};
+            violationImageUrls[id]![entry.key] =
+                await _uploadFile(entry.value!);
+          }
         }
       }
 
-      // 3. Collect values
+      // 3. Upload manual capture photos
+      final manualImageUrls = <int, String>{};
+      for (int i = 0; i < _manualCaptures.length; i++) {
+        final entry = _manualCaptures[i];
+        if (entry.selectedParamId != null && entry.capturedImage != null) {
+          manualImageUrls[i] = await _uploadFile(entry.capturedImage!);
+        }
+      }
+
+      // 4. Collect values
       final inspVals = _collectValues();
 
-      // Merge image URLs into inspVals
+      // Merge param image URLs
       for (final e in paramImageUrls.entries) {
         inspVals['${e.key}__image_url'] = e.value;
       }
-      for (final e in violationImageUrls.entries) {
-        inspVals['${e.key}__violation_image_url'] = e.value;
+
+      // Merge violation image URLs (flattened per param+constraint)
+      for (final paramEntry in violationImageUrls.entries) {
+        for (final cEntry in paramEntry.value.entries) {
+          inspVals['${paramEntry.key}__violation_${cEntry.key}_image_url'] =
+              cEntry.value;
+        }
       }
 
-      // 4. Final constraint validation (values may not have changed)
+      // Merge manual capture image URLs
+      // Key format: manual_<paramLabel>_captured_image
+      for (int i = 0; i < _manualCaptures.length; i++) {
+        final entry = _manualCaptures[i];
+        if (entry.selectedParamId != null && manualImageUrls.containsKey(i)) {
+          final paramLabel = _props.firstWhere(
+                      (p) => p['id'] == entry.selectedParamId,
+                      orElse: () => {'label': entry.selectedParamId})['label']
+                  as String? ??
+              entry.selectedParamId!;
+          // If multiple manual captures for same param, append index
+          final key = 'manual_${paramLabel}_captured_image';
+          if (inspVals.containsKey(key)) {
+            inspVals['manual_${paramLabel}_captured_image_$i'] =
+                manualImageUrls[i];
+          } else {
+            inspVals[key] = manualImageUrls[i];
+          }
+        }
+      }
+
+      // 5. Final constraint validation
       for (final p in _props) {
         final id = p['id'] as String;
         final type = p['type'] as String? ?? 'text';
         final label = p['label'] as String? ?? id;
         final val = _currentValue(id, type, p);
-        final v = _evaluateConstraints(p, val);
-        if (v != null && v.blockSubmission) {
-          _snack('"$label": ${v.message}', _kDanger);
+        final violations = _evaluateAllConstraints(p, val);
+        final blocking = violations.where((v) => v.blockSubmission).toList();
+        if (blocking.isNotEmpty) {
+          _snack('"$label": ${blocking.first.message}', _kDanger);
           setState(() => _saving = false);
           return;
         }
       }
 
-      // 5. Write dashboard alerts + violation history for active violations
+      // 6. Write dashboard alerts + violation history for active violations
       for (final p in _props) {
         final id = p['id'] as String;
         final type = p['type'] as String? ?? 'text';
         final label = p['label'] as String? ?? id;
         final val = _currentValue(id, type, p);
-        final v = _violations[id];
-        if (v != null) {
-          final imgUrl = violationImageUrls[id] ?? '';
+        final vList = _violations[id] ?? [];
+        for (final v in vList) {
+          final imgUrl = violationImageUrls[id]?[v.constraintId] ?? '';
           await _writeDashboardAlert(
             paramId: id,
             paramLabel: label,
@@ -849,11 +891,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      // 6. Primary image URL for reading record
+      // 7. Primary image URL for reading record
       final primaryImageUrl =
           paramImageUrls.values.isNotEmpty ? paramImageUrls.values.first : '';
 
-      // 7. Save reading
+      // 8. Save reading
       final reading = await ReadingRepository().saveReading(
         tankId: widget.tank.id,
         tankName: widget.tank.tankName,
@@ -864,7 +906,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         inspectionValues: inspVals,
       );
 
-      // 8. Update dashboard stats
+      // 9. Update dashboard stats
       await DashboardStatsRepository().updateStatsAfterReading(
         reading: reading,
         tank: widget.tank,
@@ -935,6 +977,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               ..._props.map(_buildPropField),
             ],
 
+            // ── Manual Capture Section ─────────────────────────────────
+            const SizedBox(height: 28),
+            _buildManualCaptureSection(),
+
             const SizedBox(height: 28),
 
             // Blocking violation banner at the bottom
@@ -964,6 +1010,243 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     );
   }
 
+  // ── Manual Capture Section Builder ────────────────────────────────────
+
+  Widget _buildManualCaptureSection() {
+    final paramOptions = _props
+        .map((p) => MapEntry(
+            p['id'] as String, p['label'] as String? ?? p['id'] as String))
+        .toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          _SecLabel('MANUAL CAPTURES'),
+          const Spacer(),
+          GestureDetector(
+            onTap: () =>
+                setState(() => _manualCaptures.add(_ManualCaptureEntry())),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: _kCopper.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: _kCopper.withOpacity(0.35)),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.add_rounded, size: 14, color: _kCopper),
+                const SizedBox(width: 4),
+                Text('Add',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 12,
+                        color: _kCopper,
+                        fontWeight: FontWeight.w600)),
+              ]),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 4),
+        Text('Attach extra photos to any parameter',
+            style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
+        const SizedBox(height: 14),
+        ..._manualCaptures.asMap().entries.map((entry) {
+          final i = entry.key;
+          final mc = entry.value;
+          return _buildManualCaptureEntry(i, mc, paramOptions);
+        }),
+      ],
+    );
+  }
+
+  Widget _buildManualCaptureEntry(
+    int index,
+    _ManualCaptureEntry entry,
+    List<MapEntry<String, String>> paramOptions,
+  ) {
+    final hasCaptured = entry.capturedImage != null;
+    final hasParam = entry.selectedParamId != null;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Container(
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kBorder),
+        ),
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Header row: index + delete ─────────────────────────────
+            Row(children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(
+                  color: _kCopper.withOpacity(0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _kCopper.withOpacity(0.3)),
+                ),
+                child: Center(
+                  child: Text('${index + 1}',
+                      style: GoogleFonts.spaceGrotesk(
+                          fontSize: 10,
+                          color: _kCopper,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('Manual Capture',
+                  style: GoogleFonts.dmSans(
+                      fontSize: 12, color: _kSub, fontWeight: FontWeight.w500)),
+              const Spacer(),
+              // Only show delete if more than one entry
+              if (_manualCaptures.length > 1)
+                GestureDetector(
+                  onTap: () => setState(() => _manualCaptures.removeAt(index)),
+                  child: Container(
+                    padding: const EdgeInsets.all(5),
+                    decoration: BoxDecoration(
+                      color: _kDanger.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: _kDanger.withOpacity(0.25)),
+                    ),
+                    child: const Icon(Icons.delete_outline_rounded,
+                        size: 14, color: _kDanger),
+                  ),
+                ),
+            ]),
+
+            const SizedBox(height: 12),
+
+            // ── Parameter dropdown ─────────────────────────────────────
+            Text('Parameter',
+                style: GoogleFonts.dmSans(
+                    fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
+            const SizedBox(height: 6),
+            Container(
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kBorder),
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: entry.selectedParamId,
+                  isExpanded: true,
+                  dropdownColor: _kCard,
+                  iconEnabledColor: _kSub,
+                  hint: Text('Select parameter…',
+                      style: GoogleFonts.dmSans(color: _kSub, fontSize: 13)),
+                  items: paramOptions
+                      .map((opt) => DropdownMenuItem(
+                            value: opt.key,
+                            child: Text(opt.value,
+                                style: GoogleFonts.dmSans(
+                                    color: _kText, fontSize: 14)),
+                          ))
+                      .toList(),
+                  onChanged: (v) => setState(
+                      () => _manualCaptures[index].selectedParamId = v),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // ── Camera capture row ─────────────────────────────────────
+            Row(children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: hasParam ? () => _captureManualPhoto(index) : null,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    height: 50,
+                    decoration: BoxDecoration(
+                      color: !hasParam
+                          ? _kSurface
+                          : hasCaptured
+                              ? _kSuccess.withOpacity(0.08)
+                              : _kTeal.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: !hasParam
+                            ? _kBorder
+                            : hasCaptured
+                                ? _kSuccess.withOpacity(0.4)
+                                : _kTeal.withOpacity(0.4),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          hasCaptured
+                              ? Icons.check_circle_outline_rounded
+                              : Icons.camera_alt_outlined,
+                          size: 18,
+                          color: !hasParam
+                              ? _kDisable
+                              : hasCaptured
+                                  ? _kSuccess
+                                  : _kTeal,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          hasCaptured ? 'Retake Photo' : 'Capture Photo',
+                          style: GoogleFonts.dmSans(
+                            color: !hasParam
+                                ? _kDisable
+                                : hasCaptured
+                                    ? _kSuccess
+                                    : _kTeal,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (hasCaptured) ...[
+                const SizedBox(width: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(entry.capturedImage!,
+                      width: 50, height: 50, fit: BoxFit.cover),
+                ),
+              ],
+            ]),
+
+            // ── Label hint ─────────────────────────────────────────────
+            if (hasParam && hasCaptured) ...[
+              const SizedBox(height: 8),
+              Builder(builder: (_) {
+                final label = paramOptions
+                    .firstWhere((o) => o.key == entry.selectedParamId,
+                        orElse: () => MapEntry(entry.selectedParamId!, ''))
+                    .value;
+                return Row(children: [
+                  const Icon(Icons.check_circle_rounded,
+                      size: 11, color: _kSuccess),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Will save as: manual_${label}_captured_image',
+                    style: GoogleFonts.dmSans(fontSize: 10, color: _kSuccess),
+                  ),
+                ]);
+              }),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   // ── Property field builder ─────────────────────────────────────────────
 
   Widget _buildPropField(Map<String, dynamic> p) {
@@ -974,7 +1257,20 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final isReq = p['required'] == true;
     final hasCam = p['capture_image'] == true;
     final isEffectivelyRequired = isReq || hasCam;
-    final violation = _violations[id];
+    final violationList = _violations[id] ?? [];
+    final hasViolations = violationList.isNotEmpty;
+
+    // Highest severity among all active violations
+    String? topSeverity;
+    if (hasViolations) {
+      if (violationList.any((v) => v.severity == 'critical')) {
+        topSeverity = 'critical';
+      } else if (violationList.any((v) => v.severity == 'warning')) {
+        topSeverity = 'warning';
+      } else {
+        topSeverity = 'info';
+      }
+    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 20),
@@ -991,10 +1287,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               ),
             ),
             if (isEffectivelyRequired) _Badge('REQUIRED', _kDanger),
-            if (violation != null) ...[
+            if (hasViolations) ...[
               const SizedBox(width: 6),
-              _Badge(violation.severity.toUpperCase(),
-                  _severityColor(violation.severity)),
+              _Badge(
+                  '${violationList.length} ALERT${violationList.length > 1 ? 'S' : ''}',
+                  _severityColor(topSeverity)),
             ],
           ]),
 
@@ -1009,17 +1306,17 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           // ── Input widget ────────────────────────────────────────────
           _buildInput(p, id, type, hint, isReq),
 
-          // ── Violation banner ────────────────────────────────────────
-          if (violation != null) ...[
-            const SizedBox(height: 8),
-            _ViolationBanner(
-              violation: violation,
-              violationPhoto: _violationPhoto[id],
-              onCapturePhoto: violation.captureImageOnViolation
-                  ? () => _captureViolationPhoto(id)
-                  : null,
-            ),
-          ],
+          // ── Violation banners — one per active constraint ───────────
+          ...violationList.map((v) => Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: _ViolationBanner(
+                  violation: v,
+                  violationPhoto: _violationPhotos[id]?[v.constraintId],
+                  onCapturePhoto: v.captureImageOnViolation
+                      ? () => _captureViolationPhoto(id, v.constraintId)
+                      : null,
+                ),
+              )),
 
           // ── Normal per-param camera ─────────────────────────────────
           if (hasCam) ...[
@@ -1065,8 +1362,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   Widget _buildInput(
       Map<String, dynamic> p, String id, String type, String hint, bool isReq) {
-    final violation = _violations[id];
-    final hasViolation = violation != null;
+    final violations = _violations[id] ?? [];
+    final hasViolation = violations.isNotEmpty;
 
     switch (type) {
       // ── Number ────────────────────────────────────────────────────
@@ -1145,7 +1442,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                   .toList(),
               onChanged: (v) {
                 setState(() => _dropdownVal[id] = v);
-                // Trigger constraint evaluation after dropdown change
                 WidgetsBinding.instance
                     .addPostFrameCallback((_) => _onValueChanged(id));
               },
@@ -1277,7 +1573,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIOLATION BANNER — shown inline below the field
+// VIOLATION BANNER — shown inline below the field, one per constraint
 // ─────────────────────────────────────────────────────────────────────────────
 class _ViolationBanner extends StatelessWidget {
   final _Violation violation;
@@ -1426,7 +1722,7 @@ class _ViolationBanner extends StatelessWidget {
 // BLOCK BANNER — bottom of page when submission is blocked
 // ─────────────────────────────────────────────────────────────────────────────
 class _BlockBanner extends StatelessWidget {
-  final Map<String, _Violation?> violations;
+  final Map<String, List<_Violation>> violations;
   final List<Map<String, dynamic>> props;
 
   const _BlockBanner({required this.violations, required this.props});
@@ -1434,7 +1730,7 @@ class _BlockBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final blocked = violations.entries
-        .where((e) => e.value?.blockSubmission == true)
+        .where((e) => e.value.any((v) => v.blockSubmission))
         .map((e) {
       final p = props.firstWhere((pp) => pp['id'] == e.key,
           orElse: () => {'label': e.key});
