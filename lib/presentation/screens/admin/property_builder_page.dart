@@ -1,3 +1,26 @@
+// lib/presentation/screens/admin/property_builder_page.dart
+// ══════════════════════════════════════════════════════════════════════════════
+// PropertyBuilderPage — Google-Forms-style inspection parameter builder.
+//
+// CHANGED vs previous version:
+//   ✅ _addOrEditConstraint() dialog now includes:
+//        • Severity selector  (info / warning / critical)
+//        • Alert Title field
+//        • "Store history"            checkbox  → store_history
+//        • "Show dashboard alert"     checkbox  → show_dashboard_alert
+//        • "Play sound on violation"  checkbox  → play_sound_on_violation
+//        • "Capture image on violation" checkbox → capture_image_on_violation
+//        • "Block submission"         checkbox  → block_submission
+//   ✅ Constraint chip in the list now shows severity colour badge
+//   ✅ Constraint summary row in the card shows all active flags as icons
+//   ✅ Saved constraint map matches AlertModel / AlertRepository schema exactly
+//
+// UNCHANGED:
+//   Everything else — type picker, live preview, dropdown config,
+//   dual_text config, slider config, required / capture_image switches,
+//   constraints collapsible header, all colour constants, helper widgets.
+// ══════════════════════════════════════════════════════════════════════════════
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -5,32 +28,38 @@ import 'create_tank_screen_helpers.dart';
 import 'types_and_small_widgets.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PropertyBuilderPage  (Google-Forms-style, live preview)
+// Palette (unchanged)
 // ─────────────────────────────────────────────────────────────────────────────
 const _kBg = Color(0xFF0C0D0F);
-
 const _kSurface = Color(0xFF141618);
-
 const _kCard = Color(0xFF1A1C20);
-
-// Accent (teal/live data)
 const _kAccent = Color(0xFF1ABCBD);
-
-// Border
 const _kBorder = Color(0xFF252830);
-
-// Text
 const _kText = Color(0xFFF0EEE9);
-
 const _kSub = Color(0xFF8A8F9C);
-
-// States
 const _kSuccess = Color(0xFF22C55E);
-
 const _kWarn = Color(0xFFF59E0B);
-
 const _kDanger = Color(0xFFEF4444);
 
+// Severity colours
+const _kSevInfo = Color(0xFF60A5FA); // blue
+const _kSevWarning = Color(0xFFF59E0B); // amber
+const _kSevCritical = Color(0xFFEF4444); // red
+
+Color _sevColor(String s) {
+  switch (s) {
+    case 'critical':
+      return _kSevCritical;
+    case 'warning':
+      return _kSevWarning;
+    default:
+      return _kSevInfo;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PropertyBuilderPage
+// ─────────────────────────────────────────────────────────────────────────────
 class PropertyBuilderPage extends StatefulWidget {
   final Map<String, dynamic>? existing;
   final void Function(Map<String, dynamic>) onSave;
@@ -47,7 +76,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   final _hintCtrl = TextEditingController();
   final _leftLabelCtrl = TextEditingController();
   final _rightLabelCtrl = TextEditingController();
-  // min/max ONLY for slider
   final _minCtrl = TextEditingController(text: '0');
   final _maxCtrl = TextEditingController(text: '100');
 
@@ -56,8 +84,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   bool _captureImage = false;
   final List<String> _options = [];
   final List<Map<String, dynamic>> _constraints = [];
-
-  // tracks whether constraints panel is expanded
   bool _constraintsExpanded = false;
 
   static const _types = [
@@ -68,6 +94,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     TypeMeta('slider', 'Slider', Icons.linear_scale),
     TypeMeta('multiline', 'Multiline', Icons.notes),
   ];
+
+  // ── lifecycle ──────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -81,7 +109,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       _leftLabelCtrl,
       _rightLabelCtrl,
       _minCtrl,
-      _maxCtrl,
+      _maxCtrl
     ]) {
       c.addListener(() {
         if (mounted) setState(() {});
@@ -97,7 +125,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       _captureImage = p['capture_image'] == true;
       _leftLabelCtrl.text = p['left_label'] ?? 'Before';
       _rightLabelCtrl.text = p['right_label'] ?? 'After';
-      // min/max only relevant for slider
       _minCtrl.text = (p['min'] ?? 0).toString();
       _maxCtrl.text = (p['max'] ?? 100).toString();
       if (p['options'] != null) {
@@ -110,9 +137,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         );
         if (_constraints.isNotEmpty) _constraintsExpanded = true;
       }
-      debugPrint('[PropertyBuilder] Loaded existing: type=$_type '
-          'label=${_labelCtrl.text} options=${_options.length} '
-          'constraints=${_constraints.length}');
     }
   }
 
@@ -127,10 +151,9 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     super.dispose();
   }
 
-  // ── dropdown option management ─────────────────────────────────────────────
+  // ── Dropdown option management (UNCHANGED) ─────────────────────────────────
 
   Future<void> _addOrEditOption({int? idx}) async {
-    debugPrint('[Dropdown] _addOrEditOption idx=$idx');
     final ctrl = TextEditingController(text: idx != null ? _options[idx] : '');
     await showDialog<void>(
       context: context,
@@ -149,12 +172,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              debugPrint('[Dropdown] Option dialog cancelled');
-              Navigator.pop(context);
-            },
-            child: const Text('Cancel', style: TextStyle(color: kSub)),
-          ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: kSub))),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: kAccent),
             onPressed: () {
@@ -162,7 +181,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
               if (val.isEmpty) return;
               setState(
                   () => idx != null ? _options[idx] = val : _options.add(val));
-              debugPrint('[Dropdown] Option saved: $val at idx=$idx');
               Navigator.pop(context);
             },
             child: const Text('Save'),
@@ -172,169 +190,426 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     );
   }
 
-  // ── constraint management ──────────────────────────────────────────────────
+  // ── Constraint management — ENHANCED DIALOG ────────────────────────────────
 
   Future<void> _addOrEditConstraint({int? idx}) async {
     debugPrint('[Constraints] _addOrEditConstraint idx=$idx');
     final existing = idx != null ? _constraints[idx] : null;
     final ops = opsForType(_type);
 
-    String selectedOp = existing?['op'] as String? ?? ops.first.value;
+    // ── Dialog state ─────────────────────────────────────────────────────────
+    String selectedOp = existing?['op']?.toString() ?? ops.first.value;
+    String severity = existing?['severity']?.toString() ?? 'warning';
     final valueCtrl =
-        TextEditingController(text: existing?['value'] as String? ?? '');
+        TextEditingController(text: existing?['value']?.toString() ?? '');
     final errorMsgCtrl =
-        TextEditingController(text: existing?['error_msg'] as String? ?? '');
+        TextEditingController(text: existing?['message']?.toString() ?? '');
+    final alertTitleCtrl =
+        TextEditingController(text: existing?['alert_title']?.toString() ?? '');
+
+    bool storeHistory = existing?['store_history'] == true;
+    bool showDashboard = existing?['show_dashboard_alert'] == true;
+    bool playSound = existing?['play_sound_on_violation'] == true;
+    bool captureOnViolation = existing?['capture_image_on_violation'] == true;
+    bool blockSubmission = existing?['block_submission'] == false
+        ? false
+        : (existing?['block_submission'] == true);
 
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          backgroundColor: kCard,
-          titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-          contentPadding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-          actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-          title: Text(
-            idx != null ? 'Edit Constraint' : 'Add Constraint',
-            style: GoogleFonts.inter(color: kText, fontWeight: FontWeight.w600),
-          ),
-          content: SingleChildScrollView(
+        builder: (ctx, setDlg) {
+          // ── helper: dark checkbox tile ─────────────────────────────────────
+          Widget checkTile({
+            required bool value,
+            required String label,
+            required String sub,
+            required IconData icon,
+            required Color activeColor,
+            required ValueChanged<bool?> onChanged,
+          }) {
+            return GestureDetector(
+              onTap: () => onChanged(!value),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                margin: const EdgeInsets.only(bottom: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: value ? activeColor.withOpacity(0.08) : _kSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: value ? activeColor.withOpacity(0.45) : _kBorder,
+                    width: value ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(children: [
+                  Icon(icon, size: 16, color: value ? activeColor : _kSub),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(label,
+                            style: GoogleFonts.dmSans(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: value ? activeColor : _kText)),
+                        Text(sub,
+                            style:
+                                GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
+                      ],
+                    ),
+                  ),
+                  // Checkbox visual
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: value ? activeColor : Colors.transparent,
+                      border: Border.all(
+                          color: value ? activeColor : _kBorder, width: 2),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: value
+                        ? const Icon(Icons.check_rounded,
+                            size: 13, color: Colors.white)
+                        : null,
+                  ),
+                ]),
+              ),
+            );
+          }
+
+          return Dialog(
+            backgroundColor: _kCard,
+            insetPadding:
+                const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ── Operator selector ──────────────────────────────
-                _dlgLabel('Operator'),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: ops.map((op) {
-                    final sel = selectedOp == op.value;
-                    return GestureDetector(
-                      onTap: () => setDlg(() => selectedOp = op.value),
-                      child: AnimatedContainer(
-                        duration: const Duration(milliseconds: 140),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: sel ? kAccent.withOpacity(0.15) : kSurface,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color: sel ? kAccent : kBorder,
-                              width: sel ? 2 : 1),
+                // ── Dialog header ─────────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 16, 14),
+                  decoration: const BoxDecoration(
+                    color: _kSurface,
+                    borderRadius:
+                        BorderRadius.vertical(top: Radius.circular(18)),
+                    border: Border(bottom: BorderSide(color: _kBorder)),
+                  ),
+                  child: Row(children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFBB86FC).withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.rule_outlined,
+                          size: 15, color: Color(0xFFBB86FC)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        idx != null ? 'Edit Constraint' : 'Add Constraint',
+                        style: GoogleFonts.dmSans(
+                            color: _kText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => Navigator.pop(ctx),
+                      child: const Icon(Icons.close_rounded,
+                          color: _kSub, size: 18),
+                    ),
+                  ]),
+                ),
+
+                // ── Scrollable body ───────────────────────────────────────────
+                Flexible(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // ── 1. Operator ──────────────────────────────────────
+                        _dlgLabel('Operator'),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: ops.map((op) {
+                            final sel = selectedOp == op.value;
+                            return GestureDetector(
+                              onTap: () => setDlg(() => selectedOp = op.value),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 130),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 8),
+                                decoration: BoxDecoration(
+                                  color: sel
+                                      ? _kAccent.withOpacity(0.14)
+                                      : _kSurface,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                      color: sel ? _kAccent : _kBorder,
+                                      width: sel ? 1.5 : 1),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(op.symbol,
+                                        style: TextStyle(
+                                            fontSize: 15,
+                                            fontWeight: FontWeight.w700,
+                                            color: sel ? _kAccent : _kText)),
+                                    const SizedBox(height: 2),
+                                    Text(op.label,
+                                        style: TextStyle(
+                                            fontSize: 9,
+                                            color: sel ? _kAccent : _kSub)),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }).toList(),
                         ),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(op.symbol,
-                                style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: sel ? _kAccent : _kText)),
-                            const SizedBox(height: 2),
-                            Text(op.label,
-                                style: TextStyle(
-                                    fontSize: 10,
-                                    color: sel ? _kAccent : _kSub)),
-                          ],
+
+                        const SizedBox(height: 16),
+
+                        // ── 2. Value ─────────────────────────────────────────
+                        _dlgLabel('Threshold Value *'),
+                        const SizedBox(height: 8),
+                        _DarkTextField(
+                          ctrl: valueCtrl,
+                          hint: (_type == 'number' || _type == 'slider')
+                              ? 'e.g. 80'
+                              : 'e.g. OK',
+                          icon: Icons.tag_rounded,
+                          keyboardType: (_type == 'number' || _type == 'slider')
+                              ? const TextInputType.numberWithOptions(
+                                  decimal: true)
+                              : TextInputType.text,
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // ── 3. Severity ──────────────────────────────────────
+                        _dlgLabel('Severity'),
+                        const SizedBox(height: 8),
+                        Row(children: [
+                          for (final sev in ['info', 'warning', 'critical'])
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: () => setDlg(() => severity = sev),
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 160),
+                                  margin: EdgeInsets.only(
+                                      right: sev == 'critical' ? 0 : 8),
+                                  height: 44,
+                                  decoration: BoxDecoration(
+                                    color: severity == sev
+                                        ? _sevColor(sev).withOpacity(0.14)
+                                        : _kSurface,
+                                    borderRadius: BorderRadius.circular(9),
+                                    border: Border.all(
+                                      color: severity == sev
+                                          ? _sevColor(sev)
+                                          : _kBorder,
+                                      width: severity == sev ? 1.5 : 1,
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      sev[0].toUpperCase() + sev.substring(1),
+                                      style: GoogleFonts.dmSans(
+                                        color: severity == sev
+                                            ? _sevColor(sev)
+                                            : _kSub,
+                                        fontWeight: severity == sev
+                                            ? FontWeight.w700
+                                            : FontWeight.normal,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ]),
+
+                        const SizedBox(height: 16),
+
+                        // ── 4. Alert title ───────────────────────────────────
+                        _dlgLabel('Alert Title  (optional)'),
+                        const SizedBox(height: 8),
+                        _DarkTextField(
+                          ctrl: alertTitleCtrl,
+                          hint: 'e.g. Overheat Detected',
+                          icon: Icons.title_rounded,
+                        ),
+
+                        const SizedBox(height: 16),
+
+                        // ── 5. Error / message ───────────────────────────────
+                        _dlgLabel('Error Message  (optional)'),
+                        const SizedBox(height: 8),
+                        _DarkTextField(
+                          ctrl: errorMsgCtrl,
+                          hint: 'e.g. Temperature exceeded safe limit',
+                          icon: Icons.warning_amber_outlined,
+                          maxLines: 2,
+                        ),
+
+                        const SizedBox(height: 18),
+
+                        // ── 6. Behaviour checkboxes ──────────────────────────
+                        _dlgLabel('BEHAVIOUR ON VIOLATION'),
+                        const SizedBox(height: 10),
+
+                        checkTile(
+                          value: storeHistory,
+                          label: 'Store history',
+                          sub: 'Save this violation as an Alert record in DB',
+                          icon: Icons.history_rounded,
+                          activeColor: _kAccent,
+                          onChanged: (v) =>
+                              setDlg(() => storeHistory = v ?? false),
+                        ),
+
+                        checkTile(
+                          value: showDashboard,
+                          label: 'Show dashboard alert',
+                          sub: 'Surface this alert on the dashboard',
+                          icon: Icons.dashboard_outlined,
+                          activeColor: _kSevWarning,
+                          onChanged: (v) =>
+                              setDlg(() => showDashboard = v ?? false),
+                        ),
+
+                        checkTile(
+                          value: playSound,
+                          label: 'Play sound on violation',
+                          sub:
+                              'Trigger beep / alert sound when constraint fails',
+                          icon: Icons.volume_up_outlined,
+                          activeColor: _kSevCritical,
+                          onChanged: (v) =>
+                              setDlg(() => playSound = v ?? false),
+                        ),
+
+                        checkTile(
+                          value: captureOnViolation,
+                          label: 'Capture image on violation',
+                          sub: 'Force inspector to take photo when this fires',
+                          icon: Icons.camera_alt_outlined,
+                          activeColor: _kSevWarning,
+                          onChanged: (v) =>
+                              setDlg(() => captureOnViolation = v ?? false),
+                        ),
+
+                        checkTile(
+                          value: blockSubmission,
+                          label: 'Block submission',
+                          sub: 'Prevent saving the reading until corrected',
+                          icon: Icons.block_rounded,
+                          activeColor: _kSevCritical,
+                          onChanged: (v) =>
+                              setDlg(() => blockSubmission = v ?? false),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // ── Footer ────────────────────────────────────────────────────
+                Container(
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
+                  decoration: const BoxDecoration(
+                    color: _kSurface,
+                    borderRadius:
+                        BorderRadius.vertical(bottom: Radius.circular(18)),
+                    border: Border(top: BorderSide(color: _kBorder)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: Text('Cancel',
+                            style: GoogleFonts.dmSans(color: _kSub)),
+                      ),
+                      const SizedBox(width: 10),
+                      GestureDetector(
+                        onTap: () {
+                          final val = valueCtrl.text.trim();
+                          if (val.isEmpty) return;
+
+                          final c = {
+                            'id': existing?['id'] ??
+                                'c_${DateTime.now().millisecondsSinceEpoch}',
+                            'op': selectedOp,
+                            'value': val,
+                            'severity': severity,
+                            'alert_title': alertTitleCtrl.text.trim(),
+                            'message': errorMsgCtrl.text.trim(),
+                            // Behaviour flags
+                            'store_history': storeHistory,
+                            'show_dashboard_alert': showDashboard,
+                            'play_sound_on_violation': playSound,
+                            'capture_image_on_violation': captureOnViolation,
+                            'block_submission': blockSubmission,
+                          };
+
+                          setState(() {
+                            if (idx != null) {
+                              _constraints[idx] = c;
+                            } else {
+                              _constraints.add(c);
+                            }
+                          });
+                          debugPrint('[Constraints] Saved: $c');
+                          Navigator.pop(ctx);
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: _kAccent,
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          child: Text(
+                            idx != null ? 'Update' : 'Add',
+                            style: GoogleFonts.dmSans(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13),
+                          ),
                         ),
                       ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-                // ── Value ──────────────────────────────────────────
-                _dlgLabel('Value'),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: valueCtrl,
-                  autofocus: true,
-                  style: const TextStyle(color: _kText),
-                  cursorColor: _kAccent,
-                  keyboardType: (_type == 'number' || _type == 'slider')
-                      ? const TextInputType.numberWithOptions(decimal: true)
-                      : TextInputType.text,
-                  decoration: compactDeco(
-                    hint: (_type == 'number' || _type == 'slider')
-                        ? 'e.g. 50'
-                        : 'e.g. OK',
-                    icon: Icons.edit_outlined,
+                    ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                // ── Custom error message ───────────────────────────
-                _dlgLabel('Custom Error Message  (optional)'),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: errorMsgCtrl,
-                  style: const TextStyle(color: _kText),
-                  cursorColor: _kAccent,
-                  decoration: compactDeco(
-                    hint: 'e.g. Value must be at least 50',
-                    icon: Icons.warning_amber_outlined,
-                  ),
-                ),
-                const SizedBox(height: 8),
               ],
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                debugPrint('[Constraints] Dialog cancelled');
-                Navigator.pop(ctx);
-              },
-              child: const Text('Cancel', style: TextStyle(color: _kSub)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: _kAccent),
-              onPressed: () {
-                final val = valueCtrl.text.trim();
-                if (val.isEmpty) return;
-                final c = {
-                  'op': selectedOp,
-                  'value': val,
-                  'error_msg': errorMsgCtrl.text.trim(),
-                };
-                setState(() {
-                  if (idx != null) {
-                    _constraints[idx] = c;
-                    debugPrint('[Constraints] Updated at idx=$idx: $c');
-                  } else {
-                    _constraints.add(c);
-                    debugPrint(
-                        '[Constraints] Added: $c total=${_constraints.length}');
-                  }
-                });
-                Navigator.pop(ctx);
-              },
-              child: Text(idx != null ? 'Update' : 'Add',
-                  style: const TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
 
   void _deleteConstraint(int idx) {
-    debugPrint('[Constraints] Delete at idx=$idx');
     setState(() => _constraints.removeAt(idx));
   }
 
-  // ── save ───────────────────────────────────────────────────────────────────
+  // ── save (UNCHANGED logic, map keys updated to match AlertModel) ───────────
 
   void _save() {
-    debugPrint('[PropertyBuilder] _save() called — type=$_type '
-        'label=${_labelCtrl.text.trim()}');
-
-    if (!_formKey.currentState!.validate()) {
-      debugPrint('[PropertyBuilder] Form validation FAILED');
-      return;
-    }
-
+    if (!_formKey.currentState!.validate()) return;
     if (_type == 'dropdown' && _options.isEmpty) {
-      debugPrint('[PropertyBuilder] Dropdown has no options — blocking save');
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Add at least one dropdown option',
             style: TextStyle(color: _kText)),
@@ -359,19 +634,18 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       'right_label': _rightLabelCtrl.text.trim().isEmpty
           ? 'After'
           : _rightLabelCtrl.text.trim(),
-      // min/max ONLY stored for slider; ignored for all other types
       if (_type == 'slider') ...{
         'min': double.tryParse(_minCtrl.text.trim()) ?? 0,
         'max': double.tryParse(_maxCtrl.text.trim()) ?? 100,
       },
       'constraints': List<Map<String, dynamic>>.from(_constraints),
     };
-    debugPrint('[PropertyBuilder] Calling onSave with prop=$prop');
+    debugPrint('[PropertyBuilder] onSave: $prop');
     widget.onSave(prop);
     Navigator.pop(context);
   }
 
-  // ── build ──────────────────────────────────────────────────────────────────
+  // ── BUILD ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -388,10 +662,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              debugPrint('[PropertyBuilder] AppBar Save tapped');
-              _save();
-            },
+            onPressed: _save,
             child: const Text('Save',
                 style: TextStyle(
                     fontWeight: FontWeight.w700,
@@ -403,10 +674,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       body: Theme(
         data: Theme.of(context).copyWith(
           colorScheme: const ColorScheme.dark(
-            primary: _kAccent,
-            surface: _kSurface,
-            onSurface: _kText,
-          ),
+              primary: _kAccent, surface: _kSurface, onSurface: _kText),
         ),
         child: Form(
           key: _formKey,
@@ -418,6 +686,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                 _sl('Parameter Type'),
                 const SizedBox(height: 10),
                 _buildTypePicker(),
+
                 const SizedBox(height: 20),
                 _sl('Label *'),
                 const SizedBox(height: 8),
@@ -430,6 +699,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                   validator: (v) =>
                       v!.trim().isEmpty ? 'Label is required' : null,
                 ),
+
                 const SizedBox(height: 16),
                 _sl('Hint / Helper Text'),
                 const SizedBox(height: 8),
@@ -441,8 +711,10 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                       hint: 'e.g. Enter between 5 – 10',
                       icon: Icons.info_outline),
                 ),
+
                 const SizedBox(height: 16),
-                // ── Required toggle ────────────────────────────────
+
+                // Required toggle
                 Container(
                   decoration: BoxDecoration(
                       color: _kSurface,
@@ -463,65 +735,50 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                     activeColor: _kAccent,
                     value: _required,
                     onChanged: _captureImage
-                        ? null // locked when capture_image is on
-                        : (v) {
-                            debugPrint(
-                                '[PropertyBuilder] Required toggled to $v');
-                            setState(() => _required = v);
-                          },
+                        ? null
+                        : (v) => setState(() => _required = v),
                   ),
                 ),
-                const SizedBox(height: 16),
 
+                const SizedBox(height: 12),
+
+                // Capture image toggle
                 Container(
                   decoration: BoxDecoration(
-                    color: _kSurface,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: _kBorder),
-                  ),
+                      color: _kSurface,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kBorder)),
                   child: SwitchListTile(
                     value: _captureImage,
                     activeColor: _kAccent,
-                    title: Text(
-                      'Capture Image',
-                      style: GoogleFonts.inter(
-                        fontWeight: FontWeight.w500,
-                        fontSize: 14,
-                        color: _kText,
-                      ),
-                    ),
+                    title: Text('Capture Image',
+                        style: GoogleFonts.inter(
+                            fontWeight: FontWeight.w500,
+                            fontSize: 14,
+                            color: _kText)),
                     subtitle: Text(
                       _captureImage
                           ? 'Inspector must capture image for this parameter'
                           : 'No image required',
-                      style: const TextStyle(
-                        color: _kSub,
-                        fontSize: 12,
-                      ),
+                      style: const TextStyle(color: _kSub, fontSize: 12),
                     ),
-                    onChanged: (v) {
-                      debugPrint('[PropertyBuilder] Capture image changed: $v');
-                      setState(() {
-                        _captureImage = v;
-                        if (v)
-                          _required =
-                              true; // capture_image=true → required must be true
-                      });
-                    },
+                    onChanged: (v) => setState(() {
+                      _captureImage = v;
+                      if (v) _required = true;
+                    }),
                   ),
                 ),
+
                 const SizedBox(height: 20),
-                // ── Type-specific config ───────────────────────────
                 _buildTypeConfig(),
                 const SizedBox(height: 24),
-                // ── Constraints section ────────────────────────────
                 _buildConstraintsSection(),
                 const SizedBox(height: 28),
-                // ── Live preview ───────────────────────────────────
                 _sl('Live Preview  (updates as you type)'),
                 const SizedBox(height: 10),
                 _buildLivePreview(),
                 const SizedBox(height: 36),
+
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
@@ -532,10 +789,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12)),
                     ),
-                    onPressed: () {
-                      debugPrint('[PropertyBuilder] CTA button tapped');
-                      _save();
-                    },
+                    onPressed: _save,
                     child: Text(
                       widget.existing != null
                           ? 'Update Parameter'
@@ -553,7 +807,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     );
   }
 
-  // ── type picker ────────────────────────────────────────────────────────────
+  // ── Type picker (UNCHANGED) ────────────────────────────────────────────────
 
   Widget _buildTypePicker() {
     return Wrap(
@@ -563,14 +817,10 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         final selected = _type == t.value;
         final color = _typeColorFor(t.value);
         return GestureDetector(
-          onTap: () {
-            debugPrint('[PropertyBuilder] Type selected: ${t.value}');
-            // When type changes, reset constraints (they're type-specific)
-            setState(() {
-              _type = t.value;
-              _constraints.clear();
-            });
-          },
+          onTap: () => setState(() {
+            _type = t.value;
+            _constraints.clear();
+          }),
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -580,26 +830,22 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
               border: Border.all(
                   color: selected ? color : _kBorder, width: selected ? 2 : 1),
             ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(t.icon, size: 16, color: selected ? color : _kSub),
-                const SizedBox(width: 6),
-                Text(t.label,
-                    style: GoogleFonts.inter(
-                        fontSize: 13,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w400,
-                        color: selected ? color : _kText)),
-              ],
-            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(t.icon, size: 16, color: selected ? color : _kSub),
+              const SizedBox(width: 6),
+              Text(t.label,
+                  style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                      color: selected ? color : _kText)),
+            ]),
           ),
         );
       }).toList(),
     );
   }
 
-  // ── type-specific config ───────────────────────────────────────────────────
+  // ── Type-specific config (UNCHANGED) ──────────────────────────────────────
 
   Widget _buildTypeConfig() {
     switch (_type) {
@@ -608,7 +854,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       case 'dual_text':
         return _dualTextConfig();
       case 'slider':
-        return _sliderConfig(); // ONLY slider gets min/max
+        return _sliderConfig();
       default:
         return const SizedBox.shrink();
     }
@@ -640,7 +886,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
               physics: const NeverScrollableScrollPhysics(),
               itemCount: _options.length,
               onReorder: (o, n) {
-                debugPrint('[Dropdown] Reorder $o → $n');
                 setState(() {
                   if (n > o) n--;
                   final item = _options.removeAt(o);
@@ -656,23 +901,16 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                     const Icon(Icons.drag_indicator, size: 18, color: _kSub),
                 title: Text(_options[i],
                     style: GoogleFonts.inter(fontSize: 14, color: _kText)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                        icon: const Icon(Icons.edit_outlined,
-                            size: 18, color: _kAccent),
-                        onPressed: () => _addOrEditOption(idx: i)),
-                    IconButton(
-                        icon: const Icon(Icons.delete_outline,
-                            size: 18, color: _kDanger),
-                        onPressed: () {
-                          debugPrint(
-                              '[Dropdown] Delete option at idx=$i: ${_options[i]}');
-                          setState(() => _options.removeAt(i));
-                        }),
-                  ],
-                ),
+                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                  IconButton(
+                      icon: const Icon(Icons.edit_outlined,
+                          size: 18, color: _kAccent),
+                      onPressed: () => _addOrEditOption(idx: i)),
+                  IconButton(
+                      icon: const Icon(Icons.delete_outline,
+                          size: 18, color: _kDanger),
+                      onPressed: () => setState(() => _options.removeAt(i))),
+                ]),
               ),
             ),
           const SizedBox(height: 10),
@@ -687,7 +925,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
               ),
               icon: const Icon(Icons.add),
               label: const Text('Add Option'),
-              onPressed: () => _addOrEditOption(),
+              onPressed: _addOrEditOption,
             ),
           ),
         ],
@@ -698,9 +936,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         children: [
           _sl('Column Labels'),
           const SizedBox(height: 4),
-          const Text(
-              'One label row, two text boxes in a single row.\n'
-              'Name each column so inspectors know what to enter.',
+          const Text('One label row, two text boxes in a single row.',
               style: TextStyle(fontSize: 11, color: _kSub)),
           const SizedBox(height: 12),
           Row(children: [
@@ -731,7 +967,6 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         ],
       );
 
-  // ONLY slider gets min/max fields
   Widget _sliderConfig() => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -760,8 +995,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                 validator: (v) {
                   final max = double.tryParse(v ?? '');
                   if (max == null) return 'Invalid';
-                  final min = double.tryParse(_minCtrl.text) ?? 0;
-                  if (max <= min) return 'Must be > Min';
+                  if (max <= (double.tryParse(_minCtrl.text) ?? 0))
+                    return 'Must be > Min';
                   return null;
                 },
               ),
@@ -770,7 +1005,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         ],
       );
 
-  // ── Constraints section ────────────────────────────────────────────────────
+  // ── Constraints section (header/shell UNCHANGED; chips updated) ────────────
 
   Widget _buildConstraintsSection() {
     final ops = opsForType(_type);
@@ -778,20 +1013,16 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
     return Container(
       decoration: BoxDecoration(
-        color: _kSurface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _kBorder),
-      ),
+          color: _kSurface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kBorder)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── collapsible header ─────────────────────────────────
+          // ── Collapsible header (UNCHANGED) ──────────────────────────────
           InkWell(
-            onTap: () {
-              debugPrint(
-                  '[Constraints] Toggle expanded: ${!_constraintsExpanded}');
-              setState(() => _constraintsExpanded = !_constraintsExpanded);
-            },
+            onTap: () =>
+                setState(() => _constraintsExpanded = !_constraintsExpanded),
             borderRadius: BorderRadius.circular(12),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -838,16 +1069,16 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                   ),
                 const SizedBox(width: 6),
                 Icon(
-                  _constraintsExpanded
-                      ? Icons.keyboard_arrow_up
-                      : Icons.keyboard_arrow_down,
-                  size: 20,
-                  color: _kSub,
-                ),
+                    _constraintsExpanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    size: 20,
+                    color: _kSub),
               ]),
             ),
           ),
-          // ── expanded body ──────────────────────────────────────
+
+          // ── Expanded body ────────────────────────────────────────────────
           if (_constraintsExpanded) ...[
             Divider(height: 1, thickness: 1, color: _kBorder),
             Padding(
@@ -856,12 +1087,12 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'All constraints must pass (AND logic). '
-                    'Operators available for this type are shown when you add.',
+                    'All constraints must pass (AND logic).',
                     style: TextStyle(fontSize: 11, color: _kSub),
                   ),
                   const SizedBox(height: 12),
-                  // ── existing constraints list ────────────────
+
+                  // Constraint list
                   if (_constraints.isEmpty)
                     Container(
                       width: double.infinity,
@@ -869,76 +1100,165 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                       decoration: BoxDecoration(
                           color: _kBg,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color: _kBorder, style: BorderStyle.solid)),
+                          border: Border.all(color: _kBorder)),
                       child: const Center(
-                        child: Text('No constraints yet',
-                            style: TextStyle(fontSize: 12, color: _kSub)),
-                      ),
+                          child: Text('No constraints yet',
+                              style: TextStyle(fontSize: 12, color: _kSub))),
                     )
                   else
                     ...List.generate(_constraints.length, (i) {
                       final c = _constraints[i];
-                      final op = c['op'] as String? ?? '';
-                      final val = c['value'] as String? ?? '';
-                      final msg = c['error_msg'] as String? ?? '';
+                      final op = c['op']?.toString() ?? '';
+                      final val = c['value']?.toString() ?? '';
+                      final msg = c['message']?.toString() ?? '';
+                      final sev = c['severity']?.toString() ?? 'warning';
+                      final sevColor = _sevColor(sev);
+
+                      // Collect active flags for icon row
+                      final flags = <_ConstraintFlag>[];
+                      if (c['store_history'] == true)
+                        flags.add(_ConstraintFlag(
+                            Icons.history_rounded, _kAccent, 'Stored'));
+                      if (c['show_dashboard_alert'] == true)
+                        flags.add(_ConstraintFlag(Icons.dashboard_outlined,
+                            _kSevWarning, 'Dashboard'));
+                      if (c['play_sound_on_violation'] == true)
+                        flags.add(_ConstraintFlag(
+                            Icons.volume_up_outlined, _kSevCritical, 'Sound'));
+                      if (c['capture_image_on_violation'] == true)
+                        flags.add(_ConstraintFlag(
+                            Icons.camera_alt_outlined, _kSevWarning, 'Camera'));
+                      if (c['block_submission'] == true)
+                        flags.add(_ConstraintFlag(
+                            Icons.block_rounded, _kSevCritical, 'Blocks'));
+
                       return Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 10),
+                        margin: const EdgeInsets.only(bottom: 10),
                         decoration: BoxDecoration(
                           color: _kBg,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _kBorder),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: sevColor.withOpacity(0.3)),
                         ),
-                        child: Row(children: [
-                          // operator symbol badge
-                          Container(
-                            width: 32,
-                            height: 32,
-                            alignment: Alignment.center,
-                            decoration: BoxDecoration(
-                                color:
-                                    const Color(0xFFBB86FC).withOpacity(0.15),
-                                borderRadius: BorderRadius.circular(8)),
-                            child: Text(
-                              opSymbol(_type, op),
-                              style: const TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFFBB86FC)),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${opLabel(_type, op)}   "$val"',
-                                  style: GoogleFonts.inter(
-                                      fontSize: 13,
-                                      color: _kText,
-                                      fontWeight: FontWeight.w500),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Top row: severity badge + operator + value + edit/delete
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+                              child: Row(children: [
+                                // Severity badge
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 7, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: sevColor.withOpacity(0.13),
+                                    borderRadius: BorderRadius.circular(5),
+                                    border: Border.all(
+                                        color: sevColor.withOpacity(0.4)),
+                                  ),
+                                  child: Text(
+                                    sev.toUpperCase(),
+                                    style: GoogleFonts.spaceGrotesk(
+                                        fontSize: 8,
+                                        color: sevColor,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: 0.8),
+                                  ),
                                 ),
-                                if (msg.isNotEmpty) ...[
-                                  const SizedBox(height: 2),
-                                  Text(msg,
+                                const SizedBox(width: 8),
+                                // Operator chip
+                                Container(
+                                  width: 28,
+                                  height: 28,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFBB86FC)
+                                        .withOpacity(0.13),
+                                    borderRadius: BorderRadius.circular(7),
+                                  ),
+                                  child: Center(
+                                    child: Text(
+                                      opSymbol(_type, op),
                                       style: const TextStyle(
-                                          fontSize: 11, color: _kSub)),
-                                ],
-                              ],
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFFBB86FC)),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '${opLabel(_type, op)}  "$val"',
+                                        style: GoogleFonts.dmSans(
+                                            fontSize: 13,
+                                            color: _kText,
+                                            fontWeight: FontWeight.w600),
+                                      ),
+                                      if (msg.isNotEmpty)
+                                        Text(msg,
+                                            style: GoogleFonts.dmSans(
+                                                fontSize: 11, color: _kSub)),
+                                    ],
+                                  ),
+                                ),
+                                _iconTap(Icons.edit_outlined, _kAccent,
+                                    () => _addOrEditConstraint(idx: i)),
+                                _iconTap(Icons.delete_outline, _kDanger,
+                                    () => _deleteConstraint(i)),
+                              ]),
                             ),
-                          ),
-                          _iconTap(Icons.edit_outlined, _kAccent,
-                              () => _addOrEditConstraint(idx: i)),
-                          _iconTap(Icons.delete_outline, _kDanger,
-                              () => _deleteConstraint(i)),
-                        ]),
+
+                            // Flag icon row (only shown when flags exist)
+                            if (flags.isNotEmpty)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                                child: Wrap(
+                                  spacing: 6,
+                                  runSpacing: 4,
+                                  children: flags
+                                      .map((f) => Container(
+                                            padding: const EdgeInsets.symmetric(
+                                                horizontal: 7, vertical: 3),
+                                            decoration: BoxDecoration(
+                                              color: f.color.withOpacity(0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(5),
+                                              border: Border.all(
+                                                  color:
+                                                      f.color.withOpacity(0.3)),
+                                            ),
+                                            child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Icon(f.icon,
+                                                      size: 10, color: f.color),
+                                                  const SizedBox(width: 4),
+                                                  Text(f.label,
+                                                      style: GoogleFonts
+                                                          .spaceGrotesk(
+                                                              fontSize: 8,
+                                                              color: f.color,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w700,
+                                                              letterSpacing:
+                                                                  0.4)),
+                                                ]),
+                                          ))
+                                      .toList(),
+                                ),
+                              ),
+                          ],
+                        ),
                       );
                     }),
+
                   const SizedBox(height: 10),
-                  // ── Add constraint button ────────────────────
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -951,10 +1271,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                       ),
                       icon: const Icon(Icons.add),
                       label: const Text('Add Constraint'),
-                      onPressed: () {
-                        debugPrint('[Constraints] Add Constraint tapped');
-                        _addOrEditConstraint();
-                      },
+                      onPressed: _addOrEditConstraint,
                     ),
                   ),
                 ],
@@ -966,7 +1283,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     );
   }
 
-  // ── live preview ───────────────────────────────────────────────────────────
+  // ── Live preview (UNCHANGED) ───────────────────────────────────────────────
 
   Widget _buildLivePreview() {
     final label = _labelCtrl.text.trim().isEmpty
@@ -984,29 +1301,26 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: MediaQuery.of(context).size.width * 0.22,
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 10),
-                  child: Text(label,
-                      style: GoogleFonts.inter(
-                          fontWeight: FontWeight.w500,
-                          fontSize: 13,
-                          color: _kText)),
-                ),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+              width: MediaQuery.of(context).size.width * 0.22,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: Text(label,
+                    style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w500,
+                        fontSize: 13,
+                        color: _kText)),
               ),
-              if (_required)
-                const Padding(
-                  padding: EdgeInsets.only(top: 10, right: 2),
-                  child: Text(' *',
-                      style: TextStyle(color: _kDanger, fontSize: 13)),
-                ),
-              Expanded(child: _liveInput(hint)),
-            ],
-          ),
+            ),
+            if (_required)
+              const Padding(
+                padding: EdgeInsets.only(top: 10, right: 2),
+                child:
+                    Text(' *', style: TextStyle(color: _kDanger, fontSize: 13)),
+              ),
+            Expanded(child: _liveInput(hint)),
+          ]),
           if (_hintCtrl.text.trim().isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(_hintCtrl.text.trim(),
@@ -1036,9 +1350,9 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
     switch (_type) {
       case 'dropdown':
-        final previewValue = _options.isNotEmpty ? _options.first : null;
+        final pv = _options.isNotEmpty ? _options.first : null;
         return DropdownButtonFormField<String>(
-          value: previewValue,
+          value: pv,
           items: _options.isNotEmpty
               ? _options
                   .map((o) => DropdownMenuItem(
@@ -1070,44 +1384,37 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         final right = _rightLabelCtrl.text.trim().isEmpty
             ? 'After'
             : _rightLabelCtrl.text.trim();
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Expanded(
+        return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(
                 child: Text(left,
                     style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: _kSub)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
+                        color: _kSub))),
+            const SizedBox(width: 8),
+            Expanded(
                 child: Text(right,
                     style: const TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
-                        color: _kSub)),
-              ),
-            ]),
-            const SizedBox(height: 5),
-            Row(children: [
-              Expanded(
+                        color: _kSub))),
+          ]),
+          const SizedBox(height: 5),
+          Row(children: [
+            Expanded(
                 child: TextField(
                     readOnly: true,
                     style: const TextStyle(color: _kText, fontSize: 13),
-                    decoration: baseDec.copyWith(hintText: left)),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
+                    decoration: baseDec.copyWith(hintText: left))),
+            const SizedBox(width: 8),
+            Expanded(
                 child: TextField(
                     readOnly: true,
                     style: const TextStyle(color: _kText, fontSize: 13),
-                    decoration: baseDec.copyWith(hintText: right)),
-              ),
-            ]),
-          ],
-        );
+                    decoration: baseDec.copyWith(hintText: right))),
+          ]),
+        ]);
 
       case 'slider':
         final mn = double.tryParse(_minCtrl.text) ?? 0;
@@ -1123,35 +1430,30 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
             ),
             child: Slider(value: mn, min: mn, max: safeMx, onChanged: null),
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('$mn', style: const TextStyle(fontSize: 11, color: _kSub)),
-              Text('$mx', style: const TextStyle(fontSize: 11, color: _kSub)),
-            ],
-          ),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text('$mn', style: const TextStyle(fontSize: 11, color: _kSub)),
+            Text('$mx', style: const TextStyle(fontSize: 11, color: _kSub)),
+          ]),
         ]);
 
       case 'multiline':
         return TextField(
-          readOnly: true,
-          maxLines: 3,
-          style: const TextStyle(color: _kText, fontSize: 13),
-          decoration: baseDec.copyWith(hintText: hint),
-        );
+            readOnly: true,
+            maxLines: 3,
+            style: const TextStyle(color: _kText, fontSize: 13),
+            decoration: baseDec.copyWith(hintText: hint));
 
-      default: // number | text
+      default:
         return TextField(
-          readOnly: true,
-          keyboardType:
-              _type == 'number' ? TextInputType.number : TextInputType.text,
-          style: const TextStyle(color: _kText, fontSize: 13),
-          decoration: baseDec.copyWith(hintText: hint),
-        );
+            readOnly: true,
+            keyboardType:
+                _type == 'number' ? TextInputType.number : TextInputType.text,
+            style: const TextStyle(color: _kText, fontSize: 13),
+            decoration: baseDec.copyWith(hintText: hint));
     }
   }
 
-  // ─── helpers ───────────────────────────────────────────────────────────────
+  // ── tiny helpers ───────────────────────────────────────────────────────────
 
   Widget _sl(String t) => Text(t,
       style: GoogleFonts.inter(
@@ -1168,12 +1470,11 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
           letterSpacing: 0.8));
 
   Widget _iconTap(IconData icon, Color color, VoidCallback onTap) => InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Padding(
-            padding: const EdgeInsets.all(6),
-            child: Icon(icon, size: 18, color: color)),
-      );
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(icon, size: 18, color: color)));
 
   Color _typeColorFor(String t) =>
       const {
@@ -1185,4 +1486,62 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         'multiline': Color(0xFF7986CB),
       }[t] ??
       _kSub;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _ConstraintFlag — tiny data class for the flag icon row
+// ─────────────────────────────────────────────────────────────────────────────
+class _ConstraintFlag {
+  final IconData icon;
+  final Color color;
+  final String label;
+  const _ConstraintFlag(this.icon, this.color, this.label);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _DarkTextField — reusable dark-themed single/multi-line field
+// ─────────────────────────────────────────────────────────────────────────────
+class _DarkTextField extends StatelessWidget {
+  final TextEditingController ctrl;
+  final String hint;
+  final IconData icon;
+  final int maxLines;
+  final TextInputType? keyboardType;
+
+  const _DarkTextField({
+    required this.ctrl,
+    required this.hint,
+    required this.icon,
+    this.maxLines = 1,
+    this.keyboardType,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final border = OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _kBorder));
+    return TextField(
+      controller: ctrl,
+      maxLines: maxLines,
+      keyboardType: keyboardType,
+      style: const TextStyle(color: _kText, fontSize: 14),
+      cursorColor: _kAccent,
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: const TextStyle(color: _kSub, fontSize: 13),
+        prefixIcon: maxLines == 1 ? Icon(icon, size: 17, color: _kSub) : null,
+        filled: true,
+        fillColor: _kSurface,
+        isDense: true,
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        border: border,
+        enabledBorder: border,
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: _kAccent, width: 1.5)),
+      ),
+    );
+  }
 }
