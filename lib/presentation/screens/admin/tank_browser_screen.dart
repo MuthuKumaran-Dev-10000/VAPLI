@@ -428,16 +428,74 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     );
   }
 
+  // Future<void> _deleteNode(TankNode node) async {
+  //   final confirmed = await _confirmDialog(
+  //     context,
+  //     title: 'Delete ${node.isFolder ? 'Group' : 'Tank'}',
+  //     message: node.isFolder
+  //         ? 'Delete "${node.name}" and all its contents? Cannot be undone.'
+  //         : 'Remove "${node.name}" from this group? The tank record is preserved.',
+  //   );
+  //   if (!confirmed) return;
+  //   await _treeRepo.deleteNode(node.id);
+  // }
+
   Future<void> _deleteNode(TankNode node) async {
     final confirmed = await _confirmDialog(
       context,
       title: 'Delete ${node.isFolder ? 'Group' : 'Tank'}',
       message: node.isFolder
           ? 'Delete "${node.name}" and all its contents? Cannot be undone.'
-          : 'Remove "${node.name}" from this group? The tank record is preserved.',
+          : 'Delete "${node.name}" completely? This removes tank, dashboard stats, alerts, readings, and tree references.',
     );
+
     if (!confirmed) return;
-    await _treeRepo.deleteNode(node.id);
+
+    try {
+      // ─────────────────────────────────────────────
+      // LEAF = REAL TANK DELETE
+      // ─────────────────────────────────────────────
+      if (node.isLeaf && node.tankId != null) {
+        debugPrint(
+          '[DELETE] Full tank delete tankId=${node.tankId}',
+        );
+
+        await _tankRepo.deleteTank(
+          node.tankId!,
+        );
+      }
+
+      // ─────────────────────────────────────────────
+      // FOLDER DELETE
+      // ─────────────────────────────────────────────
+      else {
+        debugPrint(
+          '[DELETE] Folder delete nodeId=${node.id}',
+        );
+
+        await _treeRepo.deleteNode(
+          node.id,
+        );
+      }
+
+      if (mounted) {
+        _snack(
+          '${node.isFolder ? 'Group' : 'Tank'} deleted successfully',
+          _kSuccess,
+        );
+      }
+    } catch (e, s) {
+      debugPrint(
+        '[DELETE ERROR] $e\n$s',
+      );
+
+      if (mounted) {
+        _snack(
+          'Delete failed: $e',
+          _kDanger,
+        );
+      }
+    }
   }
 
   Future<void> _showRenameDialog(TankNode node) async {

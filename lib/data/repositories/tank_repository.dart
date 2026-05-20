@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:http/http.dart' as http;
 
@@ -11,6 +12,8 @@ import '../../core/constants/app_constants.dart';
 import '../../core/utils/hash_util.dart';
 
 import '../models/tank_model.dart';
+
+import 'tank_tree_repository.dart';
 
 class TankRepository {
   final _db = FirebaseDatabase.instance.ref();
@@ -290,13 +293,81 @@ class TankRepository {
         );
   }
 
-  Future<void> deleteTank(
-    String id,
+  Future<void> deleteTankFromTree(
+    String tankId,
   ) async {
-    final tank = await getTankById(
-      id,
+    final snap = await _db.child("tank_tree").get();
+
+    if (!snap.exists) return;
+
+    final tree = Map<String, dynamic>.from(
+      snap.value as Map,
     );
 
+    await _walkAndDeleteTank(
+      node: tree,
+      currentPath: "tank_tree",
+      tankId: tankId,
+    );
+  }
+  // ── HELPERS ───────────────────────────────────────────────────────────────
+
+  Future<void> _walkAndDeleteTank({
+    required Map node,
+    required String currentPath,
+    required String tankId,
+  }) async {
+    for (final e in node.entries) {
+      try {
+        final key = e.key.toString();
+        final value = e.value;
+
+        final path = "$currentPath/$key";
+
+        // SAFE MAP CHECK
+        if (value is Map) {
+          final map = Map<String, dynamic>.from(
+            value.map(
+              (k, v) => MapEntry(
+                k.toString(),
+                v,
+              ),
+            ),
+          );
+
+          // MATCH TANK
+          if (map["tank_id"]?.toString() == tankId ||
+              map["id"]?.toString() == tankId) {
+            debugPrint(
+              "[DELETE] Removing tree node: $path",
+            );
+
+            await _db.child(path).remove();
+
+            continue;
+          }
+
+          // RECURSIVE WALK
+          await _walkAndDeleteTank(
+            node: map,
+            currentPath: path,
+            tankId: tankId,
+          );
+        }
+      } catch (e, s) {
+        debugPrint(
+          "[DELETE TREE ERROR] $e\n$s",
+        );
+      }
+    }
+  }
+
+  Future<void> deleteTank(String id) async {
+    final tank = await getTankById(id);
+
+    // ─────────────────────────────────────────────
+    // DELETE CLOUDINARY QR
+    // ─────────────────────────────────────────────
     if (tank?.qrImageUrl != null) {
       final publicId = _extractPublicId(
         tank!.qrImageUrl,
@@ -304,22 +375,144 @@ class TankRepository {
 
       if (publicId != null) {
         try {
-          await _deleteCloudinaryAsset(
-            publicId,
-          );
+          await _deleteCloudinaryAsset(publicId);
         } catch (_) {}
       }
     }
 
-    await _db
-        .child(
-      "${AppConstants.tanksPath}/$id",
-    )
-        .update({
-      "is_active": false,
-      "updated_at": DateTime.now().toIso8601String(),
-    });
+    // ─────────────────────────────────────────────
+    // DELETE DASHBOARD STATS
+    // ─────────────────────────────────────────────
+    try {
+      await _db.child("dashboard_stats/$id").remove();
+    } catch (_) {}
+
+    // ─────────────────────────────────────────────
+    // DELETE FROM TANK TREE
+    // ─────────────────────────────────────────────
+    try {
+      await deleteTankFromTree(id);
+    } catch (_) {}
+
+    // ─────────────────────────────────────────────
+    // DELETE ALERTS
+    // ─────────────────────────────────────────────
+    await _deleteCollectionByTankId(
+      path: "alerts",
+      tankId: id,
+    );
+
+    await _deleteCollectionByTankId(
+      path: "alerts_full",
+      tankId: id,
+    );
+
+    await _deleteCollectionByTankId(
+      path: "violations",
+      tankId: id,
+    );
+
+    // ─────────────────────────────────────────────
+    // DELETE READINGS
+    // ─────────────────────────────────────────────
+    await _deleteCollectionByTankId(
+      path: "readings",
+      tankId: id,
+    );
+
+    // ─────────────────────────────────────────────
+    // FINALLY DELETE TANK
+    // ─────────────────────────────────────────────
+    await _db.child("${AppConstants.tanksPath}/$id").remove();
   }
+
+  // Future<void> _deleteCollectionByTankId({
+  //   required String path,
+  //   required String tankId,
+  // }) async {
+  //   final snap = await _db.child(path).get();
+
+  //   if (!snap.exists) return;
+
+  //   final map = Map<String, dynamic>.from(
+  //     snap.value as Map,
+  //   );
+
+  //   for (final e in map.entries) {
+  //     final data = Map<String, dynamic>.from(
+  //       e.value,
+  //     );
+
+  //     if (data["tank_id"] == tankId) {
+  //       await _db.child("$path/${e.key}").remove();
+  //     }
+  //   }
+  // }
+  Future<void> _deleteCollectionByTankId({
+  required String path,
+  required String tankId,
+}) async {
+  try {
+    final snap = await _db.child(path).get();
+
+    if (!snap.exists || snap.value == null) {
+      debugPrint(
+        "[DELETE] No data found in $path",
+      );
+      return;
+    }
+
+    // SAFE FIREBASE MAP CAST
+    final raw = snap.value as Map;
+
+    final map = Map<String, dynamic>.from(
+      raw.map(
+        (k, v) => MapEntry(
+          k.toString(),
+          v,
+        ),
+      ),
+    );
+
+    for (final e in map.entries) {
+      try {
+        if (e.value is! Map) {
+          continue;
+        }
+
+        final data = Map<String, dynamic>.from(
+          (e.value as Map).map(
+            (k, v) => MapEntry(
+              k.toString(),
+              v,
+            ),
+          ),
+        );
+
+        final currentTankId =
+            data["tank_id"]?.toString();
+
+        if (currentTankId == tankId) {
+          debugPrint(
+            "[DELETE] Removing $path/${e.key}",
+          );
+
+          await _db
+              .child("$path/${e.key}")
+              .remove();
+        }
+      } catch (e, s) {
+        debugPrint(
+          "[DELETE ITEM ERROR] $e\n$s",
+        );
+      }
+    }
+  } catch (e, s) {
+    debugPrint(
+      "[DELETE COLLECTION ERROR][$path] $e\n$s",
+    );
+  }
+}
 
   Future<String> duplicateTank(TankModel tank) async {
     final newRef = FirebaseDatabase.instance.ref('tanks').push();

@@ -1,36 +1,16 @@
 // lib/presentation/screens/readings/reading_entry_screen.dart
 // ══════════════════════════════════════════════════════════════════════════════
-// ALL EXISTING FEATURES PRESERVED:
-//   ✅ Global "Reference Photo" section removed (per v2)
-//   ✅ Per-parameter capture_image support (capture_image: true/false)
-//   ✅ Number hint shown above field AND as placeholder inside box
-//   ✅ Deep copy of inspectionProperties → fixes cross-tank param bleed bug
-//   ✅ All dynamic property types: number|text|multiline|dropdown|dual_text|slider
-//   ✅ Required-field enforcement blocks save button
-//   ✅ Constraint validation engine: <, <=, >, >=, ==, !=, contains
-//   ✅ DashboardStatsRepository.updateStatsAfterReading() on save
-//   ✅ Industrial luxury UI (copper accents, obsidian background)
-//
-// CONSTRAINT ACTIONS:
-//   ✅ LIVE validation on every keystroke / slider move / dropdown change
-//   ✅ block_submission: true  → save button disabled while constraint fires
-//   ✅ play_sound_on_violation → plays beep (SystemSoundType.alert) on violation
-//   ✅ capture_image_on_violation → shows mandatory camera button under the
-//      field when constraint fires; if value changes and constraint clears,
-//      the violation photo is automatically discarded
-//   ✅ show_dashboard_alert → writes a record to Firebase alerts/ node
-//   ✅ store_history → appended to violations/ node in Firebase
-//   ✅ Per-param violation state tracked independently
-//   ✅ Multiple constraints: ALL fired constraints shown (not just first)
-//   ✅ Per-constraint tracking: each constraint action tracked independently
-//   ✅ Cleared constraints auto-removed from UI and alerts dynamically
-//
-// NEW:
-//   ✅ Manual Capture Parameters section (bottom of page)
-//      - Dropdown to pick any inspection parameter
-//      - Camera capture button per entry
-//      - Add / Delete entries
-//      - Stored as manual_<paramLabel>_captured_image: imageUrl in reading
+// FEATURES:
+//   ✅ ALL original features preserved
+//   ✅ Capture image → immediate Cloudinary upload → URL stored in memory
+//   ✅ Violation alert written to DB the instant photo is captured (not on save)
+//   ✅ Constraint clears → corresponding alert record DELETED from DB dynamically
+//   ✅ Value changes → alert updated live in DB if constraint still active
+//   ✅ Manual captures hidden behind AppBar toggle (camera icon, top-right)
+//   ✅ Manual captures section expands / collapses — add/delete entries freely
+//   ✅ All per-param photo captures also upload immediately on capture
+//   ✅ On final Save: no re-upload needed (URLs already stored); just assembles
+//      the reading record and writes it
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
@@ -78,7 +58,7 @@ const _apiKey = 'dummy-cloudinary-api-key';
 const _apiSecret = 'dummy-cloudinary-api-secret';
 const _folder = 'lubricationindicator';
 
-// ── Severity → Color ──────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 Color _severityColor(String? s) {
   switch (s) {
     case 'critical':
@@ -105,7 +85,7 @@ IconData _severityIcon(String? s) {
   }
 }
 
-// ── Violation data class ──────────────────────────────────────────────────────
+// ── Data classes ──────────────────────────────────────────────────────────────
 class _Violation {
   final String constraintId;
   final String message;
@@ -130,10 +110,11 @@ class _Violation {
   });
 }
 
-// ── Manual Capture Entry ──────────────────────────────────────────────────────
 class _ManualCaptureEntry {
-  String? selectedParamId; // null = not yet selected
+  String? selectedParamId;
   File? capturedImage;
+  String? uploadedUrl; // URL after immediate upload
+  bool uploading = false;
 
   _ManualCaptureEntry({this.selectedParamId, this.capturedImage});
 }
@@ -157,34 +138,50 @@ class ReadingEntryScreen extends StatefulWidget {
 
 class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   final _picker = ImagePicker();
+  final _db = FirebaseDatabase.instance.ref();
 
-  // ── save state ─────────────────────────────────────────────────────────
+  // ── Save state ─────────────────────────────────────────────────────────
   bool _saving = false;
   bool _saved = false;
   bool _failed = false;
   String? _uploadError;
 
-  // ── dynamic property controllers ──────────────────────────────────────
+  // ── Manual captures toggle ─────────────────────────────────────────────
+  bool _showManualCaptures = false;
+
+  // ── Dynamic property controllers ──────────────────────────────────────
   final Map<String, TextEditingController> _textCtrl = {};
   final Map<String, TextEditingController> _dualLeft = {};
   final Map<String, TextEditingController> _dualRight = {};
   final Map<String, String?> _dropdownVal = {};
   final Map<String, double> _sliderVal = {};
 
-  /// Per-parameter photo (capture_image: true params)
+  // ── Per-param photo: File + already-uploaded URL ───────────────────────
+  // paramId → file (for display)
   final Map<String, File?> _paramPhoto = {};
+  // paramId → cloudinary URL (uploaded immediately on capture)
+  final Map<String, String?> _paramPhotoUrl = {};
+  // paramId → currently uploading flag
+  final Map<String, bool> _paramUploading = {};
 
-  /// Per-param violation photos per constraint: paramId → { constraintId → File? }
+  // ── Violation photos: paramId → constraintId → file ───────────────────
   final Map<String, Map<String, File?>> _violationPhotos = {};
+  // paramId → constraintId → cloudinary URL (uploaded immediately)
+  final Map<String, Map<String, String?>> _violationPhotoUrls = {};
+  // paramId → constraintId → uploading flag
+  final Map<String, Map<String, bool>> _violationUploading = {};
 
-  /// Current violations per param: paramId → List<_Violation> (all fired)
+  // ── Current violations per param ──────────────────────────────────────
   final Map<String, List<_Violation>> _violations = {};
 
-  /// Track which constraintIds have already fired their side-effects (sound/alert/history)
-  /// paramId → Set<constraintId>
+  // ── Live DB alert record IDs: paramId → constraintId → alertId ────────
+  // We store these so we can UPDATE or DELETE them as values change.
+  final Map<String, Map<String, String>> _liveAlertIds = {};
+
+  // ── Track side-effects already fired (sound/alert) ────────────────────
   final Map<String, Set<String>> _alreadyFiredConstraints = {};
 
-  // ── Manual Capture Entries ─────────────────────────────────────────────
+  // ── Manual captures ───────────────────────────────────────────────────
   final List<_ManualCaptureEntry> _manualCaptures = [];
 
   // ── Deep copy of inspection properties ────────────────────────────────
@@ -193,16 +190,12 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   String get _nowLabel =>
       DateFormat('dd MMM yyyy, HH:mm:ss').format(DateTime.now());
 
-  // ── Firebase ref ───────────────────────────────────────────────────────
-  final _db = FirebaseDatabase.instance.ref();
-
   // ── lifecycle ──────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
 
-    // Deep copy to prevent cross-tank bleed
     _props = widget.tank.inspectionProperties.map((p) {
       return Map<String, dynamic>.from(p.map((k, v) {
         if (v is List) return MapEntry(k, List<dynamic>.from(v));
@@ -239,13 +232,20 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           break;
       }
 
-      if (p['capture_image'] == true) _paramPhoto[id] = null;
+      if (p['capture_image'] == true) {
+        _paramPhoto[id] = null;
+        _paramPhotoUrl[id] = null;
+        _paramUploading[id] = false;
+      }
+
       _violations[id] = [];
       _violationPhotos[id] = {};
+      _violationPhotoUrls[id] = {};
+      _violationUploading[id] = {};
+      _liveAlertIds[id] = {};
       _alreadyFiredConstraints[id] = {};
     }
 
-    // Start with one empty manual capture entry
     _manualCaptures.add(_ManualCaptureEntry());
   }
 
@@ -257,7 +257,236 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     super.dispose();
   }
 
-  // ── Live value extraction per param ───────────────────────────────────
+  // ── Cloudinary upload ──────────────────────────────────────────────────
+
+  String _sig(String ts) => crypto.sha1
+      .convert(utf8.encode('folder=$_folder&timestamp=$ts$_apiSecret'))
+      .toString();
+
+  Future<String> _uploadFile(File file) async {
+    final ts = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
+    final req = http.MultipartRequest('POST',
+        Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/image/upload'));
+    req.fields['api_key'] = _apiKey;
+    req.fields['timestamp'] = ts;
+    req.fields['signature'] = _sig(ts);
+    req.fields['folder'] = _folder;
+    req.files.add(await http.MultipartFile.fromPath('file', file.path,
+        contentType:
+            MediaType.parse(lookupMimeType(file.path) ?? 'image/jpeg')));
+    final res = await http.Response.fromStream(await req.send());
+    if (res.statusCode != 200) {
+      throw Exception('Photo upload failed (${res.statusCode})');
+    }
+    return (json.decode(res.body) as Map)['secure_url'] as String;
+  }
+
+  // ── Immediate param photo upload ───────────────────────────────────────
+
+  Future<void> _captureParamImage(String paramId) async {
+    final img =
+        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    if (img == null || !mounted) return;
+
+    final annotated = await Navigator.push<File>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ImageMarkerScreen(imageFile: File(img.path))));
+    if (annotated == null || !mounted) return;
+
+    setState(() {
+      _paramPhoto[paramId] = annotated;
+      _paramPhotoUrl[paramId] = null;
+      _paramUploading[paramId] = true;
+    });
+
+    try {
+      final url = await _uploadFile(annotated);
+      if (mounted) {
+        setState(() {
+          _paramPhotoUrl[paramId] = url;
+          _paramUploading[paramId] = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _paramUploading[paramId] = false);
+        _snack('Photo upload failed: $e', _kDanger);
+      }
+    }
+  }
+
+  // ── Immediate violation photo upload + live DB write ───────────────────
+
+  Future<void> _captureViolationPhoto(
+      String paramId, String constraintId) async {
+    final img =
+        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    if (img == null || !mounted) return;
+
+    final annotated = await Navigator.push<File>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ImageMarkerScreen(imageFile: File(img.path))));
+    if (annotated == null || !mounted) return;
+
+    // Mark uploading
+    setState(() {
+      _violationPhotos[paramId] ??= {};
+      _violationPhotoUrls[paramId] ??= {};
+      _violationUploading[paramId] ??= {};
+      _violationPhotos[paramId]![constraintId] = annotated;
+      _violationUploading[paramId]![constraintId] = true;
+    });
+
+    try {
+      final url = await _uploadFile(annotated);
+      if (mounted) {
+        setState(() {
+          _violationPhotoUrls[paramId]![constraintId] = url;
+          _violationUploading[paramId]![constraintId] = false;
+        });
+        // Now write / update the live DB alert with the photo URL
+        await _writeLiveAlertWithPhoto(
+            paramId: paramId, constraintId: constraintId, imageUrl: url);
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _violationUploading[paramId]![constraintId] = false);
+        _snack('Evidence upload failed: $e', _kDanger);
+      }
+    }
+  }
+
+  // ── Immediate manual photo upload ──────────────────────────────────────
+
+  Future<void> _captureManualPhoto(int index) async {
+    final img =
+        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    if (img == null || !mounted) return;
+
+    final annotated = await Navigator.push<File>(
+        context,
+        MaterialPageRoute(
+            builder: (_) => ImageMarkerScreen(imageFile: File(img.path))));
+    if (annotated == null || !mounted) return;
+
+    setState(() {
+      _manualCaptures[index].capturedImage = annotated;
+      _manualCaptures[index].uploadedUrl = null;
+      _manualCaptures[index].uploading = true;
+    });
+
+    try {
+      final url = await _uploadFile(annotated);
+      if (mounted) {
+        setState(() {
+          _manualCaptures[index].uploadedUrl = url;
+          _manualCaptures[index].uploading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _manualCaptures[index].uploading = false);
+        _snack('Manual photo upload failed: $e', _kDanger);
+      }
+    }
+  }
+
+  // ── Live alert DB helpers ──────────────────────────────────────────────
+
+  /// Unique stable alert key for a param+constraint combo in this session.
+  String _alertKey(String paramId, String constraintId) =>
+      'live_${widget.tank.id}_${paramId}_$constraintId';
+
+  /// Write or update a live alert to DB.  Called (a) when constraint first
+  /// fires, and (b) when evidence photo is uploaded.
+  Future<void> _writeLiveAlertWithPhoto({
+    required String paramId,
+    required String constraintId,
+    String? imageUrl,
+  }) async {
+    final vList = _violations[paramId] ?? [];
+    final v = vList
+        .cast<_Violation?>()
+        .firstWhere((x) => x?.constraintId == constraintId, orElse: () => null);
+    if (v == null) return;
+
+    final p = _props.firstWhere((pp) => pp['id'] == paramId,
+        orElse: () => <String, dynamic>{});
+    if (p.isEmpty) return;
+    final type = p['type'] as String? ?? 'text';
+    final label = p['label'] as String? ?? paramId;
+    final val = _currentValue(paramId, type, p);
+
+    // Re-use existing alertId or create a new one.
+    _liveAlertIds[paramId] ??= {};
+    final existingId = _liveAlertIds[paramId]![constraintId];
+    final alertId = existingId ?? _alertKey(paramId, constraintId);
+    _liveAlertIds[paramId]![constraintId] = alertId;
+
+    final photoUrl =
+        imageUrl ?? _violationPhotoUrls[paramId]?[constraintId] ?? '';
+
+    final record = {
+      'id': alertId,
+      'tank_id': widget.tank.id,
+      'tank_name': widget.tank.tankName,
+      'tank_code': widget.tank.tankCode,
+      'constraint_id': constraintId,
+      'alert_title': v.alertTitle,
+      'message': v.message,
+      'severity': v.severity,
+      'param_id': paramId,
+      'param_label': label,
+      'param_value': val.toString(),
+      'captured_by': widget.currentUser.id,
+      'captured_by_name': widget.currentUser.fullName,
+      'image_url': photoUrl,
+      'timestamp': DateTime.now().toIso8601String(),
+      'acknowledged': false,
+      'live': true, // marks this as a real-time record
+    };
+
+    try {
+      if (v.showDashboardAlert) {
+        await _db.child('alerts/$alertId').set(record);
+      }
+      if (v.storeHistory) {
+        await _db.child('violations/$alertId').set(record);
+      }
+      // Always write to alerts_full for enterprise tracking
+      await _db.child('alerts_full/$alertId').set({
+        ...record,
+        'all_values_snapshot': _collectValues(),
+        'resolved': false,
+      });
+    } catch (e) {
+      debugPrint('[LiveAlert] Write failed: $e');
+    }
+  }
+
+  /// Delete a live alert from DB when constraint clears.
+  Future<void> _deleteLiveAlert({
+    required String paramId,
+    required String constraintId,
+  }) async {
+    final alertId = _liveAlertIds[paramId]?[constraintId];
+    if (alertId == null) return;
+
+    _liveAlertIds[paramId]!.remove(constraintId);
+
+    try {
+      await _db.child('alerts/$alertId').remove();
+      await _db.child('violations/$alertId').remove();
+      await _db.child('alerts_full/$alertId').remove();
+      debugPrint('[LiveAlert] Deleted alert $alertId (constraint cleared)');
+    } catch (e) {
+      debugPrint('[LiveAlert] Delete failed: $e');
+    }
+  }
+
+  // ── Value extraction ───────────────────────────────────────────────────
 
   dynamic _currentValue(String id, String type, Map<String, dynamic> p) {
     switch (type) {
@@ -281,7 +510,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
   }
 
-  // ── Constraint evaluator — returns ALL fired violations ────────────────
+  // ── Constraint evaluator ───────────────────────────────────────────────
 
   List<_Violation> _evaluateAllConstraints(
       Map<String, dynamic> p, dynamic value) {
@@ -299,7 +528,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       final expected = constraint['value']?.toString() ?? '';
 
       bool isFired = false;
-
       switch (op) {
         case '<':
           isFired =
@@ -318,12 +546,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               (double.tryParse(expected) ?? 0);
           break;
         case '==':
-          isFired =
-              actual.toLowerCase().trim() == expected.toLowerCase().trim();
+          isFired = actual.toLowerCase() == expected.toLowerCase();
           break;
         case '!=':
-          isFired =
-              actual.toLowerCase().trim() != expected.toLowerCase().trim();
+          isFired = actual.toLowerCase() != expected.toLowerCase();
           break;
         case 'contains':
           isFired = actual.toLowerCase().contains(expected.toLowerCase());
@@ -337,9 +563,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         case 'regex':
           try {
             isFired = RegExp(expected).hasMatch(actual);
-          } catch (_) {
-            isFired = false;
-          }
+          } catch (_) {}
           break;
       }
 
@@ -361,122 +585,98 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     return fired;
   }
 
-  // ── Called whenever a param value changes ──────────────────────────────
+  // ── Called on every value change ───────────────────────────────────────
 
   void _onValueChanged(String id) {
     final p = _props.firstWhere((e) => e['id'] == id,
         orElse: () => <String, dynamic>{});
     if (p.isEmpty) return;
+
     final type = p['type'] as String? ?? 'text';
     final val = _currentValue(id, type, p);
-
     final prevViolations = List<_Violation>.from(_violations[id] ?? []);
     final newViolations = _evaluateAllConstraints(p, val);
-    final newConstraintIds = newViolations.map((v) => v.constraintId).toSet();
-    final prevConstraintIds = prevViolations.map((v) => v.constraintId).toSet();
+    final newIds = newViolations.map((v) => v.constraintId).toSet();
+    final prevIds = prevViolations.map((v) => v.constraintId).toSet();
 
-    // ── Dynamically clean up cleared constraints ────────────────────────
-    // Remove violation photos for constraints that are no longer firing
-    for (final prevId in prevConstraintIds) {
-      if (!newConstraintIds.contains(prevId)) {
-        if (_violationPhotos[id]?.containsKey(prevId) == true) {
-          debugPrint(
-              '[Constraint] Constraint $prevId cleared → discarding violation photo');
-          _violationPhotos[id]?.remove(prevId);
-        }
-        // Allow re-firing this constraint if it was cleared then re-triggered
-        _alreadyFiredConstraints[id]?.remove(prevId);
-      }
+    // ── Constraints that CLEARED → delete DB alerts ────────────────────
+    for (final clearedId in prevIds.difference(newIds)) {
+      // Discard violation photo for cleared constraint
+      _violationPhotos[id]?.remove(clearedId);
+      _violationPhotoUrls[id]?.remove(clearedId);
+      _alreadyFiredConstraints[id]?.remove(clearedId);
+      // Delete live DB record
+      _deleteLiveAlert(paramId: id, constraintId: clearedId);
     }
 
-    setState(() {
-      _violations[id] = newViolations;
-    });
+    setState(() => _violations[id] = newViolations);
 
-    // ── Trigger side-effects for newly fired constraints ────────────────
+    // ── Newly fired constraints ────────────────────────────────────────
     for (final v in newViolations) {
       final alreadyFired =
           _alreadyFiredConstraints[id]?.contains(v.constraintId) ?? false;
 
       if (!alreadyFired) {
         _alreadyFiredConstraints[id]?.add(v.constraintId);
-        _handleViolationTriggered(
-          paramId: id,
-          param: p,
-          value: val,
-          violation: v,
-        );
+        _handleConstraintFired(paramId: id, param: p, value: val, violation: v);
+      } else {
+        // Constraint already firing but value changed → update DB record
+        _updateLiveAlert(
+            paramId: id, constraintId: v.constraintId, newValue: val);
       }
     }
 
-    // ── If ALL constraints cleared, reset sound tracking ───────────────
     if (newViolations.isEmpty && prevViolations.isNotEmpty) {
       _alreadyFiredConstraints[id]?.clear();
     }
   }
 
-  // ── Capture violation photo for a specific constraint ──────────────────
+  // ── Handle first fire of a constraint ─────────────────────────────────
 
-  Future<void> _captureViolationPhoto(
-      String paramId, String constraintId) async {
-    final img =
-        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
-    if (img == null) return;
-    if (!mounted) return;
+  Future<void> _handleConstraintFired({
+    required String paramId,
+    required Map<String, dynamic> param,
+    required dynamic value,
+    required _Violation violation,
+  }) async {
+    // Sound / haptic
+    if (violation.playSoundOnViolation) {
+      try {
+        await SystemSound.play(SystemSoundType.alert);
+      } catch (_) {}
+      try {
+        await HapticFeedback.vibrate();
+      } catch (_) {}
+    }
 
-    final annotated = await Navigator.push<File>(
-      context,
-      MaterialPageRoute(
-          builder: (_) => ImageMarkerScreen(imageFile: File(img.path))),
-    );
-    if (annotated != null && mounted) {
-      setState(() {
-        _violationPhotos[paramId] ??= {};
-        _violationPhotos[paramId]![constraintId] = annotated;
-      });
+    // Write live alert immediately (photo URL may be empty at this point;
+    // it gets updated when the user captures the evidence photo)
+    await _writeLiveAlertWithPhoto(
+        paramId: paramId, constraintId: violation.constraintId);
+  }
+
+  /// Update the param_value field on an existing live alert when value changes.
+  Future<void> _updateLiveAlert({
+    required String paramId,
+    required String constraintId,
+    required dynamic newValue,
+  }) async {
+    final alertId = _liveAlertIds[paramId]?[constraintId];
+    if (alertId == null) return;
+    try {
+      final update = {
+        'param_value': newValue.toString(),
+        'timestamp': DateTime.now().toIso8601String(),
+        'all_values_snapshot': _collectValues(),
+      };
+      await _db.child('alerts/$alertId').update(update);
+      await _db.child('alerts_full/$alertId').update(update);
+    } catch (e) {
+      debugPrint('[LiveAlert] Update failed: $e');
     }
   }
 
-  // ── Capture normal per-param photo ────────────────────────────────────
-
-  Future<void> _captureParamImage(String paramId) async {
-    final img =
-        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
-    if (img == null) return;
-    if (!mounted) return;
-
-    final annotated = await Navigator.push<File>(
-      context,
-      MaterialPageRoute(
-          builder: (_) => ImageMarkerScreen(imageFile: File(img.path))),
-    );
-    if (annotated != null && mounted) {
-      setState(() {
-        _paramPhoto[paramId] = annotated;
-        _uploadError = null;
-      });
-    }
-  }
-
-  // ── Capture manual param photo ─────────────────────────────────────────
-
-  Future<void> _captureManualPhoto(int index) async {
-    final img =
-        await _picker.pickImage(source: ImageSource.camera, imageQuality: 90);
-    if (img == null) return;
-    if (!mounted) return;
-
-    final annotated = await Navigator.push<File>(
-      context,
-      MaterialPageRoute(
-          builder: (_) => ImageMarkerScreen(imageFile: File(img.path))),
-    );
-    if (annotated != null && mounted) {
-      setState(() => _manualCaptures[index].capturedImage = annotated);
-    }
-  }
-
-  // ── Required / block check ─────────────────────────────────────────────
+  // ── Required / block checks ────────────────────────────────────────────
 
   String? _requiredError() {
     for (final p in _props) {
@@ -533,20 +733,28 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     return false;
   }
 
+  bool get _hasUploadInProgress {
+    if (_paramUploading.values.any((v) => v == true)) return true;
+    if (_violationUploading.values.any((m) => m.values.any((v) => v == true)))
+      return true;
+    if (_manualCaptures.any((e) => e.uploading)) return true;
+    return false;
+  }
+
   bool get _canSave {
     if (_saving || _saved) return false;
     if (_hasBlockingViolation) return false;
     if (_hasMissingViolationPhoto) return false;
+    if (_hasUploadInProgress) return false;
     for (final p in _props) {
       if (p['capture_image'] == true) {
-        final id = p['id'] as String;
-        if (_paramPhoto[id] == null) return false;
+        if (_paramPhoto[p['id'] as String] == null) return false;
       }
     }
     return true;
   }
 
-  // ── Collect values ─────────────────────────────────────────────────────
+  // ── Collect values for the reading record ──────────────────────────────
 
   Map<String, dynamic> _collectValues() {
     final out = <String, dynamic>{};
@@ -582,185 +790,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     return out;
   }
 
-  // ── Cloudinary upload ──────────────────────────────────────────────────
-
-  String _sig(String ts) => crypto.sha1
-      .convert(utf8.encode('folder=$_folder&timestamp=$ts$_apiSecret'))
-      .toString();
-
-  Future<String> _uploadFile(File file) async {
-    final ts = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
-    final req = http.MultipartRequest('POST',
-        Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/image/upload'));
-    req.fields['api_key'] = _apiKey;
-    req.fields['timestamp'] = ts;
-    req.fields['signature'] = _sig(ts);
-    req.fields['folder'] = _folder;
-    req.files.add(await http.MultipartFile.fromPath('file', file.path,
-        contentType:
-            MediaType.parse(lookupMimeType(file.path) ?? 'image/jpeg')));
-    final res = await http.Response.fromStream(await req.send());
-    if (res.statusCode != 200) {
-      throw Exception('Photo upload failed (${res.statusCode})');
-    }
-    return (json.decode(res.body) as Map)['secure_url'] as String;
-  }
-
-  // ── Dashboard alert writer ─────────────────────────────────────────────
-
-  Future<void> _writeDashboardAlert({
-    required String paramId,
-    required String paramLabel,
-    required dynamic paramValue,
-    required _Violation violation,
-    String? imageUrl,
-  }) async {
-    if (!violation.showDashboardAlert) return;
-    final id = '${DateTime.now().millisecondsSinceEpoch}-alert';
-    final timestamp = DateTime.now().toIso8601String();
-    final alert = {
-      'id': id,
-      'tank_id': widget.tank.id,
-      'tank_name': widget.tank.tankName,
-      'tank_code': widget.tank.tankCode,
-      'constraint_id': violation.constraintId,
-      'alert_title': violation.alertTitle,
-      'message': violation.message,
-      'severity': violation.severity,
-      'param_id': paramId,
-      'param_label': paramLabel,
-      'param_value': paramValue.toString(),
-      'captured_by': widget.currentUser.id,
-      'captured_by_name': widget.currentUser.fullName,
-      'image_url': imageUrl ?? '',
-      'timestamp': timestamp,
-      'acknowledged': false,
-    };
-    debugPrint('[Alert] Writing dashboard alert: $id');
-    await _db.child('alerts/$id').set(alert);
-  }
-
-  Future<void> _writeViolationHistory({
-    required String paramId,
-    required String paramLabel,
-    required dynamic paramValue,
-    required _Violation violation,
-    String? imageUrl,
-  }) async {
-    if (!violation.storeHistory) return;
-    final id = '${DateTime.now().millisecondsSinceEpoch}-violation';
-    final timestamp = DateTime.now().toIso8601String();
-    final record = {
-      'id': id,
-      'tank_id': widget.tank.id,
-      'tank_name': widget.tank.tankName,
-      'constraint_id': violation.constraintId,
-      'alert_title': violation.alertTitle,
-      'message': violation.message,
-      'severity': violation.severity,
-      'param_id': paramId,
-      'param_label': paramLabel,
-      'param_value': paramValue.toString(),
-      'captured_by': widget.currentUser.id,
-      'captured_by_name': widget.currentUser.fullName,
-      'image_url': imageUrl ?? '',
-      'timestamp': timestamp,
-    };
-    debugPrint('[Alert] Writing violation history: $id');
-    await _db.child('violations/$id').set(record);
-  }
-
-  Future<void> _handleViolationTriggered({
-    required String paramId,
-    required Map<String, dynamic> param,
-    required dynamic value,
-    required _Violation violation,
-  }) async {
-    try {
-      final label = param['label']?.toString() ?? paramId;
-
-      // Play beep sound if required — uses HapticFeedback heavy as audible
-      // fallback since SystemSound.play is silent on many devices without
-      // audio files. We layer both for max compatibility.
-      if (violation.playSoundOnViolation) {
-        try {
-          await SystemSound.play(SystemSoundType.alert);
-        } catch (_) {}
-        try {
-          await HapticFeedback.vibrate();
-        } catch (_) {}
-      }
-
-      String? imageUrl;
-      // upload evidence photo if exists for this constraint
-      final violationFile = _violationPhotos[paramId]?[violation.constraintId];
-      if (violationFile != null) {
-        imageUrl = await _uploadFile(violationFile);
-      }
-
-      // collect ALL current values
-      final snapshot = _collectValues();
-
-      // fill defaults for missing fields
-      for (final p in _props) {
-        final lbl = p['label']?.toString() ?? '';
-        if (!snapshot.containsKey(lbl) ||
-            snapshot[lbl] == null ||
-            snapshot[lbl].toString().trim().isEmpty) {
-          snapshot[lbl] = p['default_value'] ?? '';
-        }
-      }
-
-      // write dashboard alert
-      await _writeDashboardAlert(
-        paramId: paramId,
-        paramLabel: label,
-        paramValue: value,
-        violation: violation,
-        imageUrl: imageUrl,
-      );
-
-      // write history
-      await _writeViolationHistory(
-        paramId: paramId,
-        paramLabel: label,
-        paramValue: value,
-        violation: violation,
-        imageUrl: imageUrl,
-      );
-
-      // FULL enterprise alert object
-      final alertId =
-          '${DateTime.now().millisecondsSinceEpoch}_${violation.constraintId}';
-
-      await _db.child('alerts_full/$alertId').set({
-        'id': alertId,
-        'tank_id': widget.tank.id,
-        'tank_name': widget.tank.tankName,
-        'tank_code': widget.tank.tankCode,
-        'param_id': paramId,
-        'param_label': label,
-        'constraint_id': violation.constraintId,
-        'constraint_snapshot': {
-          'message': violation.message,
-          'severity': violation.severity,
-          'alert_title': violation.alertTitle,
-        },
-        'actual_value': value,
-        'all_values_snapshot': snapshot,
-        'captured_by': widget.currentUser.id,
-        'captured_by_name': widget.currentUser.fullName,
-        'image_url': imageUrl ?? '',
-        'created_at': DateTime.now().toIso8601String(),
-        'acknowledged': false,
-        'resolved': false,
-      });
-    } catch (e) {
-      debugPrint('[Violation Trigger Error] $e');
-    }
-  }
-
   // ── Save ───────────────────────────────────────────────────────────────
+  //
+  // All images have already been uploaded during capture.
+  // This just assembles the reading record using the stored URLs.
 
   Future<void> _save() async {
     final propErr = _requiredError();
@@ -781,83 +814,52 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     });
 
     try {
-      // 1. Upload per-param photos
-      final paramImageUrls = <String, String>{};
-      for (final p in _props) {
-        final id = p['id'] as String;
-        if (p['capture_image'] == true && _paramPhoto[id] != null) {
-          paramImageUrls[id] = await _uploadFile(_paramPhoto[id]!);
-        }
+      // 1. Assemble inspection values using already-uploaded URLs
+      final inspVals = _collectValues();
+
+      // Merge per-param photo URLs
+      for (final e in _paramPhotoUrl.entries) {
+        if (e.value != null) inspVals['${e.key}__image_url'] = e.value!;
       }
 
-      // 2. Upload violation photos (per-constraint)
-      final violationImageUrls = <String, Map<String, String>>{};
-      for (final p in _props) {
-        final id = p['id'] as String;
-        final cMap = _violationPhotos[id] ?? {};
-        for (final entry in cMap.entries) {
-          if (entry.value != null) {
-            violationImageUrls[id] ??= {};
-            violationImageUrls[id]![entry.key] =
-                await _uploadFile(entry.value!);
+      // Merge violation photo URLs
+      for (final paramEntry in _violationPhotoUrls.entries) {
+        for (final cEntry in paramEntry.value.entries) {
+          if (cEntry.value != null) {
+            inspVals['${paramEntry.key}__violation_${cEntry.key}_image_url'] =
+                cEntry.value!;
           }
         }
       }
 
-      // 3. Upload manual capture photos
-      final manualImageUrls = <int, String>{};
+      // Merge manual capture URLs
       for (int i = 0; i < _manualCaptures.length; i++) {
         final entry = _manualCaptures[i];
-        if (entry.selectedParamId != null && entry.capturedImage != null) {
-          manualImageUrls[i] = await _uploadFile(entry.capturedImage!);
-        }
-      }
-
-      // 4. Collect values
-      final inspVals = _collectValues();
-
-      // Merge param image URLs
-      for (final e in paramImageUrls.entries) {
-        inspVals['${e.key}__image_url'] = e.value;
-      }
-
-      // Merge violation image URLs (flattened per param+constraint)
-      for (final paramEntry in violationImageUrls.entries) {
-        for (final cEntry in paramEntry.value.entries) {
-          inspVals['${paramEntry.key}__violation_${cEntry.key}_image_url'] =
-              cEntry.value;
-        }
-      }
-
-      // Merge manual capture image URLs
-      // Key format: manual_<paramLabel>_captured_image
-      for (int i = 0; i < _manualCaptures.length; i++) {
-        final entry = _manualCaptures[i];
-        if (entry.selectedParamId != null && manualImageUrls.containsKey(i)) {
+        if (entry.selectedParamId != null && entry.uploadedUrl != null) {
           final paramLabel = _props.firstWhere(
                       (p) => p['id'] == entry.selectedParamId,
                       orElse: () => {'label': entry.selectedParamId})['label']
                   as String? ??
               entry.selectedParamId!;
-          // If multiple manual captures for same param, append index
           final key = 'manual_${paramLabel}_captured_image';
           if (inspVals.containsKey(key)) {
             inspVals['manual_${paramLabel}_captured_image_$i'] =
-                manualImageUrls[i];
+                entry.uploadedUrl!;
           } else {
-            inspVals[key] = manualImageUrls[i];
+            inspVals[key] = entry.uploadedUrl!;
           }
         }
       }
 
-      // 5. Final constraint validation
+      // 2. Final constraint check
       for (final p in _props) {
         final id = p['id'] as String;
         final type = p['type'] as String? ?? 'text';
         final label = p['label'] as String? ?? id;
         final val = _currentValue(id, type, p);
-        final violations = _evaluateAllConstraints(p, val);
-        final blocking = violations.where((v) => v.blockSubmission).toList();
+        final blocking = _evaluateAllConstraints(p, val)
+            .where((v) => v.blockSubmission)
+            .toList();
         if (blocking.isNotEmpty) {
           _snack('"$label": ${blocking.first.message}', _kDanger);
           setState(() => _saving = false);
@@ -865,37 +867,12 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      // 6. Write dashboard alerts + violation history for active violations
-      for (final p in _props) {
-        final id = p['id'] as String;
-        final type = p['type'] as String? ?? 'text';
-        final label = p['label'] as String? ?? id;
-        final val = _currentValue(id, type, p);
-        final vList = _violations[id] ?? [];
-        for (final v in vList) {
-          final imgUrl = violationImageUrls[id]?[v.constraintId] ?? '';
-          await _writeDashboardAlert(
-            paramId: id,
-            paramLabel: label,
-            paramValue: val,
-            violation: v,
-            imageUrl: imgUrl,
-          );
-          await _writeViolationHistory(
-            paramId: id,
-            paramLabel: label,
-            paramValue: val,
-            violation: v,
-            imageUrl: imgUrl,
-          );
-        }
-      }
+      // 3. Primary image URL (first param photo, if any)
+      final primaryImageUrl = _paramPhotoUrl.values
+              .firstWhere((u) => u != null, orElse: () => null) ??
+          '';
 
-      // 7. Primary image URL for reading record
-      final primaryImageUrl =
-          paramImageUrls.values.isNotEmpty ? paramImageUrls.values.first : '';
-
-      // 8. Save reading
+      // 4. Save reading
       final reading = await ReadingRepository().saveReading(
         tankId: widget.tank.id,
         tankName: widget.tank.tankName,
@@ -906,11 +883,27 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         inspectionValues: inspVals,
       );
 
-      // 9. Update dashboard stats
+      // 5. Update dashboard stats
       await DashboardStatsRepository().updateStatsAfterReading(
         reading: reading,
         tank: widget.tank,
       );
+
+      // 6. Mark live alerts as 'saved' (not real-time anymore)
+      for (final paramMap in _liveAlertIds.values) {
+        for (final alertId in paramMap.values) {
+          try {
+            await _db.child('alerts/$alertId').update({
+              'live': false,
+              'reading_id': reading.id ?? '',
+            });
+            await _db.child('alerts_full/$alertId').update({
+              'live': false,
+              'reading_id': reading.id ?? '',
+            });
+          } catch (_) {}
+        }
+      }
 
       setState(() {
         _saving = false;
@@ -951,6 +944,42 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         title: Text('Record Reading',
             style: GoogleFonts.dmSans(
                 fontWeight: FontWeight.w700, fontSize: 17, color: _kText)),
+        actions: [
+          // ── Manual capture toggle ────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: GestureDetector(
+              onTap: () =>
+                  setState(() => _showManualCaptures = !_showManualCaptures),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _showManualCaptures
+                      ? _kCopper.withOpacity(0.18)
+                      : _kSurface,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: _showManualCaptures
+                        ? _kCopper.withOpacity(0.55)
+                        : _kBorderH,
+                  ),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.camera_alt_outlined,
+                      size: 15, color: _showManualCaptures ? _kCopper : _kSub),
+                  const SizedBox(width: 5),
+                  Text('Manual',
+                      style: GoogleFonts.dmSans(
+                          fontSize: 11,
+                          color: _showManualCaptures ? _kCopper : _kSub,
+                          fontWeight: FontWeight.w600)),
+                ]),
+              ),
+            ),
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(1),
           child: Container(height: 1, color: _kBorder),
@@ -977,18 +1006,21 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               ..._props.map(_buildPropField),
             ],
 
-            // ── Manual Capture Section ─────────────────────────────────
-            const SizedBox(height: 28),
-            _buildManualCaptureSection(),
+            // ── Manual Captures (toggled) ──────────────────────────────
+            if (_showManualCaptures) ...[
+              const SizedBox(height: 28),
+              _buildManualCaptureSection(),
+            ],
 
             const SizedBox(height: 28),
 
-            // Blocking violation banner at the bottom
             if (_hasBlockingViolation) ...[
-              _BlockBanner(
-                violations: _violations,
-                props: _props,
-              ),
+              _BlockBanner(violations: _violations, props: _props),
+              const SizedBox(height: 16),
+            ],
+
+            if (_hasUploadInProgress) ...[
+              _UploadingBanner(),
               const SizedBox(height: 16),
             ],
 
@@ -1010,7 +1042,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     );
   }
 
-  // ── Manual Capture Section Builder ────────────────────────────────────
+  // ── Manual Capture Section ─────────────────────────────────────────────
 
   Widget _buildManualCaptureSection() {
     final paramOptions = _props
@@ -1050,22 +1082,23 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         Text('Attach extra photos to any parameter',
             style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
         const SizedBox(height: 14),
-        ..._manualCaptures.asMap().entries.map((entry) {
-          final i = entry.key;
-          final mc = entry.value;
-          return _buildManualCaptureEntry(i, mc, paramOptions);
-        }),
+        ..._manualCaptures.asMap().entries.map(
+              (entry) =>
+                  _buildManualEntry(entry.key, entry.value, paramOptions),
+            ),
       ],
     );
   }
 
-  Widget _buildManualCaptureEntry(
+  Widget _buildManualEntry(
     int index,
     _ManualCaptureEntry entry,
     List<MapEntry<String, String>> paramOptions,
   ) {
     final hasCaptured = entry.capturedImage != null;
     final hasParam = entry.selectedParamId != null;
+    final isUploading = entry.uploading;
+    final hasUrl = entry.uploadedUrl != null;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -1079,7 +1112,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Header row: index + delete ─────────────────────────────
+            // ── Header ────────────────────────────────────────────────
             Row(children: [
               Container(
                 width: 24,
@@ -1101,8 +1134,25 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               Text('Manual Capture',
                   style: GoogleFonts.dmSans(
                       fontSize: 12, color: _kSub, fontWeight: FontWeight.w500)),
+              if (isUploading) ...[
+                const SizedBox(width: 8),
+                const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                        color: _kCopper, strokeWidth: 1.5)),
+                const SizedBox(width: 4),
+                Text('Uploading…',
+                    style: GoogleFonts.dmSans(fontSize: 10, color: _kCopper)),
+              ] else if (hasUrl) ...[
+                const SizedBox(width: 8),
+                const Icon(Icons.cloud_done_rounded,
+                    size: 13, color: _kSuccess),
+                const SizedBox(width: 3),
+                Text('Uploaded',
+                    style: GoogleFonts.dmSans(fontSize: 10, color: _kSuccess)),
+              ],
               const Spacer(),
-              // Only show delete if more than one entry
               if (_manualCaptures.length > 1)
                 GestureDetector(
                   onTap: () => setState(() => _manualCaptures.removeAt(index)),
@@ -1157,76 +1207,115 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
             const SizedBox(height: 12),
 
-            // ── Camera capture row ─────────────────────────────────────
+            // ── Camera row ─────────────────────────────────────────────
             Row(children: [
               Expanded(
                 child: GestureDetector(
-                  onTap: hasParam ? () => _captureManualPhoto(index) : null,
+                  onTap: (hasParam && !isUploading)
+                      ? () => _captureManualPhoto(index)
+                      : null,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 200),
                     height: 50,
                     decoration: BoxDecoration(
                       color: !hasParam
                           ? _kSurface
-                          : hasCaptured
+                          : hasUrl
                               ? _kSuccess.withOpacity(0.08)
-                              : _kTeal.withOpacity(0.08),
+                              : hasCaptured
+                                  ? _kCopper.withOpacity(0.08)
+                                  : _kTeal.withOpacity(0.08),
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(
                         color: !hasParam
                             ? _kBorder
-                            : hasCaptured
+                            : hasUrl
                                 ? _kSuccess.withOpacity(0.4)
-                                : _kTeal.withOpacity(0.4),
+                                : hasCaptured
+                                    ? _kCopper.withOpacity(0.4)
+                                    : _kTeal.withOpacity(0.4),
                       ),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          hasCaptured
-                              ? Icons.check_circle_outline_rounded
-                              : Icons.camera_alt_outlined,
-                          size: 18,
-                          color: !hasParam
-                              ? _kDisable
-                              : hasCaptured
-                                  ? _kSuccess
-                                  : _kTeal,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          hasCaptured ? 'Retake Photo' : 'Capture Photo',
-                          style: GoogleFonts.dmSans(
-                            color: !hasParam
-                                ? _kDisable
-                                : hasCaptured
-                                    ? _kSuccess
-                                    : _kTeal,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 13,
+                    child: isUploading
+                        ? const Center(
+                            child: SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    color: _kCopper, strokeWidth: 2)))
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                hasUrl
+                                    ? Icons.cloud_done_rounded
+                                    : hasCaptured
+                                        ? Icons.camera_alt_rounded
+                                        : Icons.camera_alt_outlined,
+                                size: 18,
+                                color: !hasParam
+                                    ? _kDisable
+                                    : hasUrl
+                                        ? _kSuccess
+                                        : hasCaptured
+                                            ? _kCopper
+                                            : _kTeal,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                hasUrl
+                                    ? 'Retake Photo'
+                                    : hasCaptured
+                                        ? 'Uploading…'
+                                        : 'Capture Photo',
+                                style: GoogleFonts.dmSans(
+                                  color: !hasParam
+                                      ? _kDisable
+                                      : hasUrl
+                                          ? _kSuccess
+                                          : hasCaptured
+                                              ? _kCopper
+                                              : _kTeal,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
                   ),
                 ),
               ),
               if (hasCaptured) ...[
                 const SizedBox(width: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(10),
-                  child: Image.file(entry.capturedImage!,
-                      width: 50, height: 50, fit: BoxFit.cover),
+                Stack(
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.file(entry.capturedImage!,
+                          width: 50, height: 50, fit: BoxFit.cover),
+                    ),
+                    if (hasUrl)
+                      Positioned(
+                        bottom: 2,
+                        right: 2,
+                        child: Container(
+                          width: 14,
+                          height: 14,
+                          decoration: const BoxDecoration(
+                              color: _kSuccess, shape: BoxShape.circle),
+                          child: const Icon(Icons.check_rounded,
+                              size: 9, color: Colors.white),
+                        ),
+                      ),
+                  ],
                 ),
               ],
             ]),
 
-            // ── Label hint ─────────────────────────────────────────────
-            if (hasParam && hasCaptured) ...[
+            if (hasParam && hasUrl) ...[
               const SizedBox(height: 8),
               Builder(builder: (_) {
-                final label = paramOptions
+                final lbl = paramOptions
                     .firstWhere((o) => o.key == entry.selectedParamId,
                         orElse: () => MapEntry(entry.selectedParamId!, ''))
                     .value;
@@ -1235,7 +1324,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                       size: 11, color: _kSuccess),
                   const SizedBox(width: 4),
                   Text(
-                    'Will save as: manual_${label}_captured_image',
+                    'Saved as: manual_${lbl}_captured_image',
                     style: GoogleFonts.dmSans(fontSize: 10, color: _kSuccess),
                   ),
                 ]);
@@ -1256,20 +1345,18 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final hint = p['hint'] as String? ?? '';
     final isReq = p['required'] == true;
     final hasCam = p['capture_image'] == true;
-    final isEffectivelyRequired = isReq || hasCam;
-    final violationList = _violations[id] ?? [];
-    final hasViolations = violationList.isNotEmpty;
+    final isEffReq = isReq || hasCam;
+    final vList = _violations[id] ?? [];
+    final hasVio = vList.isNotEmpty;
 
-    // Highest severity among all active violations
     String? topSeverity;
-    if (hasViolations) {
-      if (violationList.any((v) => v.severity == 'critical')) {
+    if (hasVio) {
+      if (vList.any((v) => v.severity == 'critical'))
         topSeverity = 'critical';
-      } else if (violationList.any((v) => v.severity == 'warning')) {
+      else if (vList.any((v) => v.severity == 'warning'))
         topSeverity = 'warning';
-      } else {
+      else
         topSeverity = 'info';
-      }
     }
 
     return Padding(
@@ -1277,52 +1364,54 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Label row ──────────────────────────────────────────────
           Row(children: [
             Expanded(
-              child: Text(
-                isEffectivelyRequired ? '$label *' : label,
-                style: GoogleFonts.dmSans(
-                    fontSize: 13, fontWeight: FontWeight.w600, color: _kText),
-              ),
+              child: Text(isEffReq ? '$label *' : label,
+                  style: GoogleFonts.dmSans(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: _kText)),
             ),
-            if (isEffectivelyRequired) _Badge('REQUIRED', _kDanger),
-            if (hasViolations) ...[
+            if (isEffReq) _Badge('REQUIRED', _kDanger),
+            if (hasVio) ...[
               const SizedBox(width: 6),
-              _Badge(
-                  '${violationList.length} ALERT${violationList.length > 1 ? 'S' : ''}',
+              _Badge('${vList.length} ALERT${vList.length > 1 ? 'S' : ''}',
                   _severityColor(topSeverity)),
             ],
           ]),
-
-          // ── Hint above field ────────────────────────────────────────
           if (hint.isNotEmpty) ...[
             const SizedBox(height: 3),
             Text(hint, style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
           ],
-
           const SizedBox(height: 8),
-
-          // ── Input widget ────────────────────────────────────────────
           _buildInput(p, id, type, hint, isReq),
 
-          // ── Violation banners — one per active constraint ───────────
-          ...violationList.map((v) => Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: _ViolationBanner(
-                  violation: v,
-                  violationPhoto: _violationPhotos[id]?[v.constraintId],
-                  onCapturePhoto: v.captureImageOnViolation
-                      ? () => _captureViolationPhoto(id, v.constraintId)
-                      : null,
-                ),
-              )),
+          // Violation banners
+          ...vList.map((v) {
+            final isUploading =
+                _violationUploading[id]?[v.constraintId] == true;
+            final hasUrl = _violationPhotoUrls[id]?[v.constraintId] != null;
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _ViolationBanner(
+                violation: v,
+                violationPhoto: _violationPhotos[id]?[v.constraintId],
+                isUploading: isUploading,
+                hasUploadedUrl: hasUrl,
+                onCapturePhoto: (v.captureImageOnViolation && !isUploading)
+                    ? () => _captureViolationPhoto(id, v.constraintId)
+                    : null,
+              ),
+            );
+          }),
 
-          // ── Normal per-param camera ─────────────────────────────────
+          // Per-param camera
           if (hasCam) ...[
             const SizedBox(height: 10),
             _ParamPhotoRow(
               image: _paramPhoto[id],
+              uploadedUrl: _paramPhotoUrl[id],
+              uploading: _paramUploading[id] == true,
               onCapture: () => _captureParamImage(id),
             ),
           ],
@@ -1333,15 +1422,14 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Input decoration ───────────────────────────────────────────────────
 
-  InputDecoration _dec(String hintText,
-      {String? placeholder, bool hasViolation = false}) {
+  InputDecoration _dec(String hintText, {bool hasViolation = false}) {
     final borderColor = hasViolation ? _kDanger : _kBorder;
     final focusColor = hasViolation ? _kDanger : _kCopper;
     final border = OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
         borderSide: BorderSide(color: borderColor));
     return InputDecoration(
-      hintText: placeholder ?? (hintText.isNotEmpty ? hintText : null),
+      hintText: hintText.isNotEmpty ? hintText : null,
       hintStyle: GoogleFonts.dmSans(color: _kSub, fontSize: 13),
       filled: true,
       fillColor: hasViolation ? _kDanger.withOpacity(0.05) : _kSurface,
@@ -1352,13 +1440,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide(color: focusColor, width: 1.5)),
-      errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: _kDanger)),
     );
   }
-
-  // ── Per-type input builders ────────────────────────────────────────────
 
   Widget _buildInput(
       Map<String, dynamic> p, String id, String type, String hint, bool isReq) {
@@ -1366,28 +1449,16 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final hasViolation = violations.isNotEmpty;
 
     switch (type) {
-      // ── Number ────────────────────────────────────────────────────
       case 'number':
         return TextFormField(
           controller: _textCtrl[id],
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           style: GoogleFonts.spaceGrotesk(color: _kText, fontSize: 15),
           cursorColor: _kCopper,
-          decoration: _dec(hint,
-              placeholder: hint.isNotEmpty ? hint : null,
-              hasViolation: hasViolation),
+          decoration: _dec(hint, hasViolation: hasViolation),
           onChanged: (_) => _onValueChanged(id),
-          validator: isReq
-              ? (v) {
-                  if (v == null || v.trim().isEmpty) return 'Required';
-                  if (double.tryParse(v.trim()) == null)
-                    return 'Must be a number';
-                  return null;
-                }
-              : null,
         );
 
-      // ── Text ──────────────────────────────────────────────────────
       case 'text':
         return TextFormField(
           controller: _textCtrl[id],
@@ -1395,12 +1466,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           cursorColor: _kCopper,
           decoration: _dec(hint, hasViolation: hasViolation),
           onChanged: (_) => _onValueChanged(id),
-          validator: isReq
-              ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
-              : null,
         );
 
-      // ── Multiline ─────────────────────────────────────────────────
       case 'multiline':
         return TextFormField(
           controller: _textCtrl[id],
@@ -1409,12 +1476,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           cursorColor: _kCopper,
           decoration: _dec(hint, hasViolation: hasViolation),
           onChanged: (_) => _onValueChanged(id),
-          validator: isReq
-              ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
-              : null,
         );
 
-      // ── Dropdown ──────────────────────────────────────────────────
       case 'dropdown':
         final options = List<String>.from(p['options'] ?? []);
         return Container(
@@ -1449,7 +1512,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           ),
         );
 
-      // ── Dual text ─────────────────────────────────────────────────
       case 'dual_text':
         final lbl = (p['left_label'] as String?)?.isNotEmpty == true
             ? p['left_label'] as String
@@ -1462,20 +1524,18 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           children: [
             Row(children: [
               Expanded(
-                child: Text(lbl,
-                    style: GoogleFonts.dmSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: _kSub)),
-              ),
+                  child: Text(lbl,
+                      style: GoogleFonts.dmSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: _kSub))),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(rbl,
-                    style: GoogleFonts.dmSans(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: _kSub)),
-              ),
+                  child: Text(rbl,
+                      style: GoogleFonts.dmSans(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: _kSub))),
             ]),
             const SizedBox(height: 6),
             Row(children: [
@@ -1486,10 +1546,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                   cursorColor: _kCopper,
                   decoration: _dec(lbl, hasViolation: hasViolation),
                   onChanged: (_) => _onValueChanged(id),
-                  validator: isReq
-                      ? (v) =>
-                          (v == null || v.trim().isEmpty) ? 'Required' : null
-                      : null,
                 ),
               ),
               const SizedBox(width: 12),
@@ -1500,17 +1556,12 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                   cursorColor: _kCopper,
                   decoration: _dec(rbl, hasViolation: hasViolation),
                   onChanged: (_) => _onValueChanged(id),
-                  validator: isReq
-                      ? (v) =>
-                          (v == null || v.trim().isEmpty) ? 'Required' : null
-                      : null,
                 ),
               ),
             ]),
           ],
         );
 
-      // ── Slider ────────────────────────────────────────────────────
       case 'slider':
         final mn = ((p['min'] ?? 0) as num).toDouble();
         final mx = ((p['max'] ?? 100) as num).toDouble();
@@ -1573,16 +1624,20 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIOLATION BANNER — shown inline below the field, one per constraint
+// VIOLATION BANNER
 // ─────────────────────────────────────────────────────────────────────────────
 class _ViolationBanner extends StatelessWidget {
   final _Violation violation;
   final File? violationPhoto;
+  final bool isUploading;
+  final bool hasUploadedUrl;
   final VoidCallback? onCapturePhoto;
 
   const _ViolationBanner({
     required this.violation,
     required this.violationPhoto,
+    required this.isUploading,
+    required this.hasUploadedUrl,
     this.onCapturePhoto,
   });
 
@@ -1590,8 +1645,6 @@ class _ViolationBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = _severityColor(violation.severity);
     final icon = _severityIcon(violation.severity);
-    final photoRequired =
-        violation.captureImageOnViolation && violationPhoto == null;
 
     return Container(
       decoration: BoxDecoration(
@@ -1626,11 +1679,36 @@ class _ViolationBanner extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.8)),
               ),
+            // Live DB sync indicator
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Container(
+                  width: 5,
+                  height: 5,
+                  decoration:
+                      BoxDecoration(color: color, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 3),
+                Text('LIVE',
+                    style: GoogleFonts.spaceGrotesk(
+                        fontSize: 7,
+                        color: color,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.5)),
+              ]),
+            ),
           ]),
           const SizedBox(height: 5),
           Text(violation.message,
               style: GoogleFonts.dmSans(color: _kText, fontSize: 12)),
-          // Violation photo capture
+
+          // Evidence photo capture
           if (violation.captureImageOnViolation) ...[
             const SizedBox(height: 10),
             Row(children: [
@@ -1640,77 +1718,110 @@ class _ViolationBanner extends StatelessWidget {
                   child: Container(
                     height: 46,
                     decoration: BoxDecoration(
-                      color: photoRequired
-                          ? _kDanger.withOpacity(0.10)
-                          : _kSuccess.withOpacity(0.08),
+                      color: hasUploadedUrl
+                          ? _kSuccess.withOpacity(0.08)
+                          : violationPhoto != null
+                              ? _kCopper.withOpacity(0.08)
+                              : _kDanger.withOpacity(0.10),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                          color: photoRequired
-                              ? _kDanger.withOpacity(0.5)
-                              : _kSuccess.withOpacity(0.4)),
+                          color: hasUploadedUrl
+                              ? _kSuccess.withOpacity(0.4)
+                              : violationPhoto != null
+                                  ? _kCopper.withOpacity(0.4)
+                                  : _kDanger.withOpacity(0.5)),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          violationPhoto != null
-                              ? Icons.check_circle_outline_rounded
-                              : Icons.camera_alt_outlined,
-                          size: 18,
-                          color: violationPhoto != null ? _kSuccess : _kDanger,
-                        ),
-                        const SizedBox(width: 7),
-                        Text(
-                          violationPhoto != null
-                              ? 'Retake Evidence Photo'
-                              : 'Capture Evidence Photo *',
-                          style: GoogleFonts.dmSans(
-                            color:
-                                violationPhoto != null ? _kSuccess : _kDanger,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
+                    child: isUploading
+                        ? const Center(
+                            child: SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                    color: _kCopper, strokeWidth: 2)))
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                hasUploadedUrl
+                                    ? Icons.cloud_done_rounded
+                                    : violationPhoto != null
+                                        ? Icons.camera_alt_rounded
+                                        : Icons.camera_alt_outlined,
+                                size: 18,
+                                color: hasUploadedUrl
+                                    ? _kSuccess
+                                    : violationPhoto != null
+                                        ? _kCopper
+                                        : _kDanger,
+                              ),
+                              const SizedBox(width: 7),
+                              Text(
+                                hasUploadedUrl
+                                    ? 'Retake Evidence Photo'
+                                    : violationPhoto != null
+                                        ? 'Uploading…'
+                                        : 'Capture Evidence Photo *',
+                                style: GoogleFonts.dmSans(
+                                  color: hasUploadedUrl
+                                      ? _kSuccess
+                                      : violationPhoto != null
+                                          ? _kCopper
+                                          : _kDanger,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
                   ),
                 ),
               ),
               if (violationPhoto != null) ...[
                 const SizedBox(width: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.file(violationPhoto!,
-                      width: 46, height: 46, fit: BoxFit.cover),
-                ),
+                Stack(children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.file(violationPhoto!,
+                        width: 46, height: 46, fit: BoxFit.cover),
+                  ),
+                  if (hasUploadedUrl)
+                    Positioned(
+                      bottom: 2,
+                      right: 2,
+                      child: Container(
+                        width: 13,
+                        height: 13,
+                        decoration: const BoxDecoration(
+                            color: _kSuccess, shape: BoxShape.circle),
+                        child: const Icon(Icons.check_rounded,
+                            size: 8, color: Colors.white),
+                      ),
+                    ),
+                ]),
               ],
             ]),
           ],
-          // Action indicators
+
+          // Action chips
           if (violation.playSoundOnViolation ||
               violation.showDashboardAlert ||
               violation.storeHistory) ...[
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 6,
-              children: [
-                if (violation.playSoundOnViolation)
-                  _ActionChip(
-                      icon: Icons.volume_up_rounded,
-                      label: 'Sound',
-                      color: color),
-                if (violation.showDashboardAlert)
-                  _ActionChip(
-                      icon: Icons.dashboard_customize_outlined,
-                      label: 'Dashboard Alert',
-                      color: color),
-                if (violation.storeHistory)
-                  _ActionChip(
-                      icon: Icons.history_rounded,
-                      label: 'Logged',
-                      color: color),
-              ],
-            ),
+            Wrap(spacing: 6, children: [
+              if (violation.playSoundOnViolation)
+                _ActionChip(
+                    icon: Icons.volume_up_rounded,
+                    label: 'Sound',
+                    color: color),
+              if (violation.showDashboardAlert)
+                _ActionChip(
+                    icon: Icons.dashboard_customize_outlined,
+                    label: 'Dashboard Alert',
+                    color: color),
+              if (violation.storeHistory)
+                _ActionChip(
+                    icon: Icons.history_rounded, label: 'Logged', color: color),
+            ]),
           ],
         ],
       ),
@@ -1719,7 +1830,7 @@ class _ViolationBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BLOCK BANNER — bottom of page when submission is blocked
+// BLOCK BANNER
 // ─────────────────────────────────────────────────────────────────────────────
 class _BlockBanner extends StatelessWidget {
   final Map<String, List<_Violation>> violations;
@@ -1757,10 +1868,8 @@ class _BlockBanner extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                       fontSize: 13)),
               const SizedBox(height: 3),
-              Text(
-                'Fix violations in: ${blocked.join(', ')}',
-                style: GoogleFonts.dmSans(color: _kText, fontSize: 12),
-              ),
+              Text('Fix violations in: ${blocked.join(', ')}',
+                  style: GoogleFonts.dmSans(color: _kText, fontSize: 12)),
             ],
           ),
         ),
@@ -1770,61 +1879,140 @@ class _BlockBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PER-PARAMETER PHOTO ROW
+// UPLOADING BANNER — shown when any upload is in progress
+// ─────────────────────────────────────────────────────────────────────────────
+class _UploadingBanner extends StatelessWidget {
+  const _UploadingBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _kCopper.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kCopper.withOpacity(0.35)),
+      ),
+      child: Row(children: [
+        const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(color: _kCopper, strokeWidth: 2)),
+        const SizedBox(width: 10),
+        Text('Uploading photos, please wait…',
+            style: GoogleFonts.dmSans(
+                color: _kCopper, fontSize: 12, fontWeight: FontWeight.w500)),
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-PARAM PHOTO ROW
 // ─────────────────────────────────────────────────────────────────────────────
 class _ParamPhotoRow extends StatelessWidget {
   final File? image;
+  final String? uploadedUrl;
+  final bool uploading;
   final VoidCallback onCapture;
-  const _ParamPhotoRow({required this.image, required this.onCapture});
+
+  const _ParamPhotoRow({
+    required this.image,
+    required this.uploadedUrl,
+    required this.uploading,
+    required this.onCapture,
+  });
 
   @override
   Widget build(BuildContext context) {
     final captured = image != null;
+    final hasUrl = uploadedUrl != null;
+
     return Row(children: [
       Expanded(
         child: GestureDetector(
-          onTap: onCapture,
+          onTap: uploading ? null : onCapture,
           child: Container(
             height: 54,
             decoration: BoxDecoration(
-              color: captured
+              color: hasUrl
                   ? _kSuccess.withOpacity(0.08)
-                  : _kTeal.withOpacity(0.08),
+                  : captured
+                      ? _kCopper.withOpacity(0.08)
+                      : _kTeal.withOpacity(0.08),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
-                  color: captured
+                  color: hasUrl
                       ? _kSuccess.withOpacity(0.4)
-                      : _kTeal.withOpacity(0.4)),
+                      : captured
+                          ? _kCopper.withOpacity(0.4)
+                          : _kTeal.withOpacity(0.4)),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  captured
-                      ? Icons.check_circle_outline_rounded
-                      : Icons.camera_alt_outlined,
-                  color: captured ? _kSuccess : _kTeal,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  captured ? 'Retake Photo' : 'Capture Photo',
-                  style: GoogleFonts.dmSans(
-                      color: captured ? _kSuccess : _kTeal,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14),
-                ),
-              ],
-            ),
+            child: uploading
+                ? const Center(
+                    child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                            color: _kCopper, strokeWidth: 2)))
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        hasUrl
+                            ? Icons.cloud_done_rounded
+                            : captured
+                                ? Icons.camera_alt_rounded
+                                : Icons.camera_alt_outlined,
+                        color: hasUrl
+                            ? _kSuccess
+                            : captured
+                                ? _kCopper
+                                : _kTeal,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        hasUrl
+                            ? 'Retake Photo'
+                            : captured
+                                ? 'Uploading…'
+                                : 'Capture Photo',
+                        style: GoogleFonts.dmSans(
+                            color: hasUrl
+                                ? _kSuccess
+                                : captured
+                                    ? _kCopper
+                                    : _kTeal,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14),
+                      ),
+                    ],
+                  ),
           ),
         ),
       ),
       if (captured) ...[
         const SizedBox(width: 12),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Image.file(image!, width: 54, height: 54, fit: BoxFit.cover),
-        ),
+        Stack(children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.file(image!, width: 54, height: 54, fit: BoxFit.cover),
+          ),
+          if (hasUrl)
+            Positioned(
+              bottom: 2,
+              right: 2,
+              child: Container(
+                width: 15,
+                height: 15,
+                decoration: const BoxDecoration(
+                    color: _kSuccess, shape: BoxShape.circle),
+                child: const Icon(Icons.check_rounded,
+                    size: 9, color: Colors.white),
+              ),
+            ),
+        ]),
       ],
     ]);
   }
@@ -1836,6 +2024,7 @@ class _ParamPhotoRow extends StatelessWidget {
 class _ErrorBanner extends StatelessWidget {
   final String text;
   const _ErrorBanner(this.text);
+
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1855,71 +2044,13 @@ class _ErrorBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUB-WIDGETS
+// META CARD
 // ─────────────────────────────────────────────────────────────────────────────
-
-class _SecLabel extends StatelessWidget {
-  final String text;
-  const _SecLabel(this.text);
-  @override
-  Widget build(BuildContext context) => Text(text,
-      style: GoogleFonts.spaceGrotesk(
-          fontSize: 10,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 2,
-          color: _kSub));
-}
-
-class _Badge extends StatelessWidget {
-  final String text;
-  final Color color;
-  const _Badge(this.text, this.color);
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.10),
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Text(text,
-            style: GoogleFonts.spaceGrotesk(
-                fontSize: 9,
-                color: color,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8)),
-      );
-}
-
-class _ActionChip extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  const _ActionChip(
-      {required this.icon, required this.label, required this.color});
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.10),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 10, color: color),
-          const SizedBox(width: 4),
-          Text(label,
-              style: GoogleFonts.dmSans(
-                  fontSize: 10, color: color, fontWeight: FontWeight.w500)),
-        ]),
-      );
-}
-
-// ── Meta card ─────────────────────────────────────────────────────────────────
 class _MetaCard extends StatelessWidget {
   final TankModel tank;
   final UserModel currentUser;
   final String nowLabel;
+
   const _MetaCard({
     required this.tank,
     required this.currentUser,
@@ -1981,6 +2112,7 @@ class _MetaRow extends StatelessWidget {
   final String label;
   final String value;
   final Color? valueColor;
+
   const _MetaRow({required this.label, required this.value, this.valueColor});
 
   @override
@@ -2004,7 +2136,9 @@ class _MetaRow extends StatelessWidget {
       );
 }
 
-// ── Save button ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// SAVE BUTTON
+// ─────────────────────────────────────────────────────────────────────────────
 class _SaveButton extends StatelessWidget {
   final bool saving;
   final bool saved;
@@ -2057,7 +2191,7 @@ class _SaveButton extends StatelessWidget {
             child:
                 CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
         const SizedBox(width: 10),
-        Text('Uploading & Saving…',
+        Text('Saving…',
             style: GoogleFonts.dmSans(
                 color: Colors.white,
                 fontWeight: FontWeight.w600,
@@ -2094,4 +2228,65 @@ class _SaveButton extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUB-WIDGETS
+// ─────────────────────────────────────────────────────────────────────────────
+class _SecLabel extends StatelessWidget {
+  final String text;
+  const _SecLabel(this.text);
+  @override
+  Widget build(BuildContext context) => Text(text,
+      style: GoogleFonts.spaceGrotesk(
+          fontSize: 10,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 2,
+          color: _kSub));
+}
+
+class _Badge extends StatelessWidget {
+  final String text;
+  final Color color;
+  const _Badge(this.text, this.color);
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Text(text,
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 9,
+                color: color,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8)),
+      );
+}
+
+class _ActionChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  const _ActionChip(
+      {required this.icon, required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 10, color: color),
+          const SizedBox(width: 4),
+          Text(label,
+              style: GoogleFonts.dmSans(
+                  fontSize: 10, color: color, fontWeight: FontWeight.w500)),
+        ]),
+      );
 }

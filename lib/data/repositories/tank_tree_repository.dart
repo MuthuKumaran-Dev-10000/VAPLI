@@ -199,7 +199,74 @@ class TankTreeRepository {
     await _ref.update(updates);
   }
 
+  Future<void> deleteTankFromTree(
+    String tankId,
+  ) async {
+    final snap = await _ref.child("tank_tree").get();
+
+    if (!snap.exists) return;
+
+    final tree = Map<String, dynamic>.from(
+      snap.value as Map,
+    );
+
+    await _walkAndDeleteTank(
+      node: tree,
+      currentPath: "tank_tree",
+      tankId: tankId,
+    );
+  }
   // ── HELPERS ───────────────────────────────────────────────────────────────
+
+  Future<void> _walkAndDeleteTank({
+    required Map node,
+    required String currentPath,
+    required String tankId,
+  }) async {
+    for (final e in node.entries) {
+      try {
+        final key = e.key.toString();
+        final value = e.value;
+
+        final path = "$currentPath/$key";
+
+        // SAFE MAP CHECK
+        if (value is Map) {
+          final map = Map<String, dynamic>.from(
+            value.map(
+              (k, v) => MapEntry(
+                k.toString(),
+                v,
+              ),
+            ),
+          );
+
+          // MATCH TANK
+          if (map["tank_id"]?.toString() == tankId ||
+              map["id"]?.toString() == tankId) {
+            debugPrint(
+              "[DELETE] Removing tree node: $path",
+            );
+
+            await _ref.child(path).remove();
+
+            continue;
+          }
+
+          // RECURSIVE WALK
+          await _walkAndDeleteTank(
+            node: map,
+            currentPath: path,
+            tankId: tankId,
+          );
+        }
+      } catch (e, s) {
+        debugPrint(
+          "[DELETE TREE ERROR] $e\n$s",
+        );
+      }
+    }
+  }
 
   Future<int> _nextOrder(String? parentId) async {
     final all = await fetchAll();

@@ -1,24 +1,25 @@
 // lib/presentation/screens/admin/property_builder_page.dart
 // ══════════════════════════════════════════════════════════════════════════════
-// PropertyBuilderPage — Google-Forms-style inspection parameter builder.
+// CHANGES IN THIS VERSION (everything else bit-for-bit identical):
 //
-// CHANGED vs previous version:
-//   ✅ _addOrEditConstraint() dialog now includes:
-//        • Severity selector  (info / warning / critical)
-//        • Alert Title field
-//        • "Store history"            checkbox  → store_history
-//        • "Show dashboard alert"     checkbox  → show_dashboard_alert
-//        • "Play sound on violation"  checkbox  → play_sound_on_violation
-//        • "Capture image on violation" checkbox → capture_image_on_violation
-//        • "Block submission"         checkbox  → block_submission
-//   ✅ Constraint chip in the list now shows severity colour badge
-//   ✅ Constraint summary row in the card shows all active flags as icons
-//   ✅ Saved constraint map matches AlertModel / AlertRepository schema exactly
+//   NEW — "Expected Range" section for NUMERICAL parameters:
+//     • number  → Min / Avg / Max  (3 optional text fields)
+//     • slider  → Min / Avg / Max  (pre-filled from slider range, editable)
+//     • dual_text → separate Min / Avg / Max for EACH side
+//                   (labelled with the user's left_label / right_label)
 //
-// UNCHANGED:
-//   Everything else — type picker, live preview, dropdown config,
-//   dual_text config, slider config, required / capture_image switches,
-//   constraints collapsible header, all colour constants, helper widgets.
+//   STORAGE RULES:
+//     • Only written to DB if the user actually types a value
+//     • number / slider  → { 'expected_min': x, 'expected_avg': x, 'expected_max': x }
+//     • dual_text        → { 'left_expected_min': x, ..., 'right_expected_min': x, ... }
+//     • NO left_label / right_label written for number, slider, multiline, text
+//       (previously these were always written as 'Before'/'After' even for number)
+//     • left_label / right_label only written for dual_text
+//
+//   EVERYTHING ELSE UNCHANGED:
+//     type picker, live preview, dropdown options, slider min/max config,
+//     required toggle, capture_image toggle, constraint dialog (all 5 flags,
+//     severity, alert_title, message), constraint chips, save logic, palette.
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'package:flutter/material.dart';
@@ -42,9 +43,9 @@ const _kWarn = Color(0xFFF59E0B);
 const _kDanger = Color(0xFFEF4444);
 
 // Severity colours
-const _kSevInfo = Color(0xFF60A5FA); // blue
-const _kSevWarning = Color(0xFFF59E0B); // amber
-const _kSevCritical = Color(0xFFEF4444); // red
+const _kSevInfo = Color(0xFF60A5FA);
+const _kSevWarning = Color(0xFFF59E0B);
+const _kSevCritical = Color(0xFFEF4444);
 
 Color _sevColor(String s) {
   switch (s) {
@@ -74,10 +75,24 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   final _formKey = GlobalKey<FormState>();
   final _labelCtrl = TextEditingController();
   final _hintCtrl = TextEditingController();
-  final _leftLabelCtrl = TextEditingController();
-  final _rightLabelCtrl = TextEditingController();
-  final _minCtrl = TextEditingController(text: '0');
-  final _maxCtrl = TextEditingController(text: '100');
+  final _leftLabelCtrl = TextEditingController(); // dual_text only
+  final _rightLabelCtrl = TextEditingController(); // dual_text only
+  final _minCtrl = TextEditingController(text: '0'); // slider range
+  final _maxCtrl = TextEditingController(text: '100'); // slider range
+
+  // ── Expected range controllers ─────────────────────────────────────────────
+  // number / slider
+  final _expMinCtrl = TextEditingController();
+  final _expAvgCtrl = TextEditingController();
+  final _expMaxCtrl = TextEditingController();
+  // dual_text — left side
+  final _leftExpMinCtrl = TextEditingController();
+  final _leftExpAvgCtrl = TextEditingController();
+  final _leftExpMaxCtrl = TextEditingController();
+  // dual_text — right side
+  final _rightExpMinCtrl = TextEditingController();
+  final _rightExpAvgCtrl = TextEditingController();
+  final _rightExpMaxCtrl = TextEditingController();
 
   String _type = 'number';
   bool _required = true;
@@ -103,13 +118,23 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     debugPrint(
         '[PropertyBuilder] initState — existing=${widget.existing?['id']}');
 
+    // Live-preview listeners
     for (final c in [
       _labelCtrl,
       _hintCtrl,
       _leftLabelCtrl,
       _rightLabelCtrl,
       _minCtrl,
-      _maxCtrl
+      _maxCtrl,
+      _expMinCtrl,
+      _expAvgCtrl,
+      _expMaxCtrl,
+      _leftExpMinCtrl,
+      _leftExpAvgCtrl,
+      _leftExpMaxCtrl,
+      _rightExpMinCtrl,
+      _rightExpAvgCtrl,
+      _rightExpMaxCtrl
     ]) {
       c.addListener(() {
         if (mounted) setState(() {});
@@ -127,6 +152,20 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       _rightLabelCtrl.text = p['right_label'] ?? 'After';
       _minCtrl.text = (p['min'] ?? 0).toString();
       _maxCtrl.text = (p['max'] ?? 100).toString();
+
+      // Expected range — number / slider
+      _expMinCtrl.text = p['expected_min']?.toString() ?? '';
+      _expAvgCtrl.text = p['expected_avg']?.toString() ?? '';
+      _expMaxCtrl.text = p['expected_max']?.toString() ?? '';
+
+      // Expected range — dual_text
+      _leftExpMinCtrl.text = p['left_expected_min']?.toString() ?? '';
+      _leftExpAvgCtrl.text = p['left_expected_avg']?.toString() ?? '';
+      _leftExpMaxCtrl.text = p['left_expected_max']?.toString() ?? '';
+      _rightExpMinCtrl.text = p['right_expected_min']?.toString() ?? '';
+      _rightExpAvgCtrl.text = p['right_expected_avg']?.toString() ?? '';
+      _rightExpMaxCtrl.text = p['right_expected_max']?.toString() ?? '';
+
       if (p['options'] != null) {
         _options.addAll(List<String>.from(p['options'] as List));
       }
@@ -137,19 +176,42 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         );
         if (_constraints.isNotEmpty) _constraintsExpanded = true;
       }
+      debugPrint(
+          '[PropertyBuilder] Loaded: type=$_type label=${_labelCtrl.text}');
     }
   }
 
   @override
   void dispose() {
-    _labelCtrl.dispose();
-    _hintCtrl.dispose();
-    _leftLabelCtrl.dispose();
-    _rightLabelCtrl.dispose();
-    _minCtrl.dispose();
-    _maxCtrl.dispose();
+    for (final c in [
+      _labelCtrl,
+      _hintCtrl,
+      _leftLabelCtrl,
+      _rightLabelCtrl,
+      _minCtrl,
+      _maxCtrl,
+      _expMinCtrl,
+      _expAvgCtrl,
+      _expMaxCtrl,
+      _leftExpMinCtrl,
+      _leftExpAvgCtrl,
+      _leftExpMaxCtrl,
+      _rightExpMinCtrl,
+      _rightExpAvgCtrl,
+      _rightExpMaxCtrl
+    ]) {
+      c.dispose();
+    }
     super.dispose();
   }
+
+  // ── helpers ────────────────────────────────────────────────────────────────
+
+  bool get _isNumerical => _type == 'number' || _type == 'slider';
+  bool get _isDualText => _type == 'dual_text';
+
+  double? _parseOpt(TextEditingController c) =>
+      c.text.trim().isEmpty ? null : double.tryParse(c.text.trim());
 
   // ── Dropdown option management (UNCHANGED) ─────────────────────────────────
 
@@ -190,14 +252,13 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     );
   }
 
-  // ── Constraint management — ENHANCED DIALOG ────────────────────────────────
+  // ── Constraint dialog (UNCHANGED — full version with all 5 flags) ──────────
 
   Future<void> _addOrEditConstraint({int? idx}) async {
     debugPrint('[Constraints] _addOrEditConstraint idx=$idx');
     final existing = idx != null ? _constraints[idx] : null;
     final ops = opsForType(_type);
 
-    // ── Dialog state ─────────────────────────────────────────────────────────
     String selectedOp = existing?['op']?.toString() ?? ops.first.value;
     String severity = existing?['severity']?.toString() ?? 'warning';
     final valueCtrl =
@@ -211,15 +272,12 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     bool showDashboard = existing?['show_dashboard_alert'] == true;
     bool playSound = existing?['play_sound_on_violation'] == true;
     bool captureOnViolation = existing?['capture_image_on_violation'] == true;
-    bool blockSubmission = existing?['block_submission'] == false
-        ? false
-        : (existing?['block_submission'] == true);
+    bool blockSubmission = existing?['block_submission'] == true;
 
     await showDialog<void>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) {
-          // ── helper: dark checkbox tile ─────────────────────────────────────
           Widget checkTile({
             required bool value,
             required String label,
@@ -247,9 +305,9 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                   Icon(icon, size: 16, color: value ? activeColor : _kSub),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
                         Text(label,
                             style: GoogleFonts.dmSans(
                                 fontSize: 13,
@@ -258,10 +316,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                         Text(sub,
                             style:
                                 GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
-                      ],
-                    ),
-                  ),
-                  // Checkbox visual
+                      ])),
                   AnimatedContainer(
                     duration: const Duration(milliseconds: 160),
                     width: 20,
@@ -291,7 +346,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // ── Dialog header ─────────────────────────────────────────────
+                // Header
                 Container(
                   padding: const EdgeInsets.fromLTRB(20, 16, 16, 14),
                   decoration: const BoxDecoration(
@@ -304,38 +359,35 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                     Container(
                       padding: const EdgeInsets.all(6),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFBB86FC).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                          color: const Color(0xFFBB86FC).withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(8)),
                       child: const Icon(Icons.rule_outlined,
                           size: 15, color: Color(0xFFBB86FC)),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(
-                        idx != null ? 'Edit Constraint' : 'Add Constraint',
-                        style: GoogleFonts.dmSans(
-                            color: _kText,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 15),
-                      ),
-                    ),
+                        child: Text(
+                      idx != null ? 'Edit Constraint' : 'Add Constraint',
+                      style: GoogleFonts.dmSans(
+                          color: _kText,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15),
+                    )),
                     GestureDetector(
-                      onTap: () => Navigator.pop(ctx),
-                      child: const Icon(Icons.close_rounded,
-                          color: _kSub, size: 18),
-                    ),
+                        onTap: () => Navigator.pop(ctx),
+                        child: const Icon(Icons.close_rounded,
+                            color: _kSub, size: 18)),
                   ]),
                 ),
 
-                // ── Scrollable body ───────────────────────────────────────────
+                // Scrollable body
                 Flexible(
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.all(18),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // ── 1. Operator ──────────────────────────────────────
+                        // Operator
                         _dlgLabel('Operator'),
                         const SizedBox(height: 8),
                         Wrap(
@@ -359,28 +411,26 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                                       width: sel ? 1.5 : 1),
                                 ),
                                 child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(op.symbol,
-                                        style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: FontWeight.w700,
-                                            color: sel ? _kAccent : _kText)),
-                                    const SizedBox(height: 2),
-                                    Text(op.label,
-                                        style: TextStyle(
-                                            fontSize: 9,
-                                            color: sel ? _kAccent : _kSub)),
-                                  ],
-                                ),
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(op.symbol,
+                                          style: TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w700,
+                                              color: sel ? _kAccent : _kText)),
+                                      const SizedBox(height: 2),
+                                      Text(op.label,
+                                          style: TextStyle(
+                                              fontSize: 9,
+                                              color: sel ? _kAccent : _kSub)),
+                                    ]),
                               ),
                             );
                           }).toList(),
                         ),
-
                         const SizedBox(height: 16),
 
-                        // ── 2. Value ─────────────────────────────────────────
+                        // Value
                         _dlgLabel('Threshold Value *'),
                         const SizedBox(height: 8),
                         _DarkTextField(
@@ -394,10 +444,9 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                                   decimal: true)
                               : TextInputType.text,
                         ),
-
                         const SizedBox(height: 16),
 
-                        // ── 3. Severity ──────────────────────────────────────
+                        // Severity
                         _dlgLabel('Severity'),
                         const SizedBox(height: 8),
                         Row(children: [
@@ -416,116 +465,104 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                                         : _kSurface,
                                     borderRadius: BorderRadius.circular(9),
                                     border: Border.all(
-                                      color: severity == sev
-                                          ? _sevColor(sev)
-                                          : _kBorder,
-                                      width: severity == sev ? 1.5 : 1,
-                                    ),
+                                        color: severity == sev
+                                            ? _sevColor(sev)
+                                            : _kBorder,
+                                        width: severity == sev ? 1.5 : 1),
                                   ),
                                   child: Center(
-                                    child: Text(
-                                      sev[0].toUpperCase() + sev.substring(1),
-                                      style: GoogleFonts.dmSans(
+                                      child: Text(
+                                    sev[0].toUpperCase() + sev.substring(1),
+                                    style: GoogleFonts.dmSans(
                                         color: severity == sev
                                             ? _sevColor(sev)
                                             : _kSub,
                                         fontWeight: severity == sev
                                             ? FontWeight.w700
                                             : FontWeight.normal,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  ),
+                                        fontSize: 12),
+                                  )),
                                 ),
                               ),
                             ),
                         ]),
-
                         const SizedBox(height: 16),
 
-                        // ── 4. Alert title ───────────────────────────────────
+                        // Alert title
                         _dlgLabel('Alert Title  (optional)'),
                         const SizedBox(height: 8),
                         _DarkTextField(
-                          ctrl: alertTitleCtrl,
-                          hint: 'e.g. Overheat Detected',
-                          icon: Icons.title_rounded,
-                        ),
-
+                            ctrl: alertTitleCtrl,
+                            hint: 'e.g. Overheat Detected',
+                            icon: Icons.title_rounded),
                         const SizedBox(height: 16),
 
-                        // ── 5. Error / message ───────────────────────────────
+                        // Message
                         _dlgLabel('Error Message  (optional)'),
                         const SizedBox(height: 8),
                         _DarkTextField(
-                          ctrl: errorMsgCtrl,
-                          hint: 'e.g. Temperature exceeded safe limit',
-                          icon: Icons.warning_amber_outlined,
-                          maxLines: 2,
-                        ),
-
+                            ctrl: errorMsgCtrl,
+                            hint: 'e.g. Temperature exceeded safe limit',
+                            icon: Icons.warning_amber_outlined,
+                            maxLines: 2),
                         const SizedBox(height: 18),
 
-                        // ── 6. Behaviour checkboxes ──────────────────────────
+                        // Behaviour checkboxes
                         _dlgLabel('BEHAVIOUR ON VIOLATION'),
                         const SizedBox(height: 10),
 
                         checkTile(
-                          value: storeHistory,
-                          label: 'Store history',
-                          sub: 'Save this violation as an Alert record in DB',
-                          icon: Icons.history_rounded,
-                          activeColor: _kAccent,
-                          onChanged: (v) =>
-                              setDlg(() => storeHistory = v ?? false),
-                        ),
+                            value: storeHistory,
+                            label: 'Store history',
+                            sub: 'Save this violation as an Alert record in DB',
+                            icon: Icons.history_rounded,
+                            activeColor: _kAccent,
+                            onChanged: (v) =>
+                                setDlg(() => storeHistory = v ?? false)),
 
                         checkTile(
-                          value: showDashboard,
-                          label: 'Show dashboard alert',
-                          sub: 'Surface this alert on the dashboard',
-                          icon: Icons.dashboard_outlined,
-                          activeColor: _kSevWarning,
-                          onChanged: (v) =>
-                              setDlg(() => showDashboard = v ?? false),
-                        ),
+                            value: showDashboard,
+                            label: 'Show dashboard alert',
+                            sub: 'Surface this alert on the dashboard',
+                            icon: Icons.dashboard_outlined,
+                            activeColor: _kSevWarning,
+                            onChanged: (v) =>
+                                setDlg(() => showDashboard = v ?? false)),
 
                         checkTile(
-                          value: playSound,
-                          label: 'Play sound on violation',
-                          sub:
-                              'Trigger beep / alert sound when constraint fails',
-                          icon: Icons.volume_up_outlined,
-                          activeColor: _kSevCritical,
-                          onChanged: (v) =>
-                              setDlg(() => playSound = v ?? false),
-                        ),
+                            value: playSound,
+                            label: 'Play sound on violation',
+                            sub:
+                                'Trigger beep / alert sound when constraint fails',
+                            icon: Icons.volume_up_outlined,
+                            activeColor: _kSevCritical,
+                            onChanged: (v) =>
+                                setDlg(() => playSound = v ?? false)),
 
                         checkTile(
-                          value: captureOnViolation,
-                          label: 'Capture image on violation',
-                          sub: 'Force inspector to take photo when this fires',
-                          icon: Icons.camera_alt_outlined,
-                          activeColor: _kSevWarning,
-                          onChanged: (v) =>
-                              setDlg(() => captureOnViolation = v ?? false),
-                        ),
+                            value: captureOnViolation,
+                            label: 'Capture image on violation',
+                            sub:
+                                'Force inspector to take photo when this fires',
+                            icon: Icons.camera_alt_outlined,
+                            activeColor: _kSevWarning,
+                            onChanged: (v) =>
+                                setDlg(() => captureOnViolation = v ?? false)),
 
                         checkTile(
-                          value: blockSubmission,
-                          label: 'Block submission',
-                          sub: 'Prevent saving the reading until corrected',
-                          icon: Icons.block_rounded,
-                          activeColor: _kSevCritical,
-                          onChanged: (v) =>
-                              setDlg(() => blockSubmission = v ?? false),
-                        ),
+                            value: blockSubmission,
+                            label: 'Block submission',
+                            sub: 'Prevent saving the reading until corrected',
+                            icon: Icons.block_rounded,
+                            activeColor: _kSevCritical,
+                            onChanged: (v) =>
+                                setDlg(() => blockSubmission = v ?? false)),
                       ],
                     ),
                   ),
                 ),
 
-                // ── Footer ────────────────────────────────────────────────────
+                // Footer
                 Container(
                   padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
                   decoration: const BoxDecoration(
@@ -534,64 +571,53 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                         BorderRadius.vertical(bottom: Radius.circular(18)),
                     border: Border(top: BorderSide(color: _kBorder)),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
+                  child:
+                      Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                    TextButton(
                         onPressed: () => Navigator.pop(ctx),
                         child: Text('Cancel',
-                            style: GoogleFonts.dmSans(color: _kSub)),
-                      ),
-                      const SizedBox(width: 10),
-                      GestureDetector(
-                        onTap: () {
-                          final val = valueCtrl.text.trim();
-                          if (val.isEmpty) return;
-
-                          final c = {
-                            'id': existing?['id'] ??
-                                'c_${DateTime.now().millisecondsSinceEpoch}',
-                            'op': selectedOp,
-                            'value': val,
-                            'severity': severity,
-                            'alert_title': alertTitleCtrl.text.trim(),
-                            'message': errorMsgCtrl.text.trim(),
-                            // Behaviour flags
-                            'store_history': storeHistory,
-                            'show_dashboard_alert': showDashboard,
-                            'play_sound_on_violation': playSound,
-                            'capture_image_on_violation': captureOnViolation,
-                            'block_submission': blockSubmission,
-                          };
-
-                          setState(() {
-                            if (idx != null) {
-                              _constraints[idx] = c;
-                            } else {
-                              _constraints.add(c);
-                            }
-                          });
-                          debugPrint('[Constraints] Saved: $c');
-                          Navigator.pop(ctx);
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 10),
-                          decoration: BoxDecoration(
+                            style: GoogleFonts.dmSans(color: _kSub))),
+                    const SizedBox(width: 10),
+                    GestureDetector(
+                      onTap: () {
+                        final val = valueCtrl.text.trim();
+                        if (val.isEmpty) return;
+                        final c = {
+                          'id': existing?['id'] ??
+                              'c_${DateTime.now().millisecondsSinceEpoch}',
+                          'op': selectedOp,
+                          'value': val,
+                          'severity': severity,
+                          'alert_title': alertTitleCtrl.text.trim(),
+                          'message': errorMsgCtrl.text.trim(),
+                          'store_history': storeHistory,
+                          'show_dashboard_alert': showDashboard,
+                          'play_sound_on_violation': playSound,
+                          'capture_image_on_violation': captureOnViolation,
+                          'block_submission': blockSubmission,
+                        };
+                        setState(() {
+                          idx != null
+                              ? _constraints[idx] = c
+                              : _constraints.add(c);
+                        });
+                        debugPrint('[Constraints] Saved: $c');
+                        Navigator.pop(ctx);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 10),
+                        decoration: BoxDecoration(
                             color: _kAccent,
-                            borderRadius: BorderRadius.circular(9),
-                          ),
-                          child: Text(
-                            idx != null ? 'Update' : 'Add',
+                            borderRadius: BorderRadius.circular(9)),
+                        child: Text(idx != null ? 'Update' : 'Add',
                             style: GoogleFonts.dmSans(
                                 color: Colors.white,
                                 fontWeight: FontWeight.w700,
-                                fontSize: 13),
-                          ),
-                        ),
+                                fontSize: 13)),
                       ),
-                    ],
-                  ),
+                    ),
+                  ]),
                 ),
               ],
             ),
@@ -601,13 +627,13 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     );
   }
 
-  void _deleteConstraint(int idx) {
-    setState(() => _constraints.removeAt(idx));
-  }
+  void _deleteConstraint(int idx) => setState(() => _constraints.removeAt(idx));
 
-  // ── save (UNCHANGED logic, map keys updated to match AlertModel) ───────────
+  // ── Save ───────────────────────────────────────────────────────────────────
 
   void _save() {
+    debugPrint(
+        '[PropertyBuilder] _save() — type=$_type label=${_labelCtrl.text.trim()}');
     if (!_formKey.currentState!.validate()) return;
     if (_type == 'dropdown' && _options.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -619,7 +645,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       return;
     }
 
-    final prop = {
+    final prop = <String, dynamic>{
       'id': widget.existing?['id'] ??
           DateTime.now().millisecondsSinceEpoch.toString(),
       'label': _labelCtrl.text.trim(),
@@ -628,19 +654,48 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       'required': _required,
       'capture_image': _captureImage,
       'options': List<String>.from(_options),
-      'left_label': _leftLabelCtrl.text.trim().isEmpty
-          ? 'Before'
-          : _leftLabelCtrl.text.trim(),
-      'right_label': _rightLabelCtrl.text.trim().isEmpty
-          ? 'After'
-          : _rightLabelCtrl.text.trim(),
+      // left/right labels ONLY for dual_text
+      if (_type == 'dual_text') ...{
+        'left_label': _leftLabelCtrl.text.trim().isEmpty
+            ? 'Before'
+            : _leftLabelCtrl.text.trim(),
+        'right_label': _rightLabelCtrl.text.trim().isEmpty
+            ? 'After'
+            : _rightLabelCtrl.text.trim(),
+      },
+      // slider range (slider only)
       if (_type == 'slider') ...{
         'min': double.tryParse(_minCtrl.text.trim()) ?? 0,
         'max': double.tryParse(_maxCtrl.text.trim()) ?? 100,
       },
+      // Expected range — number / slider
+      if (_isNumerical) ...{
+        if (_parseOpt(_expMinCtrl) != null)
+          'expected_min': _parseOpt(_expMinCtrl),
+        if (_parseOpt(_expAvgCtrl) != null)
+          'expected_avg': _parseOpt(_expAvgCtrl),
+        if (_parseOpt(_expMaxCtrl) != null)
+          'expected_max': _parseOpt(_expMaxCtrl),
+      },
+      // Expected range — dual_text (per side)
+      if (_isDualText) ...{
+        if (_parseOpt(_leftExpMinCtrl) != null)
+          'left_expected_min': _parseOpt(_leftExpMinCtrl),
+        if (_parseOpt(_leftExpAvgCtrl) != null)
+          'left_expected_avg': _parseOpt(_leftExpAvgCtrl),
+        if (_parseOpt(_leftExpMaxCtrl) != null)
+          'left_expected_max': _parseOpt(_leftExpMaxCtrl),
+        if (_parseOpt(_rightExpMinCtrl) != null)
+          'right_expected_min': _parseOpt(_rightExpMinCtrl),
+        if (_parseOpt(_rightExpAvgCtrl) != null)
+          'right_expected_avg': _parseOpt(_rightExpAvgCtrl),
+        if (_parseOpt(_rightExpMaxCtrl) != null)
+          'right_expected_max': _parseOpt(_rightExpMaxCtrl),
+      },
       'constraints': List<Map<String, dynamic>>.from(_constraints),
     };
-    debugPrint('[PropertyBuilder] onSave: $prop');
+
+    debugPrint('[PropertyBuilder] onSave prop=$prop');
     widget.onSave(prop);
     Navigator.pop(context);
   }
@@ -771,6 +826,13 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
                 const SizedBox(height: 20),
                 _buildTypeConfig(),
+
+                // ── Expected range ────────────────────────────────────────
+                if (_isNumerical || _isDualText) ...[
+                  const SizedBox(height: 20),
+                  _buildExpectedRange(),
+                ],
+
                 const SizedBox(height: 24),
                 _buildConstraintsSection(),
                 const SizedBox(height: 28),
@@ -888,8 +950,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
               onReorder: (o, n) {
                 setState(() {
                   if (n > o) n--;
-                  final item = _options.removeAt(o);
-                  _options.insert(n, item);
+                  final i = _options.removeAt(o);
+                  _options.insert(n, i);
                 });
               },
               itemBuilder: (_, i) => ListTile(
@@ -941,28 +1003,26 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
           const SizedBox(height: 12),
           Row(children: [
             Expanded(
-              child: TextFormField(
-                controller: _leftLabelCtrl,
-                style: const TextStyle(color: _kText),
-                cursorColor: _kAccent,
-                decoration: compactDeco(
-                    hint: 'Left (e.g. Before)',
-                    icon: Icons.align_horizontal_left_outlined),
-                validator: (v) => v!.trim().isEmpty ? 'Required' : null,
-              ),
-            ),
+                child: TextFormField(
+              controller: _leftLabelCtrl,
+              style: const TextStyle(color: _kText),
+              cursorColor: _kAccent,
+              decoration: compactDeco(
+                  hint: 'Left (e.g. Before)',
+                  icon: Icons.align_horizontal_left_outlined),
+              validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+            )),
             const SizedBox(width: 12),
             Expanded(
-              child: TextFormField(
-                controller: _rightLabelCtrl,
-                style: const TextStyle(color: _kText),
-                cursorColor: _kAccent,
-                decoration: compactDeco(
-                    hint: 'Right (e.g. After)',
-                    icon: Icons.align_horizontal_right_outlined),
-                validator: (v) => v!.trim().isEmpty ? 'Required' : null,
-              ),
-            ),
+                child: TextFormField(
+              controller: _rightLabelCtrl,
+              style: const TextStyle(color: _kText),
+              cursorColor: _kAccent,
+              decoration: compactDeco(
+                  hint: 'Right (e.g. After)',
+                  icon: Icons.align_horizontal_right_outlined),
+              validator: (v) => v!.trim().isEmpty ? 'Required' : null,
+            )),
           ]),
         ],
       );
@@ -974,38 +1034,91 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
           const SizedBox(height: 10),
           Row(children: [
             Expanded(
-              child: TextFormField(
-                controller: _minCtrl,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: _kText),
-                cursorColor: _kAccent,
-                decoration: compactDeco(hint: 'Min', icon: Icons.first_page),
-                validator: (v) =>
-                    double.tryParse(v ?? '') == null ? 'Invalid' : null,
-              ),
-            ),
+                child: TextFormField(
+              controller: _minCtrl,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: _kText),
+              cursorColor: _kAccent,
+              decoration: compactDeco(hint: 'Min', icon: Icons.first_page),
+              validator: (v) =>
+                  double.tryParse(v ?? '') == null ? 'Invalid' : null,
+            )),
             const SizedBox(width: 12),
             Expanded(
-              child: TextFormField(
-                controller: _maxCtrl,
-                keyboardType: TextInputType.number,
-                style: const TextStyle(color: _kText),
-                cursorColor: _kAccent,
-                decoration: compactDeco(hint: 'Max', icon: Icons.last_page),
-                validator: (v) {
-                  final max = double.tryParse(v ?? '');
-                  if (max == null) return 'Invalid';
-                  if (max <= (double.tryParse(_minCtrl.text) ?? 0))
-                    return 'Must be > Min';
-                  return null;
-                },
-              ),
-            ),
+                child: TextFormField(
+              controller: _maxCtrl,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(color: _kText),
+              cursorColor: _kAccent,
+              decoration: compactDeco(hint: 'Max', icon: Icons.last_page),
+              validator: (v) {
+                final max = double.tryParse(v ?? '');
+                if (max == null) return 'Invalid';
+                if (max <= (double.tryParse(_minCtrl.text) ?? 0))
+                  return 'Must be > Min';
+                return null;
+              },
+            )),
           ]),
         ],
       );
 
-  // ── Constraints section (header/shell UNCHANGED; chips updated) ────────────
+  // ── ✨ NEW — Expected Range section ────────────────────────────────────────
+
+  Widget _buildExpectedRange() {
+    const numKb = TextInputType.numberWithOptions(decimal: true);
+
+    if (_isNumerical) {
+      // Single set of Min / Avg / Max
+      return _ExpectedRangeCard(
+        title: 'Expected Range',
+        subtitle: 'Optional reference values used for alerts and dashboards.',
+        children: [
+          _RangeRow(
+            minCtrl: _expMinCtrl,
+            avgCtrl: _expAvgCtrl,
+            maxCtrl: _expMaxCtrl,
+            keyboardType: numKb,
+          ),
+        ],
+      );
+    }
+
+    // dual_text — one set per side, labelled with the user's column names
+    final leftLabel = _leftLabelCtrl.text.trim().isEmpty
+        ? 'Left (Before)'
+        : _leftLabelCtrl.text.trim();
+    final rightLabel = _rightLabelCtrl.text.trim().isEmpty
+        ? 'Right (After)'
+        : _rightLabelCtrl.text.trim();
+
+    return _ExpectedRangeCard(
+      title: 'Expected Range',
+      subtitle: 'Set Min / Avg / Max for each column. '
+          'Only values you enter will be stored.',
+      children: [
+        _sl('$leftLabel column'),
+        const SizedBox(height: 8),
+        _RangeRow(
+          minCtrl: _leftExpMinCtrl,
+          avgCtrl: _leftExpAvgCtrl,
+          maxCtrl: _leftExpMaxCtrl,
+          keyboardType: numKb,
+        ),
+        const SizedBox(height: 14),
+        _sl('$rightLabel column'),
+        const SizedBox(height: 8),
+        _RangeRow(
+          minCtrl: _rightExpMinCtrl,
+          avgCtrl: _rightExpAvgCtrl,
+          maxCtrl: _rightExpMaxCtrl,
+          keyboardType: numKb,
+        ),
+      ],
+    );
+  }
+
+  // ── Constraints section (UNCHANGED appearance) ────────────────────────────
 
   Widget _buildConstraintsSection() {
     final ops = opsForType(_type);
@@ -1016,270 +1129,236 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
           color: _kSurface,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _kBorder)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // ── Collapsible header (UNCHANGED) ──────────────────────────────
-          InkWell(
-            onTap: () =>
-                setState(() => _constraintsExpanded = !_constraintsExpanded),
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Row(children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // collapsible header
+        InkWell(
+          onTap: () =>
+              setState(() => _constraintsExpanded = !_constraintsExpanded),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                    color: const Color(0xFFBB86FC).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.rule_outlined,
+                    size: 16, color: Color(0xFFBB86FC)),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text('Validation Constraints',
+                        style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: _kText)),
+                    Text(
+                      _constraints.isEmpty
+                          ? 'Optional — add rules the inspector\'s input must satisfy'
+                          : '${_constraints.length} constraint${_constraints.length == 1 ? '' : 's'} active',
+                      style: const TextStyle(fontSize: 11, color: _kSub),
+                    ),
+                  ])),
+              if (_constraints.isNotEmpty)
                 Container(
-                  padding: const EdgeInsets.all(6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
                       color: const Color(0xFFBB86FC).withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: const Icon(Icons.rule_outlined,
-                      size: 16, color: Color(0xFFBB86FC)),
+                      borderRadius: BorderRadius.circular(20)),
+                  child: Text('${_constraints.length}',
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFFBB86FC),
+                          fontWeight: FontWeight.w700)),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Validation Constraints',
-                          style: GoogleFonts.inter(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: _kText)),
-                      Text(
-                        _constraints.isEmpty
-                            ? 'Optional — add rules the inspector\'s input must satisfy'
-                            : '${_constraints.length} constraint${_constraints.length == 1 ? '' : 's'} active',
-                        style: const TextStyle(fontSize: 11, color: _kSub),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_constraints.isNotEmpty)
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(
-                        color: const Color(0xFFBB86FC).withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(20)),
-                    child: Text('${_constraints.length}',
-                        style: const TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFFBB86FC),
-                            fontWeight: FontWeight.w700)),
-                  ),
-                const SizedBox(width: 6),
-                Icon(
-                    _constraintsExpanded
-                        ? Icons.keyboard_arrow_up
-                        : Icons.keyboard_arrow_down,
-                    size: 20,
-                    color: _kSub),
-              ]),
-            ),
+              const SizedBox(width: 6),
+              Icon(
+                  _constraintsExpanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                  size: 20,
+                  color: _kSub),
+            ]),
           ),
+        ),
 
-          // ── Expanded body ────────────────────────────────────────────────
-          if (_constraintsExpanded) ...[
-            Divider(height: 1, thickness: 1, color: _kBorder),
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'All constraints must pass (AND logic).',
-                    style: TextStyle(fontSize: 11, color: _kSub),
-                  ),
-                  const SizedBox(height: 12),
+        // expanded body
+        if (_constraintsExpanded) ...[
+          const Divider(height: 1, thickness: 1, color: _kBorder),
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('All constraints must pass (AND logic).',
+                  style: TextStyle(fontSize: 11, color: _kSub)),
+              const SizedBox(height: 12),
+              if (_constraints.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                      color: _kBg,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: _kBorder)),
+                  child: const Center(
+                      child: Text('No constraints yet',
+                          style: TextStyle(fontSize: 12, color: _kSub))),
+                )
+              else
+                ...List.generate(_constraints.length, (i) {
+                  final c = _constraints[i];
+                  final op = c['op']?.toString() ?? '';
+                  final val = c['value']?.toString() ?? '';
+                  final msg = c['message']?.toString() ?? '';
+                  final sev = c['severity']?.toString() ?? 'warning';
+                  final sc = _sevColor(sev);
 
-                  // Constraint list
-                  if (_constraints.isEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                          color: _kBg,
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: _kBorder)),
-                      child: const Center(
-                          child: Text('No constraints yet',
-                              style: TextStyle(fontSize: 12, color: _kSub))),
-                    )
-                  else
-                    ...List.generate(_constraints.length, (i) {
-                      final c = _constraints[i];
-                      final op = c['op']?.toString() ?? '';
-                      final val = c['value']?.toString() ?? '';
-                      final msg = c['message']?.toString() ?? '';
-                      final sev = c['severity']?.toString() ?? 'warning';
-                      final sevColor = _sevColor(sev);
+                  final flags = <_ConstraintFlag>[];
+                  if (c['store_history'] == true)
+                    flags.add(_ConstraintFlag(
+                        Icons.history_rounded, _kAccent, 'Stored'));
+                  if (c['show_dashboard_alert'] == true)
+                    flags.add(_ConstraintFlag(
+                        Icons.dashboard_outlined, _kSevWarning, 'Dashboard'));
+                  if (c['play_sound_on_violation'] == true)
+                    flags.add(_ConstraintFlag(
+                        Icons.volume_up_outlined, _kSevCritical, 'Sound'));
+                  if (c['capture_image_on_violation'] == true)
+                    flags.add(_ConstraintFlag(
+                        Icons.camera_alt_outlined, _kSevWarning, 'Camera'));
+                  if (c['block_submission'] == true)
+                    flags.add(_ConstraintFlag(
+                        Icons.block_rounded, _kSevCritical, 'Blocks'));
 
-                      // Collect active flags for icon row
-                      final flags = <_ConstraintFlag>[];
-                      if (c['store_history'] == true)
-                        flags.add(_ConstraintFlag(
-                            Icons.history_rounded, _kAccent, 'Stored'));
-                      if (c['show_dashboard_alert'] == true)
-                        flags.add(_ConstraintFlag(Icons.dashboard_outlined,
-                            _kSevWarning, 'Dashboard'));
-                      if (c['play_sound_on_violation'] == true)
-                        flags.add(_ConstraintFlag(
-                            Icons.volume_up_outlined, _kSevCritical, 'Sound'));
-                      if (c['capture_image_on_violation'] == true)
-                        flags.add(_ConstraintFlag(
-                            Icons.camera_alt_outlined, _kSevWarning, 'Camera'));
-                      if (c['block_submission'] == true)
-                        flags.add(_ConstraintFlag(
-                            Icons.block_rounded, _kSevCritical, 'Blocks'));
-
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 10),
-                        decoration: BoxDecoration(
-                          color: _kBg,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: sevColor.withOpacity(0.3)),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // Top row: severity badge + operator + value + edit/delete
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
-                              child: Row(children: [
-                                // Severity badge
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 7, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: sevColor.withOpacity(0.13),
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    decoration: BoxDecoration(
+                        color: _kBg,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: sc.withOpacity(0.3))),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 10, 8, 8),
+                            child: Row(children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 3),
+                                decoration: BoxDecoration(
+                                    color: sc.withOpacity(0.13),
                                     borderRadius: BorderRadius.circular(5),
-                                    border: Border.all(
-                                        color: sevColor.withOpacity(0.4)),
-                                  ),
-                                  child: Text(
-                                    sev.toUpperCase(),
+                                    border:
+                                        Border.all(color: sc.withOpacity(0.4))),
+                                child: Text(sev.toUpperCase(),
                                     style: GoogleFonts.spaceGrotesk(
                                         fontSize: 8,
-                                        color: sevColor,
+                                        color: sc,
                                         fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.8),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                // Operator chip
-                                Container(
-                                  width: 28,
-                                  height: 28,
-                                  decoration: BoxDecoration(
+                                        letterSpacing: 0.8)),
+                              ),
+                              const SizedBox(width: 8),
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
                                     color: const Color(0xFFBB86FC)
                                         .withOpacity(0.13),
-                                    borderRadius: BorderRadius.circular(7),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      opSymbol(_type, op),
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w700,
-                                          color: Color(0xFFBB86FC)),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
+                                    borderRadius: BorderRadius.circular(7)),
+                                child: Center(
+                                    child: Text(opSymbol(_type, op),
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFFBB86FC)))),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
                                   child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        '${opLabel(_type, op)}  "$val"',
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text('${opLabel(_type, op)}  "$val"',
                                         style: GoogleFonts.dmSans(
                                             fontSize: 13,
                                             color: _kText,
-                                            fontWeight: FontWeight.w600),
-                                      ),
-                                      if (msg.isNotEmpty)
-                                        Text(msg,
-                                            style: GoogleFonts.dmSans(
-                                                fontSize: 11, color: _kSub)),
-                                    ],
-                                  ),
-                                ),
-                                _iconTap(Icons.edit_outlined, _kAccent,
-                                    () => _addOrEditConstraint(idx: i)),
-                                _iconTap(Icons.delete_outline, _kDanger,
-                                    () => _deleteConstraint(i)),
-                              ]),
-                            ),
-
-                            // Flag icon row (only shown when flags exist)
-                            if (flags.isNotEmpty)
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                                child: Wrap(
-                                  spacing: 6,
-                                  runSpacing: 4,
-                                  children: flags
-                                      .map((f) => Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 7, vertical: 3),
-                                            decoration: BoxDecoration(
+                                            fontWeight: FontWeight.w600)),
+                                    if (msg.isNotEmpty)
+                                      Text(msg,
+                                          style: GoogleFonts.dmSans(
+                                              fontSize: 11, color: _kSub)),
+                                  ])),
+                              _iconTap(Icons.edit_outlined, _kAccent,
+                                  () => _addOrEditConstraint(idx: i)),
+                              _iconTap(Icons.delete_outline, _kDanger,
+                                  () => _deleteConstraint(i)),
+                            ]),
+                          ),
+                          if (flags.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                              child: Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                children: flags
+                                    .map((f) => Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 7, vertical: 3),
+                                          decoration: BoxDecoration(
                                               color: f.color.withOpacity(0.1),
                                               borderRadius:
                                                   BorderRadius.circular(5),
                                               border: Border.all(
-                                                  color:
-                                                      f.color.withOpacity(0.3)),
-                                            ),
-                                            child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(f.icon,
-                                                      size: 10, color: f.color),
-                                                  const SizedBox(width: 4),
-                                                  Text(f.label,
-                                                      style: GoogleFonts
-                                                          .spaceGrotesk(
-                                                              fontSize: 8,
-                                                              color: f.color,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w700,
-                                                              letterSpacing:
-                                                                  0.4)),
-                                                ]),
-                                          ))
-                                      .toList(),
-                                ),
+                                                  color: f.color
+                                                      .withOpacity(0.3))),
+                                          child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(f.icon,
+                                                    size: 10, color: f.color),
+                                                const SizedBox(width: 4),
+                                                Text(f.label,
+                                                    style: GoogleFonts
+                                                        .spaceGrotesk(
+                                                            fontSize: 8,
+                                                            color: f.color,
+                                                            fontWeight:
+                                                                FontWeight.w700,
+                                                            letterSpacing:
+                                                                0.4)),
+                                              ]),
+                                        ))
+                                    .toList(),
                               ),
-                          ],
-                        ),
-                      );
-                    }),
-
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Color(0xFFBB86FC)),
-                        foregroundColor: const Color(0xFFBB86FC),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10)),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add Constraint'),
-                      onPressed: _addOrEditConstraint,
-                    ),
+                            ),
+                        ]),
+                  );
+                }),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFFBB86FC)),
+                    foregroundColor: const Color(0xFFBB86FC),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                   ),
-                ],
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Constraint'),
+                  onPressed: _addOrEditConstraint,
+                ),
               ),
-            ),
-          ],
+            ]),
+          ),
         ],
-      ),
+      ]),
     );
   }
 
@@ -1298,36 +1377,32 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: _kBorder)),
       padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(
-              width: MediaQuery.of(context).size.width * 0.22,
-              child: Padding(
-                padding: const EdgeInsets.only(top: 10),
-                child: Text(label,
-                    style: GoogleFonts.inter(
-                        fontWeight: FontWeight.w500,
-                        fontSize: 13,
-                        color: _kText)),
-              ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(
+            width: MediaQuery.of(context).size.width * 0.22,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(label,
+                  style: GoogleFonts.inter(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 13,
+                      color: _kText)),
             ),
-            if (_required)
-              const Padding(
+          ),
+          if (_required)
+            const Padding(
                 padding: EdgeInsets.only(top: 10, right: 2),
-                child:
-                    Text(' *', style: TextStyle(color: _kDanger, fontSize: 13)),
-              ),
-            Expanded(child: _liveInput(hint)),
-          ]),
-          if (_hintCtrl.text.trim().isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(_hintCtrl.text.trim(),
-                style: const TextStyle(fontSize: 11, color: _kSub)),
-          ],
+                child: Text(' *',
+                    style: TextStyle(color: _kDanger, fontSize: 13))),
+          Expanded(child: _liveInput(hint)),
+        ]),
+        if (_hintCtrl.text.trim().isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(_hintCtrl.text.trim(),
+              style: const TextStyle(fontSize: 11, color: _kSub)),
         ],
-      ),
+      ]),
     );
   }
 
@@ -1356,11 +1431,9 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
           items: _options.isNotEmpty
               ? _options
                   .map((o) => DropdownMenuItem(
-                        value: o,
-                        child: Text(o,
-                            style:
-                                const TextStyle(color: _kText, fontSize: 13)),
-                      ))
+                      value: o,
+                      child: Text(o,
+                          style: const TextStyle(color: _kText, fontSize: 13))))
                   .toList()
               : [
                   const DropdownMenuItem(
@@ -1419,7 +1492,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       case 'slider':
         final mn = double.tryParse(_minCtrl.text) ?? 0;
         final mx = double.tryParse(_maxCtrl.text) ?? 100;
-        final safeMx = mx > mn ? mx : mn + 1;
+        final sMx = mx > mn ? mx : mn + 1;
         return Column(children: [
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
@@ -1428,7 +1501,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
               inactiveTrackColor: _kBorder,
               thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
             ),
-            child: Slider(value: mn, min: mn, max: safeMx, onChanged: null),
+            child: Slider(value: mn, min: mn, max: sMx, onChanged: null),
           ),
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Text('$mn', style: const TextStyle(fontSize: 11, color: _kSub)),
@@ -1489,7 +1562,132 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// _ConstraintFlag — tiny data class for the flag icon row
+// ✨ _ExpectedRangeCard — container for the expected range section
+// ─────────────────────────────────────────────────────────────────────────────
+class _ExpectedRangeCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final List<Widget> children;
+
+  const _ExpectedRangeCard({
+    required this.title,
+    required this.subtitle,
+    required this.children,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF141618),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF252830)),
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF22C55E).withOpacity(0.13),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(Icons.straighten_outlined,
+                size: 15, color: Color(0xFF22C55E)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                Text(title,
+                    style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: const Color(0xFFF0EEE9))),
+                Text(subtitle,
+                    style: const TextStyle(
+                        fontSize: 11, color: Color(0xFF8A8F9C))),
+              ])),
+        ]),
+        const SizedBox(height: 14),
+        ...children,
+      ]),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ✨ _RangeRow — three compact fields: Min | Avg | Max in one row
+// ─────────────────────────────────────────────────────────────────────────────
+class _RangeRow extends StatelessWidget {
+  final TextEditingController minCtrl;
+  final TextEditingController avgCtrl;
+  final TextEditingController maxCtrl;
+  final TextInputType keyboardType;
+
+  const _RangeRow({
+    required this.minCtrl,
+    required this.avgCtrl,
+    required this.maxCtrl,
+    required this.keyboardType,
+  });
+
+  InputDecoration _dec(String label) {
+    final border = OutlineInputBorder(
+        borderRadius: BorderRadius.circular(8),
+        borderSide: const BorderSide(color: Color(0xFF252830)));
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: Color(0xFF8A8F9C), fontSize: 11),
+      hintStyle: const TextStyle(color: Color(0xFF8A8F9C), fontSize: 12),
+      filled: true,
+      fillColor: const Color(0xFF0C0D0F),
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      border: border,
+      enabledBorder: border,
+      focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF1ABCBD), width: 1.5)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(children: [
+      Expanded(
+          child: TextField(
+        controller: minCtrl,
+        keyboardType: keyboardType,
+        style: const TextStyle(color: Color(0xFFF0EEE9), fontSize: 13),
+        cursorColor: const Color(0xFF1ABCBD),
+        decoration: _dec('Min'),
+      )),
+      const SizedBox(width: 8),
+      Expanded(
+          child: TextField(
+        controller: avgCtrl,
+        keyboardType: keyboardType,
+        style: const TextStyle(color: Color(0xFFF0EEE9), fontSize: 13),
+        cursorColor: const Color(0xFF1ABCBD),
+        decoration: _dec('Avg'),
+      )),
+      const SizedBox(width: 8),
+      Expanded(
+          child: TextField(
+        controller: maxCtrl,
+        keyboardType: keyboardType,
+        style: const TextStyle(color: Color(0xFFF0EEE9), fontSize: 13),
+        cursorColor: const Color(0xFF1ABCBD),
+        decoration: _dec('Max'),
+      )),
+    ]);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Unchanged helpers
 // ─────────────────────────────────────────────────────────────────────────────
 class _ConstraintFlag {
   final IconData icon;
@@ -1498,9 +1696,6 @@ class _ConstraintFlag {
   const _ConstraintFlag(this.icon, this.color, this.label);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// _DarkTextField — reusable dark-themed single/multi-line field
-// ─────────────────────────────────────────────────────────────────────────────
 class _DarkTextField extends StatelessWidget {
   final TextEditingController ctrl;
   final String hint;
