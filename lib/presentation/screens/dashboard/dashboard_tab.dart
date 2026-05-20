@@ -27,6 +27,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 
 import '../../../data/models/dashboard_stats_model.dart';
 import '../../../data/models/tank_model.dart';
@@ -63,6 +64,7 @@ class _AlertModel {
   final String id;
   final String alertTitle;
   final String message;
+  final String op;
   final String severity;
   final String tankId;
   final String tankName;
@@ -83,6 +85,7 @@ class _AlertModel {
     required this.alertTitle,
     required this.message,
     required this.severity,
+    required this.op,
     required this.tankId,
     required this.tankName,
     required this.tankCode,
@@ -103,6 +106,7 @@ class _AlertModel {
         alertTitle: m['alert_title']?.toString() ?? '',
         message: m['message']?.toString() ?? '',
         severity: m['severity']?.toString() ?? 'warning',
+        op : m['op']?.toString() ?? 'null',
         tankId: m['tank_id']?.toString() ?? '',
         tankName: m['tank_name']?.toString() ?? '',
         tankCode: m['tank_code']?.toString() ?? '',
@@ -341,7 +345,7 @@ class _DashboardTabState extends State<DashboardTab> {
         'captured_by': '',
         'captured_by_name': 'Dashboard',
         'image_url': '',
-        'constraint_id': '',
+        'constraint': '',
         'timestamp': DateTime.now().toIso8601String(),
         'acknowledged': false,
         'live': false,
@@ -924,7 +928,11 @@ class _AlertCardState extends State<_AlertCard> {
                   _DetailRow('Value', a.paramValue),
                   _DetailRow('Captured By', a.capturedByName),
                   _DetailRow('Timestamp', _fmtTs(a.timestamp)),
-                  _DetailRow('Constraint ID', a.constraintId),
+                  // _DetailRow('Constraint ', a.constraintId),
+                  _DetailRow(
+  'Constraint',
+  '${a.paramLabel} ${a.op} ${a.paramValue} then ${a.message}',
+),
                   if (a.imageUrl.isNotEmpty) _DetailRow('Image', a.imageUrl),
                   _DetailRow('Alert ID', a.id),
 
@@ -1166,27 +1174,198 @@ class _SevBadge extends StatelessWidget {
 class _DetailRow extends StatelessWidget {
   final String label;
   final String value;
+
   const _DetailRow(this.label, this.value);
 
+  bool get _isImage {
+    final v = value.toLowerCase();
+    return v.contains('.png') ||
+        v.contains('.jpg') ||
+        v.contains('.jpeg') ||
+        v.contains('firebasestorage') ||
+        v.contains('http');
+  }
+
+  String _beautifyConstraint(String raw) {
+    if (raw.trim().isEmpty) return '—';
+
+    final v = raw
+        .replaceAll('_', ' ')
+        .replaceAll('-', ' ')
+        .trim();
+
+    return v
+        .split(' ')
+        .map((e) =>
+            e.isEmpty ? '' : '${e[0].toUpperCase()}${e.substring(1)}')
+        .join(' ');
+  }
+
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 6),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+  Widget build(BuildContext context) {
+    final displayValue =
+        label.toLowerCase().contains('constraint')
+            ? _beautifyConstraint(value)
+            : value;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           SizedBox(
             width: 100,
-            child: Text(label,
-                style: GoogleFonts.dmSans(color: _kSub, fontSize: 11)),
+            child: Text(
+              label,
+              style: GoogleFonts.dmSans(
+                color: _kSub,
+                fontSize: 11,
+              ),
+            ),
           ),
+
           const SizedBox(width: 6),
+
           Expanded(
-            child: Text(value,
-                style: GoogleFonts.dmSans(
-                    color: _kText, fontSize: 11, fontWeight: FontWeight.w500)),
+            child: _isImage
+                ? _ImageThumb(url: value)
+                : Text(
+                    displayValue,
+                    style: GoogleFonts.dmSans(
+                      color: _kText,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
           ),
-        ]),
-      );
+        ],
+      ),
+    );
+  }
 }
 
+
+class _ImageThumb extends StatelessWidget {
+  final String url;
+
+  const _ImageThumb({required this.url});
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => _FullscreenImageViewer(imageUrl: url),
+          ),
+        );
+      },
+      child: Hero(
+        tag: url,
+        child: Container(
+          width: 62,
+          height: 62,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: _kBorderH,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: CachedNetworkImage(
+            imageUrl: url,
+            fit: BoxFit.cover,
+            placeholder: (_, __) => Container(
+              color: _kSurface,
+              child: const Center(
+                child: SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: _kCopper,
+                  ),
+                ),
+              ),
+            ),
+            errorWidget: (_, __, ___) => Container(
+              color: _kSurface,
+              child: const Icon(
+                Icons.broken_image_outlined,
+                color: _kSub,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FullscreenImageViewer extends StatelessWidget {
+  final String imageUrl;
+
+  const _FullscreenImageViewer({
+    required this.imageUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Center(
+              child: Hero(
+                tag: imageUrl,
+                child: InteractiveViewer(
+                  minScale: 0.8,
+                  maxScale: 5,
+                  child: CachedNetworkImage(
+                    imageUrl: imageUrl,
+                    fit: BoxFit.contain,
+                    placeholder: (_, __) => const Center(
+                      child: CircularProgressIndicator(
+                        color: Colors.white,
+                      ),
+                    ),
+                    errorWidget: (_, __, ___) => const Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white54,
+                      size: 40,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            Positioned(
+              top: 10,
+              left: 10,
+              child: GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.45),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.arrow_back_rounded,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // _SummaryStrip — unchanged except callback for expected-avg check
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1546,7 +1725,15 @@ class _TankStatsCardState extends State<_TankStatsCard> {
         if (stat == null)
           Text('No data', style: GoogleFonts.dmSans(fontSize: 12, color: _kSub))
         else if (type == 'number' || type == 'slider')
-          _NumericStatRow(stat: stat, fmtNum: _fmtNum)
+          _NumericStatRow(
+  stat: stat,
+  fmtNum: _fmtNum,
+  expectedAvg: (p['expected_avg'] as num?)?.toDouble(),
+  expectedMin: (p['expected_min'] as num?)?.toDouble(),
+expectedMax: (p['expected_max'] as num?)?.toDouble(),
+  // expectedMin: (p['min'] as num?)?.toDouble(),
+  // expectedMax: (p['max'] as num?)?.toDouble(),
+)
         else if (type == 'dropdown')
           _DropdownStatBlock(stat: stat, totalCount: stats.count)
         else if (type == 'dual_text')
@@ -1653,26 +1840,57 @@ class _TankStatsCardState extends State<_TankStatsCard> {
 class _NumericStatRow extends StatelessWidget {
   final ParamStat stat;
   final String Function(double?) fmtNum;
-  const _NumericStatRow({required this.stat, required this.fmtNum});
+
+  final double? expectedAvg;
+  final double? expectedMin;
+  final double? expectedMax;
+
+  const _NumericStatRow({
+    required this.stat,
+    required this.fmtNum,
+    this.expectedAvg,
+    this.expectedMin,
+    this.expectedMax,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return Row(children: [
-      Expanded(
-          child:
-              _NumChip(label: 'AVG', value: fmtNum(stat.avg), color: _kCopper)),
-      const SizedBox(width: 8),
-      Expanded(
-          child:
-              _NumChip(label: 'MIN', value: fmtNum(stat.min), color: _kTeal)),
-      const SizedBox(width: 8),
-      Expanded(
-          child:
-              _NumChip(label: 'MAX', value: fmtNum(stat.max), color: _kWarn)),
-    ]);
+    return Row(
+      children: [
+        Expanded(
+          child: _NumChip(
+            label: 'AVG',
+            value: fmtNum(stat.avg),
+            expected: fmtNum(expectedAvg),
+            color: _kCopper,
+          ),
+        ),
+
+        const SizedBox(width: 8),
+
+        Expanded(
+          child: _NumChip(
+            label: 'MIN',
+            value: fmtNum(stat.min),
+            expected: fmtNum(expectedMin),
+            color: _kTeal,
+          ),
+        ),
+
+        const SizedBox(width: 8),
+
+        Expanded(
+          child: _NumChip(
+            label: 'MAX',
+            value: fmtNum(stat.max),
+            expected: fmtNum(expectedMax),
+            color: _kWarn,
+          ),
+        ),
+      ],
+    );
   }
 }
-
 // _DualStatBlock — unchanged
 class _DualStatBlock extends StatelessWidget {
   final ParamStat stat;
@@ -1687,81 +1905,210 @@ class _DualStatBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final leftLabel = prop['left_label'] ?? 'Before';
-    final rightLabel = prop['right_label'] ?? 'After';
+    final leftLabel =
+        (prop['left_label']?.toString().trim().isNotEmpty ?? false)
+            ? prop['left_label'].toString()
+            : 'Before';
+
+    final rightLabel =
+        (prop['right_label']?.toString().trim().isNotEmpty ?? false)
+            ? prop['right_label'].toString()
+            : 'After';
+
     final leftStats = stat.dualLeftStats;
     final rightStats = stat.dualRightStats;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _buildRow(leftLabel, leftStats),
+        _buildRow(
+          title: leftLabel,
+          stats: leftStats,
+
+          // LEFT EXPECTED VALUES
+          expectedAvg:
+              (prop['left_expected_avg'] as num?)?.toDouble(),
+
+          expectedMin:
+              (prop['left_expected_min'] as num?)?.toDouble(),
+
+          expectedMax:
+              (prop['left_expected_max'] as num?)?.toDouble(),
+        ),
+
         const SizedBox(height: 12),
-        _buildRow(rightLabel, rightStats),
+
+        _buildRow(
+          title: rightLabel,
+          stats: rightStats,
+
+          // RIGHT EXPECTED VALUES
+          expectedAvg:
+              (prop['right_expected_avg'] as num?)?.toDouble(),
+
+          expectedMin:
+              (prop['right_expected_min'] as num?)?.toDouble(),
+
+          expectedMax:
+              (prop['right_expected_max'] as num?)?.toDouble(),
+        ),
       ],
     );
   }
 
-  Widget _buildRow(String title, dynamic s) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title.toUpperCase(),
-              style: GoogleFonts.spaceGrotesk(
-                  fontSize: 10,
-                  color: _kSub,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1)),
-          const SizedBox(height: 6),
-          Row(children: [
-            Expanded(
-                child: _NumChip(
-                    label: 'AVG', value: fmtNum(s?.avg), color: _kCopper)),
-            const SizedBox(width: 8),
-            Expanded(
-                child: _NumChip(
-                    label: 'MIN', value: fmtNum(s?.min), color: _kTeal)),
-            const SizedBox(width: 8),
-            Expanded(
-                child: _NumChip(
-                    label: 'MAX', value: fmtNum(s?.max), color: _kWarn)),
-          ]),
-        ],
-      );
-}
+  Widget _buildRow({
+    required String title,
+    required dynamic stats,
+    double? expectedAvg,
+    double? expectedMin,
+    double? expectedMax,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          title.toUpperCase(),
+          style: GoogleFonts.spaceGrotesk(
+            fontSize: 10,
+            color: _kSub,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1,
+          ),
+        ),
 
+        const SizedBox(height: 6),
+
+        Row(
+          children: [
+            Expanded(
+              child: _NumChip(
+                label: 'AVG',
+                value: fmtNum(stats?.avg),
+                expected: fmtNum(expectedAvg),
+                color: _kCopper,
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            Expanded(
+              child: _NumChip(
+                label: 'MIN',
+                value: fmtNum(stats?.min),
+                expected: fmtNum(expectedMin),
+                color: _kTeal,
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            Expanded(
+              child: _NumChip(
+                label: 'MAX',
+                value: fmtNum(stats?.max),
+                expected: fmtNum(expectedMax),
+                color: _kWarn,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // _NumChip — value text now 14px (medium) and colored same as chip color
 // ─────────────────────────────────────────────────────────────────────────────
 class _NumChip extends StatelessWidget {
-  final String label, value;
+  final String label;
+  final String value;
+
+  /// optional expected value
+  final String? expected;
+
   final Color color;
-  const _NumChip(
-      {required this.label, required this.value, required this.color});
+
+  const _NumChip({
+    required this.label,
+    required this.value,
+    this.expected,
+    required this.color,
+  });
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.07),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withOpacity(0.22)),
+  Widget build(BuildContext context) {
+    final hasExpected =
+        expected != null &&
+        expected!.trim().isNotEmpty &&
+        expected != '—';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        vertical: 10,
+        horizontal: 12,
+      ),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: color.withOpacity(0.22),
         ),
-        child: Column(children: [
-          Text(label,
-              style: GoogleFonts.spaceGrotesk(
+      ),
+      child: Stack(
+        children: [
+          if (hasExpected)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 5,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.10),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  expected!,
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    color: color.withOpacity(0.85),
+                  ),
+                ),
+              ),
+            ),
+
+          Column(
+            children: [
+              Text(
+                label,
+                style: GoogleFonts.spaceGrotesk(
                   fontSize: 9,
                   color: color,
                   fontWeight: FontWeight.w700,
-                  letterSpacing: 1)),
-          const SizedBox(height: 4),
-          // ↓ CHANGED: fontSize 14 (was 16), color = chip color (was _kText)
-          Text(value,
-              style: GoogleFonts.spaceGrotesk(
-                  fontSize: 14, fontWeight: FontWeight.w700, color: color)),
-        ]),
-      );
-}
+                  letterSpacing: 1,
+                ),
+              ),
 
+              const SizedBox(height: 4),
+
+              Text(
+                value,
+                style: GoogleFonts.spaceGrotesk(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // _DropdownStatBlock — unchanged
 // ─────────────────────────────────────────────────────────────────────────────
