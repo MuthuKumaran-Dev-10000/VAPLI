@@ -11,11 +11,20 @@
 //   ✅ All per-param photo captures also upload immediately on capture
 //   ✅ On final Save: no re-upload needed (URLs already stored); just assembles
 //      the reading record and writes it
+//   ✅ NEW: Autofill parameters — disabled by default, radio button to toggle
+//      manual entry ("Autofill" label to enable/disable autofill)
+//   ✅ NEW: Expression evaluation — auto-calculates when all deps are filled
+//   ✅ NEW: Dependency status list with ✓ (green) / ✗ (red) per param
+//   ✅ NEW: Re-evaluates when any dependency param changes (edit/delete)
+//   ✅ NEW: Math errors caught (divide-by-zero, etc.) shown in layman terms
+//   ✅ NEW: Sound + vibration fixed using AudioPlayer with asset fallback
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:audioplayers/audioplayers.dart';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
@@ -85,6 +94,23 @@ IconData _severityIcon(String? s) {
   }
 }
 
+// ── Autofill expression result ────────────────────────────────────────────────
+class _AutofillResult {
+  final double? value;
+  final String? errorMessage;       // layman-friendly
+  final String? exceptionName;      // technical name
+  final bool hasError;
+
+  const _AutofillResult.value(this.value)
+      : errorMessage = null,
+        exceptionName = null,
+        hasError = false;
+
+  const _AutofillResult.error(this.errorMessage, this.exceptionName)
+      : value = null,
+        hasError = true;
+}
+
 // ── Data classes ──────────────────────────────────────────────────────────────
 class _Violation {
   final String constraintId;
@@ -113,7 +139,7 @@ class _Violation {
 class _ManualCaptureEntry {
   String? selectedParamId;
   File? capturedImage;
-  String? uploadedUrl; // URL after immediate upload
+  String? uploadedUrl;
   bool uploading = false;
 
   _ManualCaptureEntry({this.selectedParamId, this.capturedImage});
@@ -140,6 +166,9 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   final _picker = ImagePicker();
   final _db = FirebaseDatabase.instance.ref();
 
+  // ── Audio ──────────────────────────────────────────────────────────────
+  final AudioPlayer _audioPlayer = AudioPlayer();
+
   // ── Save state ─────────────────────────────────────────────────────────
   bool _saving = false;
   bool _saved = false;
@@ -156,29 +185,30 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   final Map<String, String?> _dropdownVal = {};
   final Map<String, double> _sliderVal = {};
 
+  // ── Autofill: per-param → is autofill mode active (true) or manual (false)
+  // true = autofill enabled (field disabled), false = manual entry enabled
+  final Map<String, bool> _autofillEnabled = {};
+
+  // ── Autofill computed result per param ────────────────────────────────
+  final Map<String, _AutofillResult?> _autofillResult = {};
+
   // ── Per-param photo: File + already-uploaded URL ───────────────────────
-  // paramId → file (for display)
   final Map<String, File?> _paramPhoto = {};
-  // paramId → cloudinary URL (uploaded immediately on capture)
   final Map<String, String?> _paramPhotoUrl = {};
-  // paramId → currently uploading flag
   final Map<String, bool> _paramUploading = {};
 
-  // ── Violation photos: paramId → constraintId → file ───────────────────
+  // ── Violation photos ──────────────────────────────────────────────────
   final Map<String, Map<String, File?>> _violationPhotos = {};
-  // paramId → constraintId → cloudinary URL (uploaded immediately)
   final Map<String, Map<String, String?>> _violationPhotoUrls = {};
-  // paramId → constraintId → uploading flag
   final Map<String, Map<String, bool>> _violationUploading = {};
 
   // ── Current violations per param ──────────────────────────────────────
   final Map<String, List<_Violation>> _violations = {};
 
-  // ── Live DB alert record IDs: paramId → constraintId → alertId ────────
-  // We store these so we can UPDATE or DELETE them as values change.
+  // ── Live DB alert record IDs ──────────────────────────────────────────
   final Map<String, Map<String, String>> _liveAlertIds = {};
 
-  // ── Track side-effects already fired (sound/alert) ────────────────────
+  // ── Track side-effects already fired ─────────────────────────────────
   final Map<String, Set<String>> _alreadyFiredConstraints = {};
 
   // ── Manual captures ───────────────────────────────────────────────────
@@ -186,6 +216,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Deep copy of inspection properties ────────────────────────────────
   late final List<Map<String, dynamic>> _props;
+
+  // ── Which autofill params depend on which param ids ───────────────────
+  // autofillParamId → Set<dependencyParamId>
+  final Map<String, Set<String>> _autofillDeps = {};
 
   String get _nowLabel =>
       DateFormat('dd MMM yyyy, HH:mm:ss').format(DateTime.now());
@@ -207,12 +241,23 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     for (final p in _props) {
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
+      final isAutofill = p['autofill'] == true;
+
+      // Set autofill mode: if autofill property exists and is true, start enabled
+      if (isAutofill) {
+        _autofillEnabled[id] = true;
+        _autofillResult[id] = null;
+        // Parse dependency IDs from expression
+        _autofillDeps[id] = _parseDependencyIds(
+            p['autofill_expression'] as String? ?? '');
+      }
 
       switch (type) {
         case 'number':
         case 'text':
         case 'multiline':
           final ctrl = TextEditingController();
+          // Only add listener for non-autofill OR manual override
           ctrl.addListener(() => _onValueChanged(id));
           _textCtrl[id] = ctrl;
           break;
@@ -254,7 +299,305 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     _textCtrl.values.forEach((c) => c.dispose());
     _dualLeft.values.forEach((c) => c.dispose());
     _dualRight.values.forEach((c) => c.dispose());
+    _audioPlayer.dispose();
     super.dispose();
+  }
+
+  // ── Sound + Vibration (fixed) ──────────────────────────────────────────
+
+  Future<void> _playViolationSound() async {
+    try {
+      // Try to play a built-in alert sound via AudioPlayer
+      // Uses the default system alert sound asset — add 'assets/sounds/alert.mp3'
+      // to your pubspec.yaml under flutter > assets if you have a custom sound.
+      // Fallback: SystemSound + vibration
+      await _audioPlayer.stop();
+      try {
+        await _audioPlayer.play(AssetSource('sounds/alert.mp3'));
+      } catch (_) {
+        // Asset not found — use system sound as fallback
+        await SystemSound.play(SystemSoundType.alert);
+      }
+    } catch (_) {
+      try {
+        await SystemSound.play(SystemSoundType.alert);
+      } catch (_) {}
+    }
+
+    // Vibration: use HapticFeedback with heavy impact for better effect
+    try {
+      await HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 150));
+      await HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 150));
+      await HapticFeedback.heavyImpact();
+    } catch (_) {
+      try {
+        await HapticFeedback.vibrate();
+      } catch (_) {}
+    }
+  }
+
+  // ── Autofill: parse dependency IDs from expression ─────────────────────
+  // Expression format: ${paramId_label_side} e.g. ${1779288073832_operands_left}
+  Set<String> _parseDependencyIds(String expression) {
+    final deps = <String>{};
+    final regex = RegExp(r'\$\{([^}]+)\}');
+    for (final match in regex.allMatches(expression)) {
+      final token = match.group(1)!; // e.g. "1779288073832_operands_left"
+      // The param ID is the first segment (before first underscore that starts label)
+      // But param IDs can contain hyphens. The token format is: {id}_{label}_{side?}
+      // We need to find the param id — match against known param IDs
+      for (final p in _props) {
+        final pid = p['id'] as String;
+        if (token.startsWith(pid)) {
+          deps.add(pid);
+          break;
+        }
+      }
+    }
+    return deps;
+  }
+
+  // ── Autofill: get the value of a dependency token ─────────────────────
+  // Token format from expression: ${paramId_label_left} or ${paramId_label}
+  double? _resolveToken(String token) {
+    for (final p in _props) {
+      final pid = p['id'] as String;
+      if (!token.startsWith(pid)) continue;
+      final type = p['type'] as String? ?? 'text';
+      final remainder = token.substring(pid.length); // e.g. "_operands_left"
+
+      if (type == 'dual_text') {
+        if (remainder.endsWith('_left')) {
+          final raw = _dualLeft[pid]?.text.trim() ?? '';
+          return double.tryParse(raw);
+        } else if (remainder.endsWith('_right')) {
+          final raw = _dualRight[pid]?.text.trim() ?? '';
+          return double.tryParse(raw);
+        }
+      } else if (type == 'number') {
+        final raw = _textCtrl[pid]?.text.trim() ?? '';
+        return double.tryParse(raw);
+      } else if (type == 'slider') {
+        return _sliderVal[pid];
+      }
+    }
+    return null;
+  }
+
+  // ── Autofill: evaluate the expression ────────────────────────────────
+  _AutofillResult _evaluateExpression(String expression) {
+    try {
+      // Replace all ${token} with their numeric values
+      String expr = expression;
+      final regex = RegExp(r'\$\{([^}]+)\}');
+
+      for (final match in regex.allMatches(expression)) {
+        final token = match.group(1)!;
+        final val = _resolveToken(token);
+        if (val == null) {
+          return const _AutofillResult.error(
+            'Some required values are not filled in yet.',
+            'NullValueException',
+          );
+        }
+        expr = expr.replaceFirst('\${$token}', val.toString());
+      }
+
+      // Safe math evaluation (support +, -, *, /, ^, parentheses)
+      final result = _evalMathExpr(expr);
+      return _AutofillResult.value(result);
+    } on _DivisionByZeroException catch (e) {
+      return _AutofillResult.error(
+        'You\'re trying to divide by zero — that\'s not mathematically possible. Please check the divisor value.',
+        'DivisionByZeroException',
+      );
+    } on _MathException catch (e) {
+      return _AutofillResult.error(e.layman, e.name);
+    } catch (e) {
+      return _AutofillResult.error(
+        'Something went wrong while calculating the result. Please check all values.',
+        e.runtimeType.toString(),
+      );
+    }
+  }
+
+  // ── Simple recursive math expression evaluator ────────────────────────
+  double _evalMathExpr(String expr) {
+    expr = expr.trim();
+
+    // Handle parentheses
+    if (expr.startsWith('(') && expr.endsWith(')')) {
+      // Find matching close paren
+      int depth = 0;
+      bool fullyWrapped = true;
+      for (int i = 0; i < expr.length; i++) {
+        if (expr[i] == '(') depth++;
+        if (expr[i] == ')') depth--;
+        if (depth == 0 && i < expr.length - 1) {
+          fullyWrapped = false;
+          break;
+        }
+      }
+      if (fullyWrapped) {
+        return _evalMathExpr(expr.substring(1, expr.length - 1));
+      }
+    }
+
+    // Find last + or - outside parentheses (lowest precedence, right to left)
+    int depth2 = 0;
+    for (int i = expr.length - 1; i >= 0; i--) {
+      final ch = expr[i];
+      if (ch == ')') depth2++;
+      if (ch == '(') depth2--;
+      if (depth2 == 0 && (ch == '+' || ch == '-') && i > 0) {
+        final left = expr.substring(0, i);
+        final right = expr.substring(i + 1);
+        if (ch == '+') return _evalMathExpr(left) + _evalMathExpr(right);
+        if (ch == '-') return _evalMathExpr(left) - _evalMathExpr(right);
+      }
+    }
+
+    // Find last * or / outside parentheses
+    depth2 = 0;
+    for (int i = expr.length - 1; i >= 0; i--) {
+      final ch = expr[i];
+      if (ch == ')') depth2++;
+      if (ch == '(') depth2--;
+      if (depth2 == 0 && (ch == '*' || ch == '/')) {
+        final left = _evalMathExpr(expr.substring(0, i));
+        final right = _evalMathExpr(expr.substring(i + 1));
+        if (ch == '*') return left * right;
+        if (ch == '/') {
+          if (right == 0) throw _DivisionByZeroException();
+          return left / right;
+        }
+      }
+    }
+
+    // Find ^ (power)
+    depth2 = 0;
+    for (int i = expr.length - 1; i >= 0; i--) {
+      final ch = expr[i];
+      if (ch == ')') depth2++;
+      if (ch == '(') depth2--;
+      if (depth2 == 0 && ch == '^') {
+        final base = _evalMathExpr(expr.substring(0, i));
+        final exp = _evalMathExpr(expr.substring(i + 1));
+        final result = math.pow(base, exp).toDouble();
+        if (result.isInfinite || result.isNaN) {
+          throw _MathException(
+            'The calculation produced a number too large or undefined (e.g. 0^0 or overflow).',
+            'InfiniteOrNaNException',
+          );
+        }
+        return result;
+      }
+    }
+
+    // Try parsing as a plain number
+    final parsed = double.tryParse(expr);
+    if (parsed == null) {
+      throw _MathException(
+        'Could not understand part of the formula: "$expr". Please check the expression.',
+        'ParseException',
+      );
+    }
+
+    if (parsed.isNaN || parsed.isInfinite) {
+      throw _MathException(
+        'The result is not a valid number. Check for invalid operations like sqrt of a negative number.',
+        'InvalidNumberException',
+      );
+    }
+
+    return parsed;
+  }
+
+  // ── Autofill: check if all deps are filled ────────────────────────────
+  Map<String, bool> _getDepsFillStatus(String autofillParamId) {
+    final deps = _autofillDeps[autofillParamId] ?? {};
+    final status = <String, bool>{};
+
+    for (final depId in deps) {
+      final p = _props.firstWhere((pp) => pp['id'] == depId,
+          orElse: () => <String, dynamic>{});
+      if (p.isEmpty) {
+        status[depId] = false;
+        continue;
+      }
+      final type = p['type'] as String? ?? 'text';
+      bool filled = false;
+      switch (type) {
+        case 'number':
+          final raw = _textCtrl[depId]?.text.trim() ?? '';
+          filled = raw.isNotEmpty && double.tryParse(raw) != null;
+          break;
+        case 'text':
+        case 'multiline':
+          filled = (_textCtrl[depId]?.text.trim() ?? '').isNotEmpty;
+          break;
+        case 'dropdown':
+          filled = _dropdownVal[depId] != null;
+          break;
+        case 'slider':
+          filled = true; // slider always has a value
+          break;
+        case 'dual_text':
+          final l = _dualLeft[depId]?.text.trim() ?? '';
+          final r = _dualRight[depId]?.text.trim() ?? '';
+          filled = l.isNotEmpty && r.isNotEmpty;
+          break;
+      }
+      status[depId] = filled;
+    }
+
+    return status;
+  }
+
+  // ── Re-evaluate autofill params that depend on a changed param ─────────
+  void _reevaluateAutofillDependents(String changedParamId) {
+    for (final entry in _autofillDeps.entries) {
+      final autofillId = entry.key;
+      final deps = entry.value;
+      if (!deps.contains(changedParamId)) continue;
+
+      // Only re-evaluate if autofill mode is active
+      if (_autofillEnabled[autofillId] != true) continue;
+
+      final p = _props.firstWhere((pp) => pp['id'] == autofillId,
+          orElse: () => <String, dynamic>{});
+      if (p.isEmpty) continue;
+
+      final expression = p['autofill_expression'] as String? ?? '';
+      final depsStatus = _getDepsFillStatus(autofillId);
+      final allFilled = depsStatus.values.every((v) => v);
+
+      if (allFilled) {
+        final result = _evaluateExpression(expression);
+        setState(() {
+          _autofillResult[autofillId] = result;
+          if (!result.hasError && result.value != null) {
+            // Update the text controller with the computed value
+            final formatted = result.value! == result.value!.truncateToDouble()
+                ? result.value!.toInt().toString()
+                : result.value!.toStringAsFixed(4);
+            _textCtrl[autofillId]?.removeListener(() => _onValueChanged(autofillId));
+            _textCtrl[autofillId]?.text = formatted;
+            // Re-add listener after setting text
+          }
+        });
+        // Trigger constraint evaluation for the autofill param
+        _onValueChanged(autofillId);
+      } else {
+        setState(() {
+          _autofillResult[autofillId] = null;
+          // Clear the field if deps not all filled
+          _textCtrl[autofillId]?.text = '';
+        });
+      }
+    }
   }
 
   // ── Cloudinary upload ──────────────────────────────────────────────────
@@ -330,7 +673,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             builder: (_) => ImageMarkerScreen(imageFile: File(img.path))));
     if (annotated == null || !mounted) return;
 
-    // Mark uploading
     setState(() {
       _violationPhotos[paramId] ??= {};
       _violationPhotoUrls[paramId] ??= {};
@@ -346,7 +688,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
           _violationPhotoUrls[paramId]![constraintId] = url;
           _violationUploading[paramId]![constraintId] = false;
         });
-        // Now write / update the live DB alert with the photo URL
         await _writeLiveAlertWithPhoto(
             paramId: paramId, constraintId: constraintId, imageUrl: url);
       }
@@ -395,12 +736,9 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Live alert DB helpers ──────────────────────────────────────────────
 
-  /// Unique stable alert key for a param+constraint combo in this session.
   String _alertKey(String paramId, String constraintId) =>
       'live_${widget.tank.id}_${paramId}_$constraintId';
 
-  /// Write or update a live alert to DB.  Called (a) when constraint first
-  /// fires, and (b) when evidence photo is uploaded.
   Future<void> _writeLiveAlertWithPhoto({
     required String paramId,
     required String constraintId,
@@ -419,7 +757,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final label = p['label'] as String? ?? paramId;
     final val = _currentValue(paramId, type, p);
 
-    // Re-use existing alertId or create a new one.
     _liveAlertIds[paramId] ??= {};
     final existingId = _liveAlertIds[paramId]![constraintId];
     final alertId = existingId ?? _alertKey(paramId, constraintId);
@@ -445,7 +782,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       'image_url': photoUrl,
       'timestamp': DateTime.now().toIso8601String(),
       'acknowledged': false,
-      'live': true, // marks this as a real-time record
+      'live': true,
     };
 
     try {
@@ -455,7 +792,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       if (v.storeHistory) {
         await _db.child('violations/$alertId').set(record);
       }
-      // Always write to alerts_full for enterprise tracking
       await _db.child('alerts_full/$alertId').set({
         ...record,
         'all_values_snapshot': _collectValues(),
@@ -466,7 +802,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
   }
 
-  /// Delete a live alert from DB when constraint clears.
   Future<void> _deleteLiveAlert({
     required String paramId,
     required String constraintId,
@@ -480,7 +815,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       await _db.child('alerts/$alertId').remove();
       await _db.child('violations/$alertId').remove();
       await _db.child('alerts_full/$alertId').remove();
-      debugPrint('[LiveAlert] Deleted alert $alertId (constraint cleared)');
     } catch (e) {
       debugPrint('[LiveAlert] Delete failed: $e');
     }
@@ -599,19 +933,17 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final newIds = newViolations.map((v) => v.constraintId).toSet();
     final prevIds = prevViolations.map((v) => v.constraintId).toSet();
 
-    // ── Constraints that CLEARED → delete DB alerts ────────────────────
+    // Constraints that CLEARED → delete DB alerts
     for (final clearedId in prevIds.difference(newIds)) {
-      // Discard violation photo for cleared constraint
       _violationPhotos[id]?.remove(clearedId);
       _violationPhotoUrls[id]?.remove(clearedId);
       _alreadyFiredConstraints[id]?.remove(clearedId);
-      // Delete live DB record
       _deleteLiveAlert(paramId: id, constraintId: clearedId);
     }
 
     setState(() => _violations[id] = newViolations);
 
-    // ── Newly fired constraints ────────────────────────────────────────
+    // Newly fired constraints
     for (final v in newViolations) {
       final alreadyFired =
           _alreadyFiredConstraints[id]?.contains(v.constraintId) ?? false;
@@ -620,7 +952,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         _alreadyFiredConstraints[id]?.add(v.constraintId);
         _handleConstraintFired(paramId: id, param: p, value: val, violation: v);
       } else {
-        // Constraint already firing but value changed → update DB record
         _updateLiveAlert(
             paramId: id, constraintId: v.constraintId, newValue: val);
       }
@@ -629,6 +960,9 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     if (newViolations.isEmpty && prevViolations.isNotEmpty) {
       _alreadyFiredConstraints[id]?.clear();
     }
+
+    // Re-evaluate any autofill params that depend on this param
+    _reevaluateAutofillDependents(id);
   }
 
   // ── Handle first fire of a constraint ─────────────────────────────────
@@ -639,23 +973,14 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     required dynamic value,
     required _Violation violation,
   }) async {
-    // Sound / haptic
     if (violation.playSoundOnViolation) {
-      try {
-        await SystemSound.play(SystemSoundType.alert);
-      } catch (_) {}
-      try {
-        await HapticFeedback.vibrate();
-      } catch (_) {}
+      await _playViolationSound();
     }
 
-    // Write live alert immediately (photo URL may be empty at this point;
-    // it gets updated when the user captures the evidence photo)
     await _writeLiveAlertWithPhoto(
         paramId: paramId, constraintId: violation.constraintId);
   }
 
-  /// Update the param_value field on an existing live alert when value changes.
   Future<void> _updateLiveAlert({
     required String paramId,
     required String constraintId,
@@ -791,9 +1116,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   }
 
   // ── Save ───────────────────────────────────────────────────────────────
-  //
-  // All images have already been uploaded during capture.
-  // This just assembles the reading record using the stored URLs.
 
   Future<void> _save() async {
     final propErr = _requiredError();
@@ -814,15 +1136,12 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     });
 
     try {
-      // 1. Assemble inspection values using already-uploaded URLs
       final inspVals = _collectValues();
 
-      // Merge per-param photo URLs
       for (final e in _paramPhotoUrl.entries) {
         if (e.value != null) inspVals['${e.key}__image_url'] = e.value!;
       }
 
-      // Merge violation photo URLs
       for (final paramEntry in _violationPhotoUrls.entries) {
         for (final cEntry in paramEntry.value.entries) {
           if (cEntry.value != null) {
@@ -832,7 +1151,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      // Merge manual capture URLs
       for (int i = 0; i < _manualCaptures.length; i++) {
         final entry = _manualCaptures[i];
         if (entry.selectedParamId != null && entry.uploadedUrl != null) {
@@ -851,7 +1169,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      // 2. Final constraint check
       for (final p in _props) {
         final id = p['id'] as String;
         final type = p['type'] as String? ?? 'text';
@@ -867,12 +1184,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      // 3. Primary image URL (first param photo, if any)
       final primaryImageUrl = _paramPhotoUrl.values
               .firstWhere((u) => u != null, orElse: () => null) ??
           '';
 
-      // 4. Save reading
       final reading = await ReadingRepository().saveReading(
         tankId: widget.tank.id,
         tankName: widget.tank.tankName,
@@ -883,13 +1198,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         inspectionValues: inspVals,
       );
 
-      // 5. Update dashboard stats
       await DashboardStatsRepository().updateStatsAfterReading(
         reading: reading,
         tank: widget.tank,
       );
 
-      // 6. Mark live alerts as 'saved' (not real-time anymore)
       for (final paramMap in _liveAlertIds.values) {
         for (final alertId in paramMap.values) {
           try {
@@ -945,7 +1258,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             style: GoogleFonts.dmSans(
                 fontWeight: FontWeight.w700, fontSize: 17, color: _kText)),
         actions: [
-          // ── Manual capture toggle ────────────────────────────────────
           Padding(
             padding: const EdgeInsets.only(right: 12),
             child: GestureDetector(
@@ -1006,7 +1318,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               ..._props.map(_buildPropField),
             ],
 
-            // ── Manual Captures (toggled) ──────────────────────────────
             if (_showManualCaptures) ...[
               const SizedBox(height: 28),
               _buildManualCaptureSection(),
@@ -1020,7 +1331,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             ],
 
             if (_hasUploadInProgress) ...[
-              _UploadingBanner(),
+              const _UploadingBanner(),
               const SizedBox(height: 16),
             ],
 
@@ -1112,7 +1423,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Header ────────────────────────────────────────────────
             Row(children: [
               Container(
                 width: 24,
@@ -1168,10 +1478,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                   ),
                 ),
             ]),
-
             const SizedBox(height: 12),
-
-            // ── Parameter dropdown ─────────────────────────────────────
             Text('Parameter',
                 style: GoogleFonts.dmSans(
                     fontSize: 11, fontWeight: FontWeight.w600, color: _kSub)),
@@ -1204,10 +1511,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                 ),
               ),
             ),
-
             const SizedBox(height: 12),
-
-            // ── Camera row ─────────────────────────────────────────────
             Row(children: [
               Expanded(
                 child: GestureDetector(
@@ -1311,7 +1615,6 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                 ),
               ],
             ]),
-
             if (hasParam && hasUrl) ...[
               const SizedBox(height: 8),
               Builder(builder: (_) {
@@ -1348,6 +1651,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final isEffReq = isReq || hasCam;
     final vList = _violations[id] ?? [];
     final hasVio = vList.isNotEmpty;
+    final isAutofill = p['autofill'] == true;
 
     String? topSeverity;
     if (hasVio) {
@@ -1364,6 +1668,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Label row ────────────────────────────────────────────────
           Row(children: [
             Expanded(
               child: Text(isEffReq ? '$label *' : label,
@@ -1373,6 +1678,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                       color: _kText)),
             ),
             if (isEffReq) _Badge('REQUIRED', _kDanger),
+            if (isAutofill) ...[
+              const SizedBox(width: 6),
+              _Badge('AUTOFILL', _kPurple),
+            ],
             if (hasVio) ...[
               const SizedBox(width: 6),
               _Badge('${vList.length} ALERT${vList.length > 1 ? 'S' : ''}',
@@ -1383,10 +1692,63 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             const SizedBox(height: 3),
             Text(hint, style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
           ],
+
+          // ── Autofill toggle radio ─────────────────────────────────
+          if (isAutofill) ...[
+            const SizedBox(height: 8),
+            _AutofillToggleRow(
+              isAutofillEnabled: _autofillEnabled[id] ?? true,
+              onToggle: (enabled) {
+                setState(() {
+                  _autofillEnabled[id] = enabled;
+                  if (enabled) {
+                    // Re-evaluate when switching back to autofill
+                    final expr = p['autofill_expression'] as String? ?? '';
+                    final depsStatus = _getDepsFillStatus(id);
+                    final allFilled = depsStatus.values.every((v) => v);
+                    if (allFilled && expr.isNotEmpty) {
+                      final result = _evaluateExpression(expr);
+                      _autofillResult[id] = result;
+                      if (!result.hasError && result.value != null) {
+                        final formatted =
+                            result.value! == result.value!.truncateToDouble()
+                                ? result.value!.toInt().toString()
+                                : result.value!.toStringAsFixed(4);
+                        _textCtrl[id]?.text = formatted;
+                      }
+                    } else {
+                      _autofillResult[id] = null;
+                      _textCtrl[id]?.text = '';
+                    }
+                  } else {
+                    // Manual mode — clear autofill result, let user type
+                    _autofillResult[id] = null;
+                  }
+                });
+              },
+            ),
+          ],
+
           const SizedBox(height: 8),
           _buildInput(p, id, type, hint, isReq),
 
-          // Violation banners
+          // ── Autofill dependency status + result ───────────────────
+          if (isAutofill) ...[
+            const SizedBox(height: 8),
+            _AutofillStatusSection(
+              paramId: id,
+              props: _props,
+              depsStatus: _getDepsFillStatus(id),
+              autofillResult: _autofillResult[id],
+              isAutofillEnabled: _autofillEnabled[id] ?? true,
+              expressionDisplay:
+                  p['autofill_expression_display'] as String? ??
+                      p['autofill_expression'] as String? ??
+                      '',
+            ),
+          ],
+
+          // ── Violation banners ─────────────────────────────────────
           ...vList.map((v) {
             final isUploading =
                 _violationUploading[id]?[v.constraintId] == true;
@@ -1405,7 +1767,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             );
           }),
 
-          // Per-param camera
+          // ── Per-param camera ──────────────────────────────────────
           if (hasCam) ...[
             const SizedBox(height: 10),
             _ParamPhotoRow(
@@ -1443,13 +1805,48 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     );
   }
 
+  InputDecoration _decDisabled(String hintText) {
+    final border = OutlineInputBorder(
+        borderRadius: BorderRadius.circular(10),
+        borderSide: const BorderSide(color: _kBorder));
+    return InputDecoration(
+      hintText: hintText.isNotEmpty ? hintText : null,
+      hintStyle: GoogleFonts.dmSans(color: _kDisable, fontSize: 13),
+      filled: true,
+      fillColor: _kSurface.withOpacity(0.5),
+      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      border: border,
+      enabledBorder: border,
+      focusedBorder: border,
+      disabledBorder: border,
+      suffixIcon: const Padding(
+        padding: EdgeInsets.only(right: 10),
+        child: Icon(Icons.auto_fix_high_rounded, size: 16, color: _kPurple),
+      ),
+    );
+  }
+
   Widget _buildInput(
       Map<String, dynamic> p, String id, String type, String hint, bool isReq) {
     final violations = _violations[id] ?? [];
     final hasViolation = violations.isNotEmpty;
+    final isAutofill = p['autofill'] == true;
+    final autofillActive = isAutofill && (_autofillEnabled[id] ?? true);
 
     switch (type) {
       case 'number':
+        // If autofill is active, show a disabled field with the computed value
+        if (autofillActive) {
+          return TextFormField(
+            controller: _textCtrl[id],
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            style: GoogleFonts.spaceGrotesk(color: _kSub, fontSize: 15),
+            cursorColor: _kCopper,
+            decoration: _decDisabled(hint),
+            enabled: false,
+          );
+        }
         return TextFormField(
           controller: _textCtrl[id],
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1460,6 +1857,15 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         );
 
       case 'text':
+        if (autofillActive) {
+          return TextFormField(
+            controller: _textCtrl[id],
+            style: GoogleFonts.dmSans(color: _kSub, fontSize: 14),
+            cursorColor: _kCopper,
+            decoration: _decDisabled(hint),
+            enabled: false,
+          );
+        }
         return TextFormField(
           controller: _textCtrl[id],
           style: GoogleFonts.dmSans(color: _kText, fontSize: 14),
@@ -1469,6 +1875,16 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         );
 
       case 'multiline':
+        if (autofillActive) {
+          return TextFormField(
+            controller: _textCtrl[id],
+            maxLines: 4,
+            style: GoogleFonts.dmSans(color: _kSub, fontSize: 14),
+            cursorColor: _kCopper,
+            decoration: _decDisabled(hint),
+            enabled: false,
+          );
+        }
         return TextFormField(
           controller: _textCtrl[id],
           maxLines: 4,
@@ -1624,6 +2040,320 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AUTOFILL TOGGLE ROW — radio button to switch autofill on/off
+// ─────────────────────────────────────────────────────────────────────────────
+class _AutofillToggleRow extends StatelessWidget {
+  final bool isAutofillEnabled;
+  final ValueChanged<bool> onToggle;
+
+  const _AutofillToggleRow({
+    required this.isAutofillEnabled,
+    required this.onToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: _kPurple.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kPurple.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.auto_fix_high_rounded, size: 14, color: _kPurple),
+          const SizedBox(width: 8),
+          Text('Autofill',
+              style: GoogleFonts.dmSans(
+                  fontSize: 12,
+                  color: _kPurple,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(width: 4),
+          Text('(auto-calculate)',
+              style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
+          const Spacer(),
+          // Autofill ON radio
+          GestureDetector(
+            onTap: () => onToggle(true),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Radio<bool>(
+                  value: true,
+                  groupValue: isAutofillEnabled,
+                  onChanged: (v) => onToggle(true),
+                  activeColor: _kPurple,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                Text('ON',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 11,
+                        color: isAutofillEnabled ? _kPurple : _kSub,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Manual (autofill OFF) radio
+          GestureDetector(
+            onTap: () => onToggle(false),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Radio<bool>(
+                  value: false,
+                  groupValue: isAutofillEnabled,
+                  onChanged: (v) => onToggle(false),
+                  activeColor: _kCopper,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                ),
+                Text('Manual',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 11,
+                        color: !isAutofillEnabled ? _kCopper : _kSub,
+                        fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTOFILL STATUS SECTION
+// Shows: expression display, dependency status list, computed result / error
+// ─────────────────────────────────────────────────────────────────────────────
+class _AutofillStatusSection extends StatelessWidget {
+  final String paramId;
+  final List<Map<String, dynamic>> props;
+  final Map<String, bool> depsStatus;
+  final _AutofillResult? autofillResult;
+  final bool isAutofillEnabled;
+  final String expressionDisplay;
+
+  const _AutofillStatusSection({
+    required this.paramId,
+    required this.props,
+    required this.depsStatus,
+    required this.autofillResult,
+    required this.isAutofillEnabled,
+    required this.expressionDisplay,
+  });
+
+  String _labelForId(String id) {
+    final p = props.firstWhere((pp) => pp['id'] == id,
+        orElse: () => {'label': id});
+    return p['label'] as String? ?? id;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isAutofillEnabled) return const SizedBox.shrink();
+    if (depsStatus.isEmpty) return const SizedBox.shrink();
+
+    final allFilled = depsStatus.values.every((v) => v);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _kPurple.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _kPurple.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Expression display
+          if (expressionDisplay.isNotEmpty) ...[
+            Row(children: [
+              const Icon(Icons.functions_rounded, size: 13, color: _kPurple),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  expressionDisplay,
+                  style: GoogleFonts.spaceGrotesk(
+                      fontSize: 11,
+                      color: _kPurple,
+                      fontWeight: FontWeight.w600),
+                ),
+              ),
+            ]),
+            const SizedBox(height: 10),
+          ],
+
+          // Dependency status list
+          Text('Required fields for calculation:',
+              style: GoogleFonts.dmSans(
+                  fontSize: 10, color: _kSub, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          ...depsStatus.entries.map((entry) {
+            final filled = entry.value;
+            final lbl = _labelForId(entry.key);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Row(
+                children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    child: filled
+                        ? const Icon(Icons.check_circle_rounded,
+                            size: 14,
+                            color: _kSuccess,
+                            key: ValueKey('filled'))
+                        : const Icon(Icons.cancel_rounded,
+                            size: 14,
+                            color: _kDanger,
+                            key: ValueKey('empty')),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    lbl,
+                    style: GoogleFonts.dmSans(
+                        fontSize: 12,
+                        color: filled ? _kSuccess : _kDanger,
+                        fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    filled ? 'filled' : 'not filled',
+                    style: GoogleFonts.dmSans(
+                        fontSize: 10,
+                        color: filled
+                            ? _kSuccess.withOpacity(0.7)
+                            : _kDanger.withOpacity(0.7)),
+                  ),
+                ],
+              ),
+            );
+          }),
+
+          // Result / waiting / error
+          const SizedBox(height: 8),
+          if (!allFilled)
+            Row(children: [
+              const Icon(Icons.hourglass_empty_rounded,
+                  size: 13, color: _kSub),
+              const SizedBox(width: 6),
+              Text('Fill all required fields to calculate',
+                  style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
+            ])
+          else if (autofillResult == null)
+            Row(children: [
+              const SizedBox(
+                  width: 13,
+                  height: 13,
+                  child: CircularProgressIndicator(
+                      color: _kPurple, strokeWidth: 1.5)),
+              const SizedBox(width: 6),
+              Text('Calculating…',
+                  style: GoogleFonts.dmSans(fontSize: 11, color: _kPurple)),
+            ])
+          else if (autofillResult!.hasError)
+            _AutofillErrorCard(
+              laymanMessage: autofillResult!.errorMessage ?? 'Unknown error',
+              exceptionName: autofillResult!.exceptionName ?? '',
+            )
+          else
+            _AutofillResultCard(value: autofillResult!.value!),
+        ],
+      ),
+    );
+  }
+}
+
+class _AutofillResultCard extends StatelessWidget {
+  final double value;
+  const _AutofillResultCard({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final display = value == value.truncateToDouble()
+        ? value.toInt().toString()
+        : value.toStringAsFixed(4);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: _kSuccess.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _kSuccess.withOpacity(0.3)),
+      ),
+      child: Row(children: [
+        const Icon(Icons.check_circle_rounded, size: 14, color: _kSuccess),
+        const SizedBox(width: 8),
+        Text('Result: ',
+            style: GoogleFonts.dmSans(fontSize: 12, color: _kSuccess)),
+        Text(display,
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 14,
+                color: _kSuccess,
+                fontWeight: FontWeight.w700)),
+        const SizedBox(width: 6),
+        Text('(auto-filled)',
+            style: GoogleFonts.dmSans(fontSize: 10, color: _kSub)),
+      ]),
+    );
+  }
+}
+
+class _AutofillErrorCard extends StatelessWidget {
+  final String laymanMessage;
+  final String exceptionName;
+  const _AutofillErrorCard(
+      {required this.laymanMessage, required this.exceptionName});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: _kDanger.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _kDanger.withOpacity(0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.error_outline_rounded, size: 14, color: _kDanger),
+            const SizedBox(width: 6),
+            Text('Calculation Error',
+                style: GoogleFonts.dmSans(
+                    fontSize: 12,
+                    color: _kDanger,
+                    fontWeight: FontWeight.w700)),
+          ]),
+          const SizedBox(height: 5),
+          Text(laymanMessage,
+              style: GoogleFonts.dmSans(fontSize: 12, color: _kText)),
+          if (exceptionName.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('Technical: $exceptionName',
+                style: GoogleFonts.spaceGrotesk(
+                    fontSize: 10, color: _kSub, fontWeight: FontWeight.w500)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MATH EXCEPTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+class _DivisionByZeroException implements Exception {}
+
+class _MathException implements Exception {
+  final String layman;
+  final String name;
+  const _MathException(this.layman, this.name);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // VIOLATION BANNER
 // ─────────────────────────────────────────────────────────────────────────────
 class _ViolationBanner extends StatelessWidget {
@@ -1656,7 +2386,6 @@ class _ViolationBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Title row
           Row(children: [
             Icon(icon, size: 16, color: color),
             const SizedBox(width: 8),
@@ -1679,7 +2408,6 @@ class _ViolationBanner extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.8)),
               ),
-            // Live DB sync indicator
             const SizedBox(width: 6),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
@@ -1708,7 +2436,6 @@ class _ViolationBanner extends StatelessWidget {
           Text(violation.message,
               style: GoogleFonts.dmSans(color: _kText, fontSize: 12)),
 
-          // Evidence photo capture
           if (violation.captureImageOnViolation) ...[
             const SizedBox(height: 10),
             Row(children: [
@@ -1802,7 +2529,6 @@ class _ViolationBanner extends StatelessWidget {
             ]),
           ],
 
-          // Action chips
           if (violation.playSoundOnViolation ||
               violation.showDashboardAlert ||
               violation.storeHistory) ...[
@@ -1879,7 +2605,7 @@ class _BlockBanner extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UPLOADING BANNER — shown when any upload is in progress
+// UPLOADING BANNER
 // ─────────────────────────────────────────────────────────────────────────────
 class _UploadingBanner extends StatelessWidget {
   const _UploadingBanner();

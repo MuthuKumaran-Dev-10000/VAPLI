@@ -52,6 +52,7 @@ dependencies:
   http_parser: ^4.0.2
   fl_chart: ^1.2.0
   cached_network_image: ^3.4.1
+  audioplayers: ^6.6.0
  
 
 dev_dependencies:
