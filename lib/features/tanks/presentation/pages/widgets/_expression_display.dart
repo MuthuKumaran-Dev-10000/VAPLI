@@ -5,12 +5,16 @@ class _ExpressionDisplay extends StatelessWidget {
   final TextEditingController displayController;
   final FocusNode focusNode;
   final String? error;
+  final VoidCallback? onDeleteBackward;
+  final VoidCallback? onDeleteForward;
 
   const _ExpressionDisplay({
     required this.rawController,
     required this.displayController,
     required this.focusNode,
     this.error,
+    this.onDeleteBackward,
+    this.onDeleteForward,
   });
 
   @override
@@ -42,23 +46,37 @@ class _ExpressionDisplay extends StatelessWidget {
                 ),
                 child: _buildDisplayPreview(displayController.text),
               ),
-            TextField(
-              controller: rawController,
-              focusNode: focusNode,
-              style: GoogleFonts.sourceCodePro(color: _kText, fontSize: 13),
-              cursorColor: _kAutoFill,
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(
-                  RegExp(r'[\d\+\-\*\/\(\)\.\s\$\{\}:a-zA-Z_\-]'),
+            Focus(
+              onKeyEvent: (_, event) {
+                if (event is! KeyDownEvent) return KeyEventResult.ignored;
+                if (event.logicalKey == LogicalKeyboardKey.backspace) {
+                  onDeleteBackward?.call();
+                  return KeyEventResult.handled;
+                }
+                if (event.logicalKey == LogicalKeyboardKey.delete) {
+                  onDeleteForward?.call();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: TextField(
+                controller: rawController,
+                focusNode: focusNode,
+                style: GoogleFonts.sourceCodePro(color: _kText, fontSize: 13),
+                cursorColor: _kAutoFill,
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(
+                    RegExp(r'[\d\+\-\*\/\(\)\.\s\$\{\}:a-zA-Z_\-]'),
+                  ),
+                ],
+                decoration: const InputDecoration(
+                  hintText: r'e.g. ${123}+${456:right}',
+                  hintStyle: TextStyle(color: _kSub, fontSize: 12, fontFamily: 'monospace'),
+                  filled: true,
+                  fillColor: _kBg,
+                  border: InputBorder.none,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 ),
-              ],
-              decoration: const InputDecoration(
-                hintText: r'e.g. ${123}+${456:right}',
-                hintStyle: TextStyle(color: _kSub, fontSize: 12, fontFamily: 'monospace'),
-                filled: true,
-                fillColor: _kBg,
-                border: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
               ),
             ),
           ]),

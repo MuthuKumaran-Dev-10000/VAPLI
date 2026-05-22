@@ -269,39 +269,56 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
   // ── Delete — removes full token from raw, matching part from display ───────
 
-  void _deleteAtCursor() {
-    // Delete from raw expression
+  void _deleteAtCursor({bool forward = false}) {
     final ctrl = _exprCtrl;
     final sel = ctrl.selection;
     final current = ctrl.text;
     if (current.isEmpty) return;
-    final start = sel.start < 0 ? current.length : sel.start;
-    final end = sel.end < 0 ? current.length : sel.end;
+    final start = sel.start < 0 ? current.length : sel.start.clamp(0, current.length);
+    final end = sel.end < 0 ? current.length : sel.end.clamp(0, current.length);
 
+    int delStart = start;
+    int delEnd = end;
+
+    final tokenRe = RegExp(r'\$\{[^}]+\}');
     if (start != end) {
-      ctrl.value = TextEditingValue(
-        text: current.replaceRange(start, end, ''),
-        selection: TextSelection.collapsed(offset: start),
-      );
-    } else if (start > 0) {
-      final before = current.substring(0, start);
-      final tokenMatch = RegExp(r'\$\{[^}]*\}$').firstMatch(before);
-      if (tokenMatch != null) {
-        // Deleted a whole ${...} token from raw
-        final tokenStart = tokenMatch.start;
-        ctrl.value = TextEditingValue(
-          text: current.replaceRange(tokenStart, start, ''),
-          selection: TextSelection.collapsed(offset: tokenStart),
-        );
-        _displayExprCtrl.text = _displayFromRaw(ctrl.text);
-      } else {
-        ctrl.value = TextEditingValue(
-          text: current.replaceRange(start - 1, start, ''),
-          selection: TextSelection.collapsed(offset: start - 1),
-        );
-        _displayExprCtrl.text = _displayFromRaw(ctrl.text);
+      for (final m in tokenRe.allMatches(current)) {
+        final overlaps = !(m.end <= delStart || m.start >= delEnd);
+        if (overlaps) {
+          delStart = delStart < m.start ? delStart : m.start;
+          delEnd = delEnd > m.end ? delEnd : m.end;
+        }
+      }
+    } else {
+      bool deletedToken = false;
+      for (final m in tokenRe.allMatches(current)) {
+        final insideToken = start >= m.start && start <= m.end;
+        if (insideToken) {
+          delStart = m.start;
+          delEnd = m.end;
+          deletedToken = true;
+          break;
+        }
+      }
+      if (!deletedToken) {
+        if (forward) {
+          if (start >= current.length) return;
+          delStart = start;
+          delEnd = start + 1;
+        } else {
+          if (start == 0) return;
+          delStart = start - 1;
+          delEnd = start;
+        }
       }
     }
+
+    final next = current.replaceRange(delStart, delEnd, '');
+    ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: delStart),
+    );
+    _displayExprCtrl.text = _displayFromRaw(next);
 
     setState(() => _exprDirty = true);
     _exprFocus.requestFocus();
@@ -1584,6 +1601,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                 displayController: _displayExprCtrl,
                 focusNode: _exprFocus,
                 error: _exprError,
+                onDeleteBackward: () => _deleteAtCursor(forward: false),
+                onDeleteForward: () => _deleteAtCursor(forward: true),
               ),
               const SizedBox(height: 10),
 

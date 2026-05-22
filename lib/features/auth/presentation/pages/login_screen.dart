@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
+import 'package:lubrication_indicator/core/services/app_settings_service.dart';
 import 'package:lubrication_indicator/features/auth/presentation/controllers/auth_controller.dart';
 import 'package:lubrication_indicator/features/auth/presentation/widgets/auth_brand_header.dart';
 import 'package:lubrication_indicator/features/auth/presentation/widgets/login_error_banner.dart';
@@ -21,6 +22,7 @@ class _LoginScreenState extends State<LoginScreen>
   bool _loading = false;
   bool _obscure = true;
   String? _error;
+  String _sessionLabel = 'Session timeout loading...';
   late AnimationController _animCtrl;
   late Animation<double> _fadeAnim;
 
@@ -33,6 +35,31 @@ class _LoginScreenState extends State<LoginScreen>
     );
     _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOutCubic);
     _animCtrl.forward();
+    _loadSessionLabel();
+  }
+
+  Future<void> _loadSessionLabel() async {
+    try {
+      final timeout = await AppSettingsService.getSessionTimeout();
+      if (!mounted) return;
+      setState(() {
+        if (timeout == null) {
+          _sessionLabel = 'No session timeout';
+          return;
+        }
+        final mins = timeout.inMinutes;
+        if (mins >= 1440) {
+          _sessionLabel = 'Session expires after 1 day of inactivity';
+        } else {
+          _sessionLabel = 'Session expires after $mins minutes of inactivity';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _sessionLabel = 'Session timeout based on system settings';
+      });
+    }
   }
 
   @override
@@ -242,7 +269,7 @@ class _LoginScreenState extends State<LoginScreen>
 
                     const SizedBox(height: 24),
                     Text(
-                      'Session expires after 60 minutes of inactivity',
+                      _sessionLabel,
                       style: GoogleFonts.inter(
                         color: AppColors.disabled,
                         fontSize: 12,

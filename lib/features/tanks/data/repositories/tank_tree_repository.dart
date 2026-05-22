@@ -20,6 +20,11 @@ class TankTreeRepository {
 
   final DatabaseReference _ref = DatabaseModeService.ref(_root);
 
+  Map<dynamic, dynamic>? _asMap(dynamic value) {
+    if (value is! Map) return null;
+    return Map<dynamic, dynamic>.from(value);
+  }
+
   // ── READ ──────────────────────────────────────────────────────────────────
 
   /// Returns a live stream of direct children of [parentId].
@@ -38,12 +43,16 @@ class TankTreeRepository {
           debugPrint('[TankTree] Root: snapshot empty');
           return <TankNode>[];
         }
-        final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+        final raw = _asMap(event.snapshot.value);
+        if (raw == null) return <TankNode>[];
         final nodes = raw.entries
-            .map((e) => TankNode.fromMap(
-                  e.key.toString(),
-                  Map<dynamic, dynamic>.from(e.value as Map),
-                ))
+            .where((e) => e.value is Map)
+            .map(
+              (e) => TankNode.fromMap(
+                e.key.toString(),
+                _asMap(e.value)!,
+              ),
+            )
             .where((n) => n.parentId == null) // ← client-side filter
             .toList()
           ..sort((a, b) => a.order.compareTo(b.order));
@@ -63,12 +72,16 @@ class TankTreeRepository {
           debugPrint('[TankTree] Children of $parentId: snapshot empty');
           return <TankNode>[];
         }
-        final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+        final raw = _asMap(event.snapshot.value);
+        if (raw == null) return <TankNode>[];
         final nodes = raw.entries
-            .map((e) => TankNode.fromMap(
-                  e.key.toString(),
-                  Map<dynamic, dynamic>.from(e.value as Map),
-                ))
+            .where((e) => e.value is Map)
+            .map(
+              (e) => TankNode.fromMap(
+                e.key.toString(),
+                _asMap(e.value)!,
+              ),
+            )
             .toList()
           ..sort((a, b) => a.order.compareTo(b.order));
         debugPrint('[TankTree] Children of $parentId: ${nodes.length} nodes');
@@ -81,12 +94,16 @@ class TankTreeRepository {
   Future<List<TankNode>> fetchAll() async {
     final snap = await _ref.get();
     if (!snap.exists || snap.value == null) return [];
-    final raw = Map<dynamic, dynamic>.from(snap.value as Map);
+    final raw = _asMap(snap.value);
+    if (raw == null) return [];
     return raw.entries
-        .map((e) => TankNode.fromMap(
-              e.key.toString(),
-              Map<dynamic, dynamic>.from(e.value as Map),
-            ))
+        .where((e) => e.value is Map)
+        .map(
+          (e) => TankNode.fromMap(
+            e.key.toString(),
+            _asMap(e.value)!,
+          ),
+        )
         .toList();
   }
 
@@ -94,7 +111,9 @@ class TankTreeRepository {
   Future<TankNode?> fetchNode(String id) async {
     final snap = await _ref.child(id).get();
     if (!snap.exists || snap.value == null) return null;
-    return TankNode.fromMap(id, Map<dynamic, dynamic>.from(snap.value as Map));
+    final raw = _asMap(snap.value);
+    if (raw == null) return null;
+    return TankNode.fromMap(id, raw);
   }
 
   // ── WRITE ─────────────────────────────────────────────────────────────────
@@ -200,15 +219,25 @@ class TankTreeRepository {
     await _ref.update(updates);
   }
 
+  /// Returns subtree node ids including the input [id].
+  Future<List<TankNode>> fetchSubtree(String id) async {
+    final all = await fetchAll();
+    final ids = _collectDescendants(id, all)..add(id);
+    final idSet = ids.toSet();
+    return all.where((n) => idSet.contains(n.id)).toList();
+  }
+
   Future<void> deleteTankFromTree(
     String tankId,
   ) async {
-    final snap = await _ref.child("tank_tree").get();
+    final snap = await _ref.get();
 
     if (!snap.exists) return;
 
+    final root = _asMap(snap.value);
+    if (root == null) return;
     final tree = Map<String, dynamic>.from(
-      snap.value as Map,
+      root.map((k, v) => MapEntry(k.toString(), v)),
     );
 
     await _walkAndDeleteTank(
@@ -335,7 +364,7 @@ class TankTreeRepository {
 
     final node = TankNode.fromMap(
       nodeId,
-      Map<dynamic, dynamic>.from(nodeSnap.value as Map),
+      _asMap(nodeSnap.value) ?? {},
     );
 
     // same parent → ignore
@@ -358,7 +387,7 @@ class TankTreeRepository {
 
       final parent = TankNode.fromMap(
         newParentId,
-        Map<dynamic, dynamic>.from(parentSnap.value as Map),
+        _asMap(parentSnap.value) ?? {},
       );
 
       // prevent cycles
@@ -417,16 +446,15 @@ class TankTreeRepository {
 
     if (!childrenSnap.exists) return;
 
-    final all = Map<dynamic, dynamic>.from(
-      childrenSnap.value as Map,
-    );
+    final all = _asMap(childrenSnap.value);
+    if (all == null) return;
 
     for (final entry in all.entries) {
       final id = entry.key.toString();
 
       final node = TankNode.fromMap(
         id,
-        Map<dynamic, dynamic>.from(entry.value),
+        _asMap(entry.value) ?? {},
       );
 
       if (node.parentId != parentId) {
@@ -451,7 +479,8 @@ class TankTreeRepository {
 
     if (!snap.exists) return 0;
 
-    final map = Map<dynamic, dynamic>.from(snap.value as Map);
+    final map = _asMap(snap.value);
+    if (map == null) return 0;
 
     return map.length;
   }

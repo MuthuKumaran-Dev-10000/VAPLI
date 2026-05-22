@@ -401,25 +401,17 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
         debugPrint(
           '[DELETE] Folder delete nodeId=${node.id}',
         );
-        final all = await _treeRepo.fetchAll();
-        final deleteIds = <String>{node.id};
-        final queue = <String>[node.id];
-        while (queue.isNotEmpty) {
-          final current = queue.removeLast();
-          for (final child in all.where((e) => e.parentId == current)) {
-            if (deleteIds.add(child.id)) {
-              queue.add(child.id);
-            }
-          }
-        }
-        final tankIds = all
-            .where((e) => deleteIds.contains(e.id) && e.isLeaf && e.tankId != null)
-            .map((e) => e.tankId!)
-            .toSet()
-            .toList();
+
+        final subtree = await _treeRepo.fetchSubtree(node.id);
+        final tankIds = subtree
+            .where((n) => n.isLeaf && n.tankId != null)
+            .map((n) => n.tankId!)
+            .toSet();
+
         for (final tankId in tankIds) {
           await _tankRepo.deleteTank(tankId);
         }
+
         await _treeRepo.deleteNode(
           node.id,
         );

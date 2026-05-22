@@ -122,7 +122,7 @@ class _Parser {
 
 class ExpressionEngine {
   static final RegExp _tokenRe =
-      RegExp(r'\s*([A-Za-z_][A-Za-z0-9_.-]*|\d+(?:\.\d+)?|[()+\-*/])\s*');
+      RegExp(r'\s*([A-Za-z_][A-Za-z0-9_.]*|\d+(?:\.\d+)?|[()+\-*/])\s*');
   static final RegExp _idTokenRe = RegExp(r'\$\{([^}]+)\}');
 
   static Set<String> extractIds(String expression) {

@@ -145,15 +145,12 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
             existing['location'] != location;
         debugPrint('[Save] identityChanged=$identityChanged');
 
-        String? newQrUrl;
-        if (identityChanged) {
-          debugPrint('[Save] Identity changed → regenerating QR');
-          newQrUrl = await generateAndUploadQr(
-            tankCode: tankCode,
-            tankName: tankName,
-            location: location,
-          );
-        }
+        debugPrint('[Save] Tank changed -> regenerating QR');
+        final newQrUrl = await generateAndUploadQr(
+          tankCode: tankCode,
+          tankName: tankName,
+          location: location,
+        );
 
         debugPrint(
             '[Save] Calling TankRepository.updateTank id=${existing['id']}');

@@ -74,15 +74,26 @@ class TankModel {
     List<Map<String, dynamic>> properties = [];
 
     if (m["inspection_properties"] != null) {
-      properties = List<dynamic>.from(
-        m["inspection_properties"],
-      ).map(
-        (e) {
-          return Map<String, dynamic>.from(
-            e,
-          );
-        },
-      ).toList();
+      final raw = m["inspection_properties"];
+      if (raw is List) {
+        properties = raw
+            .whereType<Map>()
+            .map(
+              (e) => Map<String, dynamic>.from(
+                e.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            )
+            .toList();
+      } else if (raw is Map) {
+        properties = raw.values
+            .whereType<Map>()
+            .map(
+              (e) => Map<String, dynamic>.from(
+                e.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            )
+            .toList();
+      }
     }
 
     return TankModel(

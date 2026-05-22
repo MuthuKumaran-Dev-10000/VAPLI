@@ -1,6 +1,6 @@
 # AI Refactor Tracker
 
-Updated: 2026-05-22 (latest pass)
+Updated: 2026-05-22 (latest pass #2)
 
 ## Completed in code
 
@@ -87,6 +87,36 @@ Updated: 2026-05-22 (latest pass)
    - Tank create flow now defaults location/client to `root` and uses fixed root for new tree folder/leaf zone.
    - Scale Max / Scale Side removed from tank-create UI (defaults applied in save path).
    - Search cache in input browser now refreshes when tree updates.
+18. Expression editor delete semantics:
+   - DEL now removes `${paramId...}` tokens as a single block even when cursor is inside token.
+   - Range delete expands to whole token blocks when selection overlaps tokens.
+19. Expression engine parser stability:
+   - Variable token grammar adjusted so alias tokens (e.g., `__v1 - __v2`) are parsed correctly.
+   - Fixes false "missing variable" style failures during numeric-id formula evaluation.
+20. Admin import flow UX:
+   - Import switched to file-picker based JSON selection (no paste/path input required).
+21. Login timeout display:
+   - Login screen timeout message now pulls current DB-backed settings (mode-aware via DB root).
+22. Automated test coverage added:
+   - Added `test/core/services/expression_engine_test.dart` with regular + edge cases:
+     - numeric-id token eval
+     - dual-side tokens
+     - precedence, parentheses, unary minus, decimals
+     - missing variable / invalid token / divide by zero
+   - Added `test/core/services/database_mode_service_test.dart`:
+     - PROD path behavior
+     - DEV `testDB` path prefix behavior
+   - Test run status: passing (`11` tests).
+23. Tank creation crash hardening (`String` vs `Map` cast):
+   - Added safe mixed-shape parsing for RTDB payloads in:
+     - `TankModel.fromMap` (`inspection_properties` now supports `List`/`Map` and skips invalid entries)
+     - `TankTreeRepository` stream/fetch/count paths (guards for non-map rows)
+     - `TankRepository.updateTank` tree-sync block (safe map conversion)
+   - Goal: avoid runtime `String is not a subtype of Map<dynamic,dynamic>` while creating/loading tanks.
+24. Delete-scope correction:
+   - Tank delete remains single-tank scoped (tank + related records + tree refs for that tank).
+   - Folder delete now resolves only that folder subtree and deletes only tanks inside that subtree.
+   - Added `TankTreeRepository.fetchSubtree` and integrated it in browser delete flow.
 
 ## Remaining high-priority splits
 

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
@@ -112,8 +113,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _importStructureDialog() async {
-    final ctrl = TextEditingController();
-    final pathCtrl = TextEditingController();
+    String? pickedPath;
     bool replace = true;
     await showDialog<void>(
       context: context,
@@ -126,24 +126,28 @@ class _AdminDashboardState extends State<AdminDashboard>
               mainAxisSize: MainAxisSize.min,
               children: [
                 const Text(
-                  'Paste exported JSON. This imports "tanks" and "tank_tree".',
+                  'Select exported JSON file. This imports "tanks" and "tank_tree".',
                 ),
                 const SizedBox(height: 10),
-                TextField(
-                  controller: ctrl,
-                  maxLines: 12,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'Paste JSON here',
-                  ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final result = await FilePicker.platform.pickFiles(
+                      type: FileType.custom,
+                      allowedExtensions: ['json'],
+                      allowMultiple: false,
+                    );
+                    if (result == null || result.files.isEmpty) return;
+                    setStateDialog(() => pickedPath = result.files.single.path);
+                  },
+                  icon: const Icon(Icons.folder_open_rounded),
+                  label: const Text('Choose JSON File'),
                 ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: pathCtrl,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'Or enter local file path to JSON',
-                  ),
+                const SizedBox(height: 8),
+                Text(
+                  pickedPath == null ? 'No file selected' : pickedPath!,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
                 ),
                 const SizedBox(height: 10),
                 SwitchListTile(
@@ -164,15 +168,15 @@ class _AdminDashboardState extends State<AdminDashboard>
             ElevatedButton(
               onPressed: () async {
                 try {
-                  var raw = ctrl.text.trim();
-                  if (raw.isEmpty && pathCtrl.text.trim().isNotEmpty) {
-                    final file = File(pathCtrl.text.trim());
-                    if (!await file.exists()) {
-                      throw Exception('File not found');
-                    }
-                    raw = await file.readAsString();
+                  if (pickedPath == null || pickedPath!.trim().isEmpty) {
+                    throw Exception('Please choose a JSON file');
                   }
-                  if (raw.isEmpty) throw Exception('JSON is empty');
+                  final file = File(pickedPath!.trim());
+                  if (!await file.exists()) {
+                    throw Exception('File not found');
+                  }
+                  final raw = await file.readAsString();
+                  if (raw.trim().isEmpty) throw Exception('JSON is empty');
                   final decoded = jsonDecode(raw);
                   if (decoded is! Map) throw Exception('Invalid JSON root');
                   final tanks = decoded['tanks'] is Map

@@ -20,6 +20,17 @@ import 'tank_tree_repository.dart';
 class TankRepository {
   final _db = DatabaseModeService.ref();
 
+  Map<String, dynamic>? _safeMap(dynamic value) {
+    if (value is! Map) return null;
+    try {
+      return Map<String, dynamic>.from(
+        (value as Map).map((k, v) => MapEntry(k.toString(), v)),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Stream<List<TankModel>> watchTanks() {
     return _db
         .child(
@@ -32,18 +43,17 @@ class TankRepository {
           return [];
         }
 
-        final map = Map<String, dynamic>.from(
-          event.snapshot.value as Map,
-        );
+        final map = _safeMap(event.snapshot.value);
+        if (map == null) return <TankModel>[];
 
         return map.values
-            .map(
-              (v) => TankModel.fromMap(
-                Map<String, dynamic>.from(
-                  v as Map,
-                ),
-              ),
-            )
+            .where((v) => v is Map)
+            .map((v) {
+              final m = _safeMap(v);
+              if (m == null) return null;
+              return TankModel.fromMap(m);
+            })
+            .whereType<TankModel>()
             .where(
               (t) => t.isActive,
             )
@@ -63,18 +73,17 @@ class TankRepository {
       return [];
     }
 
-    final map = Map<String, dynamic>.from(
-      snap.value as Map,
-    );
+    final map = _safeMap(snap.value);
+    if (map == null) return <TankModel>[];
 
     return map.values
-        .map(
-          (v) => TankModel.fromMap(
-            Map<String, dynamic>.from(
-              v as Map,
-            ),
-          ),
-        )
+        .where((v) => v is Map)
+        .map((v) {
+          final m = _safeMap(v);
+          if (m == null) return null;
+          return TankModel.fromMap(m);
+        })
+        .whereType<TankModel>()
         .where(
           (t) => t.isActive,
         )
@@ -94,11 +103,9 @@ class TankRepository {
       return null;
     }
 
-    return TankModel.fromMap(
-      Map<String, dynamic>.from(
-        snap.value as Map,
-      ),
-    );
+    final m = _safeMap(snap.value);
+    if (m == null) return null;
+    return TankModel.fromMap(m);
   }
 
   Future<TankModel> createTank({
@@ -292,14 +299,39 @@ class TankRepository {
     try {
       final treeSnap = await _db.child("tank_tree").get();
       if (treeSnap.exists && treeSnap.value != null) {
-        final raw = Map<String, dynamic>.from(treeSnap.value as Map);
+        final raw = _safeMap(treeSnap.value);
+        if (raw == null) return;
         final updates = <String, Object?>{};
         for (final e in raw.entries) {
           if (e.value is! Map) continue;
-          final node = Map<String, dynamic>.from(e.value as Map);
+          final node = _safeMap(e.value);
+          if (node == null) continue;
           if (node['tank_id']?.toString() == id) {
-            updates['${e.key}/name'] = tankName;
+            final nodeId = e.key.toString();
+            final oldPath = (node['path'] ?? '').toString();
+            String newPath = oldPath;
+            if (oldPath.isNotEmpty) {
+              final lastSlash = oldPath.lastIndexOf('/');
+              newPath = lastSlash == -1
+                  ? tankName
+                  : '${oldPath.substring(0, lastSlash)}/$tankName';
+            }
+            updates['$nodeId/name'] = tankName;
             updates['${e.key}/zone'] = location;
+            if (newPath.isNotEmpty && newPath != oldPath) {
+              updates['$nodeId/path'] = newPath;
+
+              for (final d in raw.entries) {
+                if (d.value is! Map) continue;
+                final dn = _safeMap(d.value);
+                if (dn == null) continue;
+                final dPath = (dn['path'] ?? '').toString();
+                if (dPath.startsWith('$oldPath/')) {
+                  updates['${d.key}/path'] =
+                      dPath.replaceFirst('$oldPath/', '$newPath/');
+                }
+              }
+            }
           }
         }
         if (updates.isNotEmpty) {
@@ -314,11 +346,10 @@ class TankRepository {
   ) async {
     final snap = await _db.child("tank_tree").get();
 
-    if (!snap.exists) return;
-
-    final tree = Map<String, dynamic>.from(
-      snap.value as Map,
-    );
+    if (!snap.exists || snap.value == null) return;
+    final root = _safeMap(snap.value);
+    if (root == null) return;
+    final tree = Map<String, dynamic>.from(root);
 
     await _walkAndDeleteTank(
       node: tree,
@@ -481,16 +512,8 @@ class TankRepository {
     }
 
     // SAFE FIREBASE MAP CAST
-    final raw = snap.value as Map;
-
-    final map = Map<String, dynamic>.from(
-      raw.map(
-        (k, v) => MapEntry(
-          k.toString(),
-          v,
-        ),
-      ),
-    );
+    final map = _safeMap(snap.value);
+    if (map == null) return;
 
     for (final e in map.entries) {
       try {
