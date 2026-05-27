@@ -4,23 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VAPLI — Audit Trail</title>
-  <meta name="description" content="Secure audit trail viewer for VAPLI lubrication management system." />
+  <meta name="description" content="Audit trail viewer for VAPLI lubrication management system." />
   <meta name="robots" content="noindex, nofollow" />
 
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,400&display=swap" rel="stylesheet" />
 
-  <!-- Firebase SDK (compat mode — no build tool needed) -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-
-  <!-- Config — loaded separately so you only touch one file -->
   <script src="firebase-config.js"></script>
 
   <style>
-    /* ── Reset & base ─────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
       --bg:        #07090f;
@@ -51,7 +46,6 @@
     }
 
     html { scroll-behavior: smooth; }
-
     body {
       font-family: var(--font-body);
       background: var(--bg);
@@ -59,8 +53,6 @@
       min-height: 100vh;
       overflow-x: hidden;
     }
-
-    /* ── Noise grain overlay ──────────────────────────────────── */
     body::before {
       content: '';
       position: fixed; inset: 0; z-index: 0; pointer-events: none;
@@ -68,28 +60,21 @@
       opacity: .4;
     }
 
-    /* ── Utility ──────────────────────────────────────────────── */
-    .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
     button { font-family: inherit; cursor: pointer; border: none; background: none; }
     input, select { font-family: inherit; }
-    a { color: var(--accent); text-decoration: none; }
-
-    /* ── Layout wrapper ───────────────────────────────────────── */
     #app { position: relative; z-index: 1; }
 
-    /* ═══════════════════════════════════════════════════════════
-       LOGIN FLOW  (3 steps: company → credentials → dashboard)
-    ═══════════════════════════════════════════════════════════ */
-    #login-shell {
+    /* ══════════════════════════════════════════
+       CLIENT PICKER SHELL
+    ══════════════════════════════════════════ */
+    #picker-shell {
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 24px;
     }
-
-    /* Animated grid background for login */
-    #login-shell::before {
+    #picker-shell::before {
       content: '';
       position: fixed; inset: 0; z-index: -1;
       background-image:
@@ -99,9 +84,7 @@
       mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 20%, transparent 100%);
       opacity: .5;
     }
-
-    /* Glow orb */
-    #login-shell::after {
+    #picker-shell::after {
       content: '';
       position: fixed;
       width: 600px; height: 400px;
@@ -111,24 +94,23 @@
       pointer-events: none; z-index: -1;
     }
 
-    .login-card {
+    .picker-card {
       width: 100%; max-width: 460px;
       background: var(--card);
       border: 1px solid var(--border2);
       border-radius: 16px;
       box-shadow: var(--shadow), 0 0 60px rgba(249,115,22,.06);
       overflow: hidden;
+      animation: slideIn .4s cubic-bezier(.22,.68,0,1.2) forwards;
     }
 
-    .login-header {
+    .picker-header {
       padding: 32px 36px 24px;
       border-bottom: 1px solid var(--border);
     }
-
-    .login-brand {
-      display: flex; align-items: center; gap: 12px; margin-bottom: 20px;
+    .picker-brand {
+      display: flex; align-items: center; gap: 12px;
     }
-
     .brand-icon {
       width: 36px; height: 36px;
       background: var(--accent-lo);
@@ -137,66 +119,45 @@
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
     }
-
     .brand-icon svg { width: 18px; height: 18px; color: var(--accent); }
-
     .brand-name {
       font-family: var(--font-head);
-      font-size: 18px; font-weight: 800;
-      letter-spacing: .04em;
-      color: var(--t1);
+      font-size: 18px; font-weight: 800; letter-spacing: .04em; color: var(--t1);
     }
-
     .brand-sub {
       font-size: 11px; font-weight: 400;
       color: var(--t3); letter-spacing: .08em; text-transform: uppercase;
     }
 
-    .step-indicator {
-      display: flex; gap: 6px;
-    }
-    .step-dot {
-      width: 24px; height: 3px; border-radius: 2px;
-      background: var(--border2); transition: background .3s;
-    }
-    .step-dot.active { background: var(--accent); }
-    .step-dot.done   { background: var(--green); }
-
-    .login-body { padding: 28px 36px 32px; }
-
-    .step-title {
+    .picker-body { padding: 28px 36px 32px; }
+    .picker-title {
       font-family: var(--font-head);
-      font-size: 20px; font-weight: 700;
-      color: var(--t1); margin-bottom: 6px;
+      font-size: 20px; font-weight: 700; color: var(--t1); margin-bottom: 6px;
     }
-    .step-hint {
+    .picker-hint {
       font-size: 13px; color: var(--t2); margin-bottom: 24px; line-height: 1.5;
     }
 
-    /* ── Form controls ──────────────────────────────────────── */
+    /* field */
     .field { margin-bottom: 16px; }
     .field label {
       display: block; font-size: 12px; font-weight: 500;
       color: var(--t2); letter-spacing: .06em; text-transform: uppercase;
       margin-bottom: 7px;
     }
-
     .input-wrap { position: relative; }
     .input-wrap .icon {
       position: absolute; left: 13px; top: 50%; transform: translateY(-50%);
-      color: var(--t3); pointer-events: none;
-      display: flex; align-items: center;
+      color: var(--t3); pointer-events: none; display: flex; align-items: center;
     }
     .input-wrap .icon svg { width: 16px; height: 16px; }
-
     .field input {
       width: 100%; height: 44px;
       padding: 0 14px 0 42px;
       background: var(--surface);
       border: 1px solid var(--border2);
       border-radius: var(--r);
-      color: var(--t1);
-      font-size: 14px;
+      color: var(--t1); font-size: 14px;
       outline: none;
       transition: border-color .2s, box-shadow .2s;
     }
@@ -206,15 +167,7 @@
     }
     .field input::placeholder { color: var(--t3); }
 
-    .toggle-pw {
-      position: absolute; right: 13px; top: 50%; transform: translateY(-50%);
-      color: var(--t3); background: none; border: none; cursor: pointer;
-      display: flex; padding: 4px;
-    }
-    .toggle-pw:hover { color: var(--t2); }
-    .toggle-pw svg { width: 16px; height: 16px; }
-
-    /* ── Company autocomplete ─────────────────────────────── */
+    /* autocomplete */
     .suggestions {
       position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 100;
       background: var(--card);
@@ -222,16 +175,14 @@
       border-radius: var(--r);
       overflow: hidden;
       box-shadow: var(--shadow);
+      max-height: 260px; overflow-y: auto;
     }
     .suggestion-item {
-      padding: 11px 14px;
-      cursor: pointer; font-size: 14px;
+      padding: 11px 14px; cursor: pointer; font-size: 14px;
       display: flex; align-items: center; gap: 10px;
       transition: background .15s;
     }
-    .suggestion-item:hover, .suggestion-item.focused {
-      background: var(--accent-lo);
-    }
+    .suggestion-item:hover, .suggestion-item.focused { background: var(--accent-lo); }
     .suggestion-item .match { color: var(--accent); font-weight: 600; }
     .suggestion-dot {
       width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
@@ -239,19 +190,17 @@
     }
     .suggestion-dot.inactive { background: var(--t3); }
 
-    /* ── Buttons ──────────────────────────────────────────── */
+    /* primary btn */
     .btn-primary {
       width: 100%; height: 46px;
       background: var(--accent);
       color: #fff; border-radius: var(--r);
       font-family: var(--font-head);
-      font-size: 15px; font-weight: 600;
-      letter-spacing: .04em;
+      font-size: 15px; font-weight: 600; letter-spacing: .04em;
       border: none; cursor: pointer;
       transition: opacity .2s, transform .1s, box-shadow .2s;
       display: flex; align-items: center; justify-content: center; gap: 8px;
       box-shadow: 0 0 20px rgba(249,115,22,.2);
-      position: relative; overflow: hidden;
     }
     .btn-primary:hover { opacity: .9; box-shadow: 0 0 28px rgba(249,115,22,.35); }
     .btn-primary:active { transform: scale(.99); }
@@ -264,17 +213,7 @@
       animation: spin .7s linear infinite;
     }
 
-    .btn-back {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 13px; color: var(--t2);
-      background: none; border: none; cursor: pointer;
-      padding: 0; margin-bottom: 20px;
-      transition: color .2s;
-    }
-    .btn-back:hover { color: var(--t1); }
-    .btn-back svg { width: 14px; height: 14px; }
-
-    /* ── Error banner ─────────────────────────────────────── */
+    /* error */
     .error-msg {
       display: flex; align-items: center; gap: 8px;
       background: var(--red-lo);
@@ -286,23 +225,11 @@
     }
     .error-msg svg { width: 16px; height: 16px; color: var(--red); flex-shrink: 0; }
 
-    /* Selected company chip */
-    .selected-company {
-      display: flex; align-items: center; gap: 8px;
-      background: var(--accent-lo);
-      border: 1px solid var(--accent-glow);
-      border-radius: var(--r);
-      padding: 10px 14px; margin-bottom: 20px;
-      font-size: 13px; font-weight: 500;
-    }
-    .selected-company svg { width: 14px; height: 14px; color: var(--accent); }
-
-    /* ═══════════════════════════════════════════════════════════
+    /* ══════════════════════════════════════════
        DASHBOARD
-    ═══════════════════════════════════════════════════════════ */
+    ══════════════════════════════════════════ */
     #dashboard { display: none; min-height: 100vh; }
 
-    /* Top nav */
     .topnav {
       height: 60px;
       background: var(--surface);
@@ -312,215 +239,145 @@
       position: sticky; top: 0; z-index: 50;
       gap: 16px;
     }
-
     .nav-brand {
       font-family: var(--font-head);
-      font-size: 16px; font-weight: 800;
-      letter-spacing: .04em;
-      display: flex; align-items: center; gap: 10px;
-      flex-shrink: 0;
+      font-size: 16px; font-weight: 800; letter-spacing: .04em;
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0;
     }
-
     .nav-divider { height: 20px; width: 1px; background: var(--border2); flex-shrink: 0; }
-
     .nav-client-badge {
       display: flex; align-items: center; gap: 8px;
       background: var(--accent-lo);
       border: 1px solid var(--accent-glow);
       border-radius: 20px; padding: 4px 12px;
-      font-size: 12px; font-weight: 500; color: var(--accent);
-      flex-shrink: 0;
+      font-size: 12px; font-weight: 500; color: var(--accent); flex-shrink: 0;
     }
     .nav-client-badge .dot {
       width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
       animation: pulse-dot 2s ease-in-out infinite;
     }
-
-    @keyframes pulse-dot {
-      0%,100% { opacity: 1; }
-      50% { opacity: .4; }
-    }
+    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
 
     .nav-spacer { flex: 1; }
 
-    .nav-user {
-      display: flex; align-items: center; gap: 8px;
-      font-size: 13px; color: var(--t2);
-    }
-    .nav-avatar {
-      width: 32px; height: 32px; border-radius: 50%;
-      background: var(--accent-lo); border: 1px solid var(--accent-glow);
-      display: flex; align-items: center; justify-content: center;
-      font-family: var(--font-head); font-size: 12px; font-weight: 700;
-      color: var(--accent);
-    }
-
-    .btn-logout {
+    /* change client button */
+    .btn-change-client {
       height: 32px; padding: 0 14px;
       background: var(--surface); border: 1px solid var(--border2);
       border-radius: 6px; color: var(--t2); font-size: 12px; font-weight: 500;
       cursor: pointer; transition: all .2s;
       display: flex; align-items: center; gap: 6px;
     }
-    .btn-logout:hover { color: var(--red); border-color: rgba(239,68,68,.4); }
-    .btn-logout svg { width: 13px; height: 13px; }
+    .btn-change-client:hover { color: var(--accent); border-color: var(--accent-glow); }
+    .btn-change-client svg { width: 13px; height: 13px; }
 
-    /* Dashboard content */
     .dash-content { padding: 32px 24px; max-width: 1280px; margin: 0 auto; }
 
-    /* Stats row */
+    /* stats */
     .stats-row {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 16px; margin-bottom: 32px;
     }
-
     .stat-card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--r2);
-      padding: 20px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--r2); padding: 20px;
       position: relative; overflow: hidden;
       transition: border-color .2s, transform .2s;
     }
     .stat-card:hover { border-color: var(--border2); transform: translateY(-1px); }
-    .stat-card::before {
-      content: '';
-      position: absolute; top: 0; left: 0; right: 0; height: 2px;
-    }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; }
     .stat-card.orange::before { background: var(--accent); }
     .stat-card.cyan::before   { background: var(--cyan); }
     .stat-card.green::before  { background: var(--green); }
     .stat-card.amber::before  { background: var(--amber); }
-
     .stat-label { font-size: 11px; color: var(--t3); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
-    .stat-value {
-      font-family: var(--font-head);
-      font-size: 30px; font-weight: 700; line-height: 1;
-      margin-bottom: 4px;
-    }
+    .stat-value { font-family: var(--font-head); font-size: 30px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
     .stat-card.orange .stat-value { color: var(--accent); }
     .stat-card.cyan   .stat-value { color: var(--cyan); }
     .stat-card.green  .stat-value { color: var(--green); }
     .stat-card.amber  .stat-value { color: var(--amber); }
     .stat-sub { font-size: 11px; color: var(--t3); }
 
-    /* Controls bar */
+    /* controls */
     .controls-bar {
       display: flex; flex-wrap: wrap; gap: 12px;
       margin-bottom: 20px; align-items: center;
     }
-
-    .search-wrap {
-      position: relative; flex: 1; min-width: 220px;
-    }
+    .search-wrap { position: relative; flex: 1; min-width: 220px; }
     .search-wrap .icon {
       position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
       color: var(--t3); pointer-events: none; display: flex;
     }
     .search-wrap .icon svg { width: 16px; height: 16px; }
     .search-wrap input {
-      width: 100%; height: 40px;
-      padding: 0 14px 0 40px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--r);
-      color: var(--t1); font-size: 13px;
+      width: 100%; height: 40px; padding: 0 14px 0 40px;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--r); color: var(--t1); font-size: 13px;
       outline: none; transition: border-color .2s;
     }
     .search-wrap input:focus { border-color: var(--accent); }
     .search-wrap input::placeholder { color: var(--t3); }
-
     .filter-select {
       height: 40px; padding: 0 32px 0 12px;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--r);
-      color: var(--t1); font-size: 13px; font-family: inherit;
-      outline: none; cursor: pointer;
-      appearance: none;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--r); color: var(--t1); font-size: 13px;
+      outline: none; cursor: pointer; appearance: none;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234b5a70' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 12px center;
-      transition: border-color .2s;
-      min-width: 140px;
+      background-repeat: no-repeat; background-position: right 12px center;
+      transition: border-color .2s; min-width: 140px;
     }
     .filter-select:focus { border-color: var(--accent); }
     .filter-select option { background: var(--card); }
-
     .btn-export {
       height: 40px; padding: 0 18px;
-      background: var(--card);
-      border: 1px solid var(--border2);
-      border-radius: var(--r);
-      color: var(--t2); font-size: 13px; font-weight: 500;
+      background: var(--card); border: 1px solid var(--border2);
+      border-radius: var(--r); color: var(--t2); font-size: 13px; font-weight: 500;
       cursor: pointer; display: flex; align-items: center; gap: 8px;
       transition: all .2s;
     }
     .btn-export:hover { border-color: var(--accent-glow); color: var(--accent); }
     .btn-export svg { width: 14px; height: 14px; }
-
     .result-count {
-      font-size: 12px; color: var(--t3);
-      font-family: var(--font-mono);
-      white-space: nowrap;
-      margin-left: auto;
+      font-size: 12px; color: var(--t3); font-family: var(--font-mono);
+      white-space: nowrap; margin-left: auto;
     }
 
-    /* ── Table ──────────────────────────────────────────────── */
+    /* table */
     .table-wrap {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--r2);
-      overflow: hidden;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--r2); overflow: hidden;
     }
-
-    table {
-      width: 100%; border-collapse: collapse;
-    }
-
+    table { width: 100%; border-collapse: collapse; }
     thead { background: var(--surface); }
     thead th {
-      padding: 13px 16px;
-      text-align: left;
+      padding: 13px 16px; text-align: left;
       font-size: 11px; font-weight: 600;
       color: var(--t3); letter-spacing: .08em; text-transform: uppercase;
       border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-      cursor: pointer; user-select: none;
+      white-space: nowrap; cursor: pointer; user-select: none;
       transition: color .2s;
     }
     thead th:hover { color: var(--t1); }
     thead th .th-inner { display: flex; align-items: center; gap: 5px; }
     thead th .sort-icon { opacity: .4; font-size: 10px; }
     thead th.sorted .sort-icon { opacity: 1; color: var(--accent); }
-
-    tbody tr {
-      border-bottom: 1px solid var(--border);
-      transition: background .15s;
-    }
+    tbody tr { border-bottom: 1px solid var(--border); transition: background .15s; }
     tbody tr:last-child { border-bottom: none; }
     tbody tr:hover { background: rgba(255,255,255,.02); }
+    tbody td { padding: 13px 16px; font-size: 13px; color: var(--t2); vertical-align: middle; }
 
-    tbody td {
-      padding: 13px 16px;
-      font-size: 13px; color: var(--t2);
-      vertical-align: middle;
-    }
-
-    /* ── Badges ─────────────────────────────────────────────── */
+    /* badges */
     .badge {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 3px 9px; border-radius: 20px;
       font-size: 11px; font-weight: 600;
-      font-family: var(--font-mono); letter-spacing: .03em;
-      white-space: nowrap;
+      font-family: var(--font-mono); letter-spacing: .03em; white-space: nowrap;
     }
     .badge-dot { width: 5px; height: 5px; border-radius: 50%; }
-
     .badge-user     { background: var(--cyan-lo);  color: var(--cyan);  }
     .badge-user .badge-dot  { background: var(--cyan);  }
-    .badge-tank     { background: var(--accent-lo); color: var(--accent);}
+    .badge-tank     { background: var(--accent-lo); color: var(--accent); }
     .badge-tank .badge-dot  { background: var(--accent); }
     .badge-client   { background: var(--amber-lo);  color: var(--amber); }
     .badge-client .badge-dot{ background: var(--amber); }
@@ -530,19 +387,18 @@
     .badge-admin .badge-dot { background: var(--t3); }
 
     .op-badge {
-      display: inline-block;
-      padding: 2px 8px; border-radius: 4px;
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
       font-size: 11px; font-family: var(--font-mono); font-weight: 500;
       letter-spacing: .02em; white-space: nowrap;
     }
-    .op-create  { background: var(--green-lo);  color: var(--green);  }
-    .op-delete  { background: var(--red-lo);    color: var(--red);    }
-    .op-update  { background: var(--amber-lo);  color: var(--amber);  }
-    .op-grant   { background: var(--cyan-lo);   color: var(--cyan);   }
-    .op-revoke  { background: var(--red-lo);    color: #fca5a5;       }
-    .op-move    { background: rgba(139,92,246,.12); color: #a78bfa;   }
-    .op-switch  { background: rgba(255,255,255,.06); color: var(--t2);  }
-    .op-other   { background: rgba(255,255,255,.06); color: var(--t2);  }
+    .op-create { background: var(--green-lo);  color: var(--green);  }
+    .op-delete { background: var(--red-lo);    color: var(--red);    }
+    .op-update { background: var(--amber-lo);  color: var(--amber);  }
+    .op-grant  { background: var(--cyan-lo);   color: var(--cyan);   }
+    .op-revoke { background: var(--red-lo);    color: #fca5a5;       }
+    .op-move   { background: rgba(139,92,246,.12); color: #a78bfa;   }
+    .op-switch { background: rgba(255,255,255,.06); color: var(--t2); }
+    .op-other  { background: rgba(255,255,255,.06); color: var(--t2); }
 
     .outcome-badge {
       display: inline-flex; align-items: center; gap: 5px;
@@ -552,21 +408,15 @@
     .outcome-badge.failure { color: var(--red); }
     .outcome-badge svg { width: 12px; height: 12px; }
 
-    .ts-cell {
-      font-family: var(--font-mono);
-      font-size: 12px; color: var(--t3);
-      white-space: nowrap;
-    }
+    .ts-cell { font-family: var(--font-mono); font-size: 12px; color: var(--t3); white-space: nowrap; }
     .ts-date { color: var(--t2); display: block; margin-bottom: 2px; }
     .ts-time { font-size: 11px; }
-
     .actor-cell { font-weight: 500; color: var(--t1); }
     .actor-role { font-size: 11px; color: var(--t3); margin-top: 2px; }
-
     .entity-cell { font-weight: 500; color: var(--t1); }
     .entity-id   { font-size: 11px; color: var(--t3); font-family: var(--font-mono); margin-top: 2px; }
 
-    /* Detail expand */
+    /* expand */
     .detail-btn {
       width: 28px; height: 28px; border-radius: 6px;
       background: none; border: 1px solid var(--border);
@@ -577,67 +427,30 @@
     .detail-btn:hover { border-color: var(--accent-glow); color: var(--accent); background: var(--accent-lo); }
     .detail-btn svg { width: 13px; height: 13px; transition: transform .2s; }
     .detail-btn.open svg { transform: rotate(180deg); }
-
-    .detail-row td {
-      padding: 0;
-      background: rgba(249,115,22,.03);
-      border-bottom: 1px solid var(--border);
-    }
-    .detail-content {
-      padding: 16px 20px;
-      display: none;
-    }
+    .detail-row td { padding: 0; background: rgba(249,115,22,.03); border-bottom: 1px solid var(--border); }
+    .detail-content { padding: 16px 20px; display: none; }
     .detail-content.open { display: block; }
-
-    .detail-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 12px;
-    }
-    .detail-item { }
-    .detail-key {
-      font-size: 10px; font-weight: 600; color: var(--t3);
-      text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px;
-    }
-    .detail-val {
-      font-size: 12px; font-family: var(--font-mono); color: var(--t1);
-      word-break: break-all;
-    }
+    .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+    .detail-key { font-size: 10px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 4px; }
+    .detail-val { font-size: 12px; font-family: var(--font-mono); color: var(--t1); word-break: break-all; }
     .detail-val.list { display: flex; flex-wrap: wrap; gap: 4px; }
-    .detail-val.list span {
-      background: var(--border);
-      border-radius: 4px; padding: 1px 6px;
-      font-size: 11px;
-    }
+    .detail-val.list span { background: var(--border); border-radius: 4px; padding: 1px 6px; font-size: 11px; }
 
-    /* Empty state */
-    .empty-state {
-      text-align: center; padding: 80px 24px;
-    }
+    /* empty */
+    .empty-state { text-align: center; padding: 80px 24px; }
     .empty-icon {
       width: 56px; height: 56px; margin: 0 auto 16px;
       background: var(--border); border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      color: var(--t3);
+      display: flex; align-items: center; justify-content: center; color: var(--t3);
     }
     .empty-icon svg { width: 24px; height: 24px; }
     .empty-title { font-family: var(--font-head); font-size: 18px; font-weight: 600; margin-bottom: 6px; }
     .empty-text  { font-size: 14px; color: var(--t2); }
 
-    /* Loading skeleton */
-    .skeleton {
-      background: linear-gradient(90deg, var(--border) 25%, var(--border2) 50%, var(--border) 75%);
-      background-size: 200% 100%;
-      animation: shimmer 1.5s infinite;
-      border-radius: 4px;
-    }
-    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
-
-    /* Pagination */
+    /* pagination */
     .pagination {
       display: flex; align-items: center; gap: 6px;
-      padding: 16px; border-top: 1px solid var(--border);
-      justify-content: center;
+      padding: 16px; border-top: 1px solid var(--border); justify-content: center;
     }
     .page-btn {
       width: 32px; height: 32px; border-radius: 6px;
@@ -652,22 +465,7 @@
     .page-btn svg { width: 14px; height: 14px; }
     .page-info { font-size: 12px; color: var(--t3); font-family: var(--font-mono); padding: 0 8px; }
 
-    /* ── Animations ──────────────────────────────────────────── */
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(8px); }
-      to   { opacity: 1; transform: translateY(0); }
-    }
-    .fade-in { animation: fadeIn .3s ease forwards; }
-
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(12px) scale(.98); }
-      to   { opacity: 1; transform: translateY(0) scale(1); }
-    }
-    .slide-in { animation: slideIn .4s cubic-bezier(.22,.68,0,1.2) forwards; }
-
-    /* ── Toast ──────────────────────────────────────────────── */
+    /* toast */
     #toast {
       position: fixed; bottom: 24px; right: 24px; z-index: 1000;
       padding: 12px 20px;
@@ -676,9 +474,7 @@
       font-size: 13px; color: var(--t1);
       display: flex; align-items: center; gap: 10px;
       pointer-events: none; opacity: 0;
-      transition: opacity .3s, transform .3s;
-      transform: translateY(8px);
-      max-width: 340px;
+      transition: opacity .3s, transform .3s; transform: translateY(8px); max-width: 340px;
     }
     #toast.show { opacity: 1; transform: translateY(0); }
     #toast svg { width: 16px; height: 16px; flex-shrink: 0; }
@@ -687,31 +483,42 @@
     #toast.error { border-color: rgba(239,68,68,.3); }
     #toast.error svg { color: var(--red); }
 
-    /* ── Responsive ─────────────────────────────────────────── */
+    /* animations */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(12px) scale(.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    /* loading spinner */
+    .spin-ring {
+      width: 20px; height: 20px;
+      border: 2px solid var(--border2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: inline-block;
+    }
+
     @media (max-width: 768px) {
       .topnav { padding: 0 16px; }
       .dash-content { padding: 20px 16px; }
-      .nav-user span { display: none; }
       table { font-size: 12px; }
       tbody td { padding: 10px 12px; }
       thead th { padding: 10px 12px; }
-      .col-entity, .col-details, .col-id { display: none; }
-    }
-    @media (max-width: 480px) {
-      .col-actor-role { display: none; }
+      .col-entity, .col-details { display: none; }
     }
   </style>
 </head>
 <body>
 <div id="app">
 
-  <!-- ═══════════ LOGIN SHELL ═══════════ -->
-  <div id="login-shell">
-    <div class="login-card slide-in">
-      <div class="login-header">
-        <div class="login-brand">
+  <!-- ═══════ CLIENT PICKER ═══════ -->
+  <div id="picker-shell">
+    <div class="picker-card">
+      <div class="picker-header">
+        <div class="picker-brand">
           <div class="brand-icon">
-            <!-- Lubrication drop icon -->
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 2C8 8 5 13 5 16a7 7 0 0 0 14 0c0-3-3-8-7-14z"/>
             </svg>
@@ -721,90 +528,39 @@
             <div class="brand-sub">Audit Trail Viewer</div>
           </div>
         </div>
-        <div class="step-indicator">
-          <div class="step-dot active" id="dot-1"></div>
-          <div class="step-dot" id="dot-2"></div>
-          <div class="step-dot" id="dot-3"></div>
-        </div>
       </div>
-      <div class="login-body">
 
-        <!-- Step 1: Company -->
-        <div id="step-1">
-          <div class="step-title">Find your company</div>
-          <div class="step-hint">Type the first 3 or more letters of your company name to search.</div>
-          <div id="login-error" class="error-msg" style="display:none">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <span id="login-error-text"></span>
-          </div>
-          <div class="field">
-            <label for="company-input">Company Name</label>
-            <div class="input-wrap" style="position:relative">
-              <div class="icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-              </div>
-              <input type="text" id="company-input" placeholder="e.g. VSY, Mut…"
-                     autocomplete="off" spellcheck="false" maxlength="80" />
-              <div id="suggestions" class="suggestions" style="display:none"></div>
-            </div>
-          </div>
-          <button class="btn-primary" id="btn-company-next" disabled>
-            Continue
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-          </button>
+      <div class="picker-body">
+        <div class="picker-title">Select a company</div>
+        <div class="picker-hint">Type 3 or more letters to search, then click to view its audit trail.</div>
+
+        <div id="picker-error" class="error-msg" style="display:none">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <span id="picker-error-text"></span>
         </div>
 
-        <!-- Step 2: Credentials -->
-        <div id="step-2" style="display:none">
-          <button class="btn-back" id="btn-back-1">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-            Back
-          </button>
-          <div id="selected-company-chip" class="selected-company">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-            <span id="selected-company-name"></span>
-          </div>
-          <div class="step-title">Sign in</div>
-          <div class="step-hint">Enter the credentials for your Super Administrator account.</div>
-          <div id="login-error-2" class="error-msg" style="display:none">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <span id="login-error-text-2"></span>
-          </div>
-          <div class="field">
-            <label for="username-input">Username</label>
-            <div class="input-wrap">
-              <div class="icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              </div>
-              <input type="text" id="username-input" placeholder="Your username"
-                     autocomplete="username" spellcheck="false" maxlength="80" />
+        <div class="field">
+          <label for="company-input">Company Name</label>
+          <div class="input-wrap" style="position:relative">
+            <div class="icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
             </div>
+            <input type="text" id="company-input" placeholder="e.g. VSY, Mut…"
+                   autocomplete="off" spellcheck="false" maxlength="80" />
+            <div id="suggestions" class="suggestions" style="display:none"></div>
           </div>
-          <div class="field">
-            <label for="password-input">Password</label>
-            <div class="input-wrap">
-              <div class="icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              </div>
-              <input type="password" id="password-input" placeholder="Your password"
-                     autocomplete="current-password" maxlength="128" />
-              <button class="toggle-pw" id="toggle-pw" type="button" aria-label="Toggle password visibility">
-                <svg id="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                <svg id="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-              </button>
-            </div>
-          </div>
-          <button class="btn-primary" id="btn-login">
-            <span id="btn-login-text">Sign In</span>
-            <span id="btn-login-spinner" class="spinner" style="display:none"></span>
-          </button>
         </div>
 
-      </div><!-- /login-body -->
-    </div><!-- /login-card -->
-  </div><!-- /login-shell -->
+        <button class="btn-primary" id="btn-view" disabled>
+          <span id="btn-view-text">View Audit Trail</span>
+          <span id="btn-view-spinner" class="spinner" style="display:none;width:18px;height:18px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite"></span>
+          <svg id="btn-view-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:16px;height:16px"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
 
-  <!-- ═══════════ DASHBOARD ═══════════ -->
+  <!-- ═══════ DASHBOARD ═══════ -->
   <div id="dashboard">
     <nav class="topnav">
       <div class="nav-brand">
@@ -821,19 +577,14 @@
         <span id="nav-client-name">—</span>
       </div>
       <div class="nav-spacer"></div>
-      <div class="nav-user">
-        <div class="nav-avatar" id="nav-avatar">SA</div>
-        <span id="nav-username">—</span>
-      </div>
-      <button class="btn-logout" id="btn-logout">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Sign out
+      <button class="btn-change-client" id="btn-change-client">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Change Company
       </button>
     </nav>
 
     <div class="dash-content">
-      <!-- Stats -->
-      <div class="stats-row" id="stats-row">
+      <div class="stats-row">
         <div class="stat-card orange">
           <div class="stat-label">Total Events</div>
           <div class="stat-value" id="stat-total">—</div>
@@ -856,7 +607,6 @@
         </div>
       </div>
 
-      <!-- Controls -->
       <div class="controls-bar">
         <div class="search-wrap">
           <div class="icon">
@@ -896,13 +646,10 @@
         <div class="result-count" id="result-count">— entries</div>
       </div>
 
-      <!-- Table -->
       <div class="table-wrap">
-        <div id="table-loading" style="padding:48px;text-align:center;color:var(--t3)">
-          <div style="display:inline-flex;align-items:center;gap:10px">
-            <div class="spinner" style="width:20px;height:20px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite"></div>
-            Loading audit logs…
-          </div>
+        <div id="table-loading" style="padding:48px;text-align:center;color:var(--t3);display:flex;align-items:center;justify-content:center;gap:12px">
+          <div class="spin-ring"></div>
+          Loading audit logs…
         </div>
         <table id="audit-table" style="display:none">
           <thead>
@@ -932,7 +679,7 @@
         </table>
         <div id="empty-state" class="empty-state" style="display:none">
           <div class="empty-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
           </div>
           <div class="empty-title">No audit logs found</div>
           <div class="empty-text">Try adjusting your search or filter criteria.</div>
@@ -942,7 +689,7 @@
     </div>
   </div>
 
-</div><!-- /app -->
+</div>
 
 <div id="toast">
   <svg id="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
@@ -950,24 +697,14 @@
 </div>
 
 <script>
-// ══════════════════════════════════════════════════════════════
-// VAPLI Audit Trail — main.js
-// Security model:
-//   1. User enters company prefix → fuzzy-match against /clients
-//   2. User enters username + password → look up in
-//      /<client.db_key>/users  (client-scoped) or /users (global)
-//      Verify role === 'super admin' (exact, case-insensitive)
-//      Verify password via SHA-256 PBKDF2 match (see verifyHash)
-//   3. On success: read /<client.db_key>/admin_audit_logs
-//      Data NEVER leaves the client scope.
-// ══════════════════════════════════════════════════════════════
-
-/* ── Firebase init ─────────────────────────────────────────── */
+// ════════════════════════════════════════════════════
+// Firebase init
+// ════════════════════════════════════════════════════
 (function initFirebase() {
   if (typeof VAPLI_FIREBASE_CONFIG === 'undefined') {
     document.body.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:#ef4444;font-family:monospace;font-size:14px;padding:24px;text-align:center">' +
-      '⚠ firebase-config.js not found or VAPLI_FIREBASE_CONFIG not defined.<br>See README.md for setup instructions.</div>';
+      '⚠ firebase-config.js not found.<br>Create it with your VAPLI_FIREBASE_CONFIG object.</div>';
     return;
   }
   firebase.initializeApp(VAPLI_FIREBASE_CONFIG);
@@ -975,33 +712,32 @@
 
 const db = () => firebase.database();
 
-/* ── State ─────────────────────────────────────────────────── */
+// ════════════════════════════════════════════════════
+// State
+// ════════════════════════════════════════════════════
 const state = {
-  clients: [],             // [{id, name, db_key, is_active}]
-  selectedClient: null,    // client object
-  logs: [],                // raw audit log array
-  filtered: [],            // after search/filter
+  clients: [],
+  selectedClient: null,
+  logs: [],
+  filtered: [],
   sortCol: 'timestamp',
   sortDir: 'desc',
   page: 1,
   perPage: 25,
   openRows: new Set(),
+  _filteredClients: [],
 };
 
-/* ── Helpers ───────────────────────────────────────────────── */
-function qs(sel) { return document.querySelector(sel); }
+// ════════════════════════════════════════════════════
+// Utils
+// ════════════════════════════════════════════════════
+function qs(sel)  { return document.querySelector(sel); }
 function qsa(sel) { return [...document.querySelectorAll(sel)]; }
 
-function showError(elId, msg) {
-  const el = document.getElementById(elId);
-  const txt = document.getElementById(elId + '-text') ||
-              document.getElementById(elId.replace('error','error-text'));
-  if (txt) txt.textContent = msg;
-  if (el)  el.style.display = 'flex';
-}
-function hideError(elId) {
-  const el = document.getElementById(elId);
-  if (el) el.style.display = 'none';
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
 let toastTimer;
@@ -1010,90 +746,33 @@ function showToast(msg, type = 'success') {
   const icon = document.getElementById('toast-icon');
   document.getElementById('toast-text').textContent = msg;
   t.className = `show ${type}`;
-  if (type === 'success') icon.innerHTML = '<polyline points="20 6 9 17 4 12"/>';
-  else icon.innerHTML = '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>';
+  icon.innerHTML = type === 'success'
+    ? '<polyline points="20 6 9 17 4 12"/>'
+    : '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { t.className = type; }, 3000);
 }
 
-/* ── Password verification ─────────────────────────────────── */
-// VAPLI stores passwords as: pbkdf2_sha256$<iterations>$<salt>$<hash>
-// OR as a raw bcrypt/sha256 hex string.
-// We implement client-side PBKDF2-SHA256 to match Flutter's HashUtil.
-// If the format doesn't match PBKDF2, fall back to plain SHA-256 hex.
-
-async function sha256Hex(str) {
-  const buf = await crypto.subtle.digest('SHA-256',
-    new TextEncoder().encode(str));
-  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
+function showPickerError(msg) {
+  const el = document.getElementById('picker-error');
+  document.getElementById('picker-error-text').textContent = msg;
+  el.style.display = 'flex';
+}
+function hidePickerError() {
+  document.getElementById('picker-error').style.display = 'none';
 }
 
-async function pbkdf2Sha256(password, saltHex, iterations, keylen = 32) {
-  const pwKey = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(password),
-    { name: 'PBKDF2' }, false, ['deriveBits']
-  );
-  const salt = hexToBytes(saltHex);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
-    pwKey, keylen * 8
-  );
-  return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2,'0')).join('');
-}
-
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2)
-    bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
-  return bytes;
-}
-
-async function verifyPassword(plain, storedHash) {
-  if (!storedHash) return false;
-  // Format: pbkdf2_sha256$iterations$saltHex$hashHex
-  if (storedHash.startsWith('pbkdf2_sha256$')) {
-    const parts = storedHash.split('$');
-    if (parts.length === 4) {
-      const [, iter, salt, expected] = parts;
-      const derived = await pbkdf2Sha256(plain, salt, parseInt(iter));
-      return derived === expected;
-    }
-  }
-  // Format 2: sha256:saltHex:hashHex (some implementations)
-  if (storedHash.startsWith('sha256:')) {
-    const [, salt, expected] = storedHash.split(':');
-    const hash = await sha256Hex(salt + plain);
-    return hash === expected;
-  }
-  // Format 3: plain SHA-256 hex of password (insecure but may exist)
-  const plainHash = await sha256Hex(plain);
-  return plainHash === storedHash;
-}
-
-/* ── Step management ───────────────────────────────────────── */
-function setStep(n) {
-  [1, 2].forEach(i => {
-    document.getElementById(`step-${i}`).style.display = i === n ? 'block' : 'none';
-  });
-  [1, 2, 3].forEach((i) => {
-    const dot = document.getElementById(`dot-${i}`);
-    if (i < n)  { dot.className = 'step-dot done'; }
-    else if (i === n) { dot.className = 'step-dot active'; }
-    else        { dot.className = 'step-dot'; }
-  });
-}
-
-/* ══════════════════════════════════════════════════════════════
-   STEP 1 — Company search
-══════════════════════════════════════════════════════════════ */
+// ════════════════════════════════════════════════════
+// Client loading
+// ════════════════════════════════════════════════════
 async function loadClients() {
   try {
     const snap = await db().ref('clients').get();
     if (!snap.exists()) return;
     state.clients = Object.values(snap.val()).map(c => ({
-      id: c.id,
-      name: c.name,
-      db_key: c.db_key,
+      id:        c.id,
+      name:      c.name,
+      db_key:    c.db_key,
       is_active: c.is_active !== false,
     }));
   } catch (e) {
@@ -1101,19 +780,21 @@ async function loadClients() {
   }
 }
 
-const companyInput = document.getElementById('company-input');
-const suggestionsEl = document.getElementById('suggestions');
-const btnCompanyNext = document.getElementById('btn-company-next');
-let suggestionFocus = -1;
-let pendingClient = null;
+// ════════════════════════════════════════════════════
+// Autocomplete
+// ════════════════════════════════════════════════════
+const companyInput   = document.getElementById('company-input');
+const suggestionsEl  = document.getElementById('suggestions');
+const btnView        = document.getElementById('btn-view');
+let suggestionFocus  = -1;
+let pendingClient    = null;
 
 function renderSuggestions(query) {
   const q = query.trim().toLowerCase();
   if (q.length < 3) { suggestionsEl.style.display = 'none'; return; }
 
   const matches = state.clients.filter(c =>
-    c.name.toLowerCase().includes(q) ||
-    c.db_key.toLowerCase().includes(q)
+    c.name.toLowerCase().includes(q) || c.db_key.toLowerCase().includes(q)
   );
 
   if (matches.length === 0) {
@@ -1123,23 +804,22 @@ function renderSuggestions(query) {
     return;
   }
 
+  state._filteredClients = matches;
   suggestionsEl.innerHTML = matches.map((c, i) => {
-    const nameHl = c.name.replace(
-      new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')})`, 'gi'),
-      '<span class="match">$1</span>'
-    );
+    const safe = q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const nameHl = c.name.replace(new RegExp(`(${safe})`, 'gi'),
+      '<span class="match">$1</span>');
     return `<div class="suggestion-item" data-idx="${i}" tabindex="-1">
       <div class="suggestion-dot${c.is_active ? '' : ' inactive'}"></div>
       <div>
         <div>${nameHl}</div>
-        <div style="font-size:11px;color:var(--t3);font-family:var(--font-mono);margin-top:2px">${c.db_key}</div>
+        <div style="font-size:11px;color:var(--t3);font-family:var(--font-mono);margin-top:2px">${escHtml(c.db_key)}</div>
       </div>
     </div>`;
   }).join('');
 
   suggestionsEl.style.display = 'block';
   suggestionFocus = -1;
-  state._filteredClients = matches;
 
   qsa('#suggestions .suggestion-item').forEach((el, i) => {
     el.addEventListener('mousedown', e => {
@@ -1153,14 +833,14 @@ function selectClient(client) {
   pendingClient = client;
   companyInput.value = client.name;
   suggestionsEl.style.display = 'none';
-  btnCompanyNext.disabled = false;
-  hideError('login-error');
+  btnView.disabled = false;
+  hidePickerError();
 }
 
 companyInput.addEventListener('input', () => {
   pendingClient = null;
-  btnCompanyNext.disabled = true;
-  hideError('login-error');
+  btnView.disabled = true;
+  hidePickerError();
   renderSuggestions(companyInput.value);
 });
 
@@ -1178,12 +858,14 @@ companyInput.addEventListener('keydown', e => {
     selectClient(state._filteredClients[suggestionFocus]);
     return;
   } else if (e.key === 'Escape') {
-    suggestionsEl.style.display = 'none';
-    return;
+    suggestionsEl.style.display = 'none'; return;
   }
-  items.forEach((el, i) =>
-    el.classList.toggle('focused', i === suggestionFocus));
+  items.forEach((el, i) => el.classList.toggle('focused', i === suggestionFocus));
   if (suggestionFocus >= 0) items[suggestionFocus].scrollIntoView({ block: 'nearest' });
+});
+
+companyInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && pendingClient) btnView.click();
 });
 
 document.addEventListener('click', e => {
@@ -1191,186 +873,108 @@ document.addEventListener('click', e => {
     suggestionsEl.style.display = 'none';
 });
 
-btnCompanyNext.addEventListener('click', () => {
+// ════════════════════════════════════════════════════
+// View button → go straight to dashboard
+// ════════════════════════════════════════════════════
+btnView.addEventListener('click', async () => {
   if (!pendingClient) {
-    showError('login-error', 'Please select a company from the suggestions.');
+    showPickerError('Please select a company from the list.');
     return;
   }
+
+  // Show spinner
+  document.getElementById('btn-view-text').style.display = 'none';
+  document.getElementById('btn-view-arrow').style.display = 'none';
+  document.getElementById('btn-view-spinner').style.display = 'inline-block';
+  btnView.disabled = true;
+
   state.selectedClient = pendingClient;
-  document.getElementById('selected-company-name').textContent = pendingClient.name;
-  setStep(2);
-  hideError('login-error-2');
-  document.getElementById('username-input').value = '';
-  document.getElementById('password-input').value = '';
-  setTimeout(() => document.getElementById('username-input').focus(), 100);
-});
-
-/* ══════════════════════════════════════════════════════════════
-   STEP 2 — Login
-══════════════════════════════════════════════════════════════ */
-document.getElementById('btn-back-1').addEventListener('click', () => {
-  state.selectedClient = null;
-  pendingClient = null;
-  setStep(1);
-  hideError('login-error');
-});
-
-// Password visibility toggle
-document.getElementById('toggle-pw').addEventListener('click', () => {
-  const inp = document.getElementById('password-input');
-  const open = document.getElementById('eye-open');
-  const closed = document.getElementById('eye-closed');
-  if (inp.type === 'password') {
-    inp.type = 'text';
-    open.style.display = 'none';
-    closed.style.display = '';
-  } else {
-    inp.type = 'password';
-    open.style.display = '';
-    closed.style.display = 'none';
-  }
-});
-
-// Enter key on password → login
-document.getElementById('password-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('btn-login').click();
-});
-document.getElementById('username-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('password-input').focus();
-});
-
-document.getElementById('btn-login').addEventListener('click', async () => {
-  const username = document.getElementById('username-input').value.trim();
-  const password = document.getElementById('password-input').value;
-
-  if (!username || !password) {
-    showError('login-error-2', 'Please enter your username and password.');
-    return;
-  }
-
-  const btn = document.getElementById('btn-login');
-  const btnText = document.getElementById('btn-login-text');
-  const spinner = document.getElementById('btn-login-spinner');
-  btn.disabled = true;
-  btnText.style.display = 'none';
-  spinner.style.display = 'inline-block';
-  hideError('login-error-2');
 
   try {
-    await authenticate(username, password);
-  } catch (err) {
-    showError('login-error-2', err.message || 'Authentication failed.');
-  } finally {
-    btn.disabled = false;
-    btnText.style.display = '';
-    spinner.style.display = 'none';
+    await openDashboard(pendingClient);
+  } catch (e) {
+    showPickerError('Failed to load audit logs. Check console for details.');
+    console.error(e);
+    document.getElementById('btn-view-text').style.display = '';
+    document.getElementById('btn-view-arrow').style.display = '';
+    document.getElementById('btn-view-spinner').style.display = 'none';
+    btnView.disabled = false;
   }
 });
 
-async function authenticate(username, password) {
-  const client = state.selectedClient;
-  if (!client) throw new Error('No client selected.');
-
-  // Lookup user in client-scoped users first, then global users
-  let matchedUser = null;
-
-  // 1. Try client-scoped: /<db_key>/users
-  const scopedSnap = await db().ref(`${client.db_key}/users`).get();
-  if (scopedSnap.exists()) {
-    const usersMap = scopedSnap.val();
-    for (const u of Object.values(usersMap)) {
-      if ((u.username || '').toLowerCase() === username.toLowerCase()) {
-        matchedUser = u;
-        break;
-      }
-    }
-  }
-
-  // 2. Fall back to global /users
-  if (!matchedUser) {
-    const globalSnap = await db().ref('users')
-      .orderByChild('username').equalTo(username).get();
-    if (globalSnap.exists()) {
-      const vals = Object.values(globalSnap.val());
-      // Pick user whose client_ids includes this client
-      matchedUser = vals.find(u =>
-        Array.isArray(u.client_ids) && u.client_ids.includes(client.id)
-      ) || vals.find(u => !u.client_ids || u.client_ids.length === 0);
-    }
-  }
-
-  if (!matchedUser) throw new Error('User not found for this company.');
-
-  // Active check
-  if (matchedUser.is_active === false)
-    throw new Error('This account has been deactivated.');
-
-  // Lockout check
-  if (matchedUser.locked_until) {
-    const lockTime = new Date(matchedUser.locked_until);
-    if (Date.now() < lockTime.getTime())
-      throw new Error(`Account is locked until ${lockTime.toLocaleString()}.`);
-  }
-
-  // Role check — must be 'super admin' (case-insensitive)
-  const role = (matchedUser.role || '').toLowerCase().trim();
-  if (role !== 'super admin') {
-    throw new Error(
-      'Access denied. Only Super Administrator accounts can view audit trails.'
-    );
-  }
-
-  // Password check
-  const ok = await verifyPassword(password, matchedUser.password_hash);
-  if (!ok) throw new Error('Incorrect password. Please try again.');
-
-  // Success — store session (sessionStorage only — cleared on tab close)
-  sessionStorage.setItem('vapli_audit_session', JSON.stringify({
-    userId: matchedUser.id,
-    username: matchedUser.username,
-    fullName: matchedUser.full_name,
-    clientId: client.id,
-    clientName: client.name,
-    dbKey: client.db_key,
-    expiresAt: Date.now() + 4 * 60 * 60 * 1000, // 4 h
-  }));
-
-  await loadDashboard({
-    fullName: matchedUser.full_name,
-    username: matchedUser.username,
-    clientName: client.name,
-    dbKey: client.db_key,
-  });
-}
-
-/* ══════════════════════════════════════════════════════════════
-   DASHBOARD
-══════════════════════════════════════════════════════════════ */
-async function loadDashboard({ fullName, username, clientName, dbKey }) {
-  // Swap views
-  document.getElementById('login-shell').style.display = 'none';
+// ════════════════════════════════════════════════════
+// Dashboard
+// ════════════════════════════════════════════════════
+async function openDashboard(client) {
+  document.getElementById('nav-client-name').textContent = client.name;
+  document.getElementById('picker-shell').style.display = 'none';
   document.getElementById('dashboard').style.display = 'block';
 
-  // Nav
-  document.getElementById('nav-client-name').textContent = clientName;
-  document.getElementById('nav-username').textContent = fullName || username;
-  document.getElementById('nav-avatar').textContent =
-    (fullName || username).charAt(0).toUpperCase();
+  // Reset table state
+  state.logs = [];
+  state.filtered = [];
+  state.page = 1;
+  state.openRows.clear();
+  document.getElementById('search-input').value = '';
+  document.getElementById('filter-entity').value = '';
+  document.getElementById('filter-op').value = '';
 
-  // Load logs
-  await fetchLogs(dbKey);
+  await fetchLogs(client.db_key);
 }
 
+document.getElementById('btn-change-client').addEventListener('click', () => {
+  // Go back to picker
+  state.selectedClient = null;
+  pendingClient = null;
+  companyInput.value = '';
+  btnView.disabled = true;
+  document.getElementById('btn-view-text').style.display = '';
+  document.getElementById('btn-view-arrow').style.display = '';
+  document.getElementById('btn-view-spinner').style.display = 'none';
+  hidePickerError();
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('picker-shell').style.display = 'flex';
+});
+
+// ════════════════════════════════════════════════════
+// Fetch logs from Firebase
+// ════════════════════════════════════════════════════
 async function fetchLogs(dbKey) {
-  document.getElementById('table-loading').style.display = 'block';
-  document.getElementById('audit-table').style.display = 'none';
-  document.getElementById('empty-state').style.display = 'none';
+  const loading = document.getElementById('table-loading');
+  const table   = document.getElementById('audit-table');
+  const empty   = document.getElementById('empty-state');
+  const pag     = document.getElementById('pagination');
+
+  loading.style.display = 'flex';
+  table.style.display   = 'none';
+  empty.style.display   = 'none';
+  pag.style.display     = 'none';
 
   try {
-    const snap = await db().ref(`${dbKey}/admin_audit_logs`).get();
-    const raw = snap.exists() ? snap.val() : {};
-    state.logs = Object.values(raw).map(v => ({ ...v }));
-    // Sort by timestamp desc by default
+    // Read both scoped and master audit logs
+    const [scopedSnap, masterSnap] = await Promise.all([
+      db().ref(`${dbKey}/admin_audit_logs`).get(),
+      db().ref('admin_audit_logs_master').get(),
+    ]);
+
+    const allLogs = [];
+
+    if (scopedSnap.exists() && scopedSnap.val()) {
+      Object.values(scopedSnap.val()).forEach(v => allLogs.push({ ...v }));
+    }
+
+    // From master, only include entries for this client
+    if (masterSnap.exists() && masterSnap.val()) {
+      Object.values(masterSnap.val()).forEach(v => {
+        if (v.client_db_key === dbKey || v.client_id === state.selectedClient?.id) {
+          // Avoid duplicates (same id already in scoped)
+          const alreadyIn = allLogs.some(l => l.id && l.id === v.id);
+          if (!alreadyIn) allLogs.push({ ...v });
+        }
+      });
+    }
+
+    state.logs = allLogs;
     state.logs.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
     state.page = 1;
     updateStats();
@@ -1378,17 +982,22 @@ async function fetchLogs(dbKey) {
   } catch (e) {
     console.error('Failed to load logs:', e);
     showToast('Failed to load audit logs.', 'error');
+    loading.style.display = 'none';
+    throw e;
   } finally {
-    document.getElementById('table-loading').style.display = 'none';
+    loading.style.display = 'none';
   }
 }
 
+// ════════════════════════════════════════════════════
+// Stats
+// ════════════════════════════════════════════════════
 function updateStats() {
   const logs = state.logs;
   document.getElementById('stat-total').textContent = logs.length;
 
-  const userOps = ['create_user','update_user','delete_user','grant_user_access','revoke_user_access'];
-  const tankOps = ['create_tank_leaf','create_group','update_group','delete_tank','move_node','move_node_to_parent'];
+  const userOps = ['create_user','update_user','delete_user','grant_user_access','revoke_user_access','assign_user_client'];
+  const tankOps = ['create_tank_leaf','create_group','update_group','delete_tank','delete_group','move_node','move_node_to_parent','duplicate_group','reorder_nodes'];
 
   document.getElementById('stat-users').textContent =
     logs.filter(l => userOps.includes(l.operation)).length;
@@ -1398,9 +1007,11 @@ function updateStats() {
     logs.filter(l => l.operation === 'update_settings').length;
 }
 
-/* ── Filtering / sorting ────────────────────────────────────── */
+// ════════════════════════════════════════════════════
+// Filter + sort
+// ════════════════════════════════════════════════════
 function applyFilters() {
-  const q = document.getElementById('search-input').value.toLowerCase();
+  const q    = document.getElementById('search-input').value.toLowerCase();
   const entF = document.getElementById('filter-entity').value;
   const opF  = document.getElementById('filter-op').value;
 
@@ -1418,7 +1029,6 @@ function applyFilters() {
     return true;
   });
 
-  // Sort
   state.filtered.sort((a, b) => {
     const av = a[state.sortCol] || '';
     const bv = b[state.sortCol] || '';
@@ -1430,7 +1040,6 @@ function applyFilters() {
   state.openRows.clear();
   document.getElementById('result-count').textContent =
     `${state.filtered.length} entr${state.filtered.length === 1 ? 'y' : 'ies'}`;
-
   renderTable();
 }
 
@@ -1439,7 +1048,7 @@ function applyFilters() {
   document.getElementById(id).addEventListener('change', applyFilters);
 });
 
-/* ── Sort by column ──────────────────────────────────────────── */
+// Sort columns
 qsa('thead th[data-col]').forEach(th => {
   th.addEventListener('click', () => {
     const col = th.dataset.col;
@@ -1459,27 +1068,38 @@ qsa('thead th[data-col]').forEach(th => {
   });
 });
 
-/* ── Render table ────────────────────────────────────────────── */
+// ════════════════════════════════════════════════════
+// Render table
+// ════════════════════════════════════════════════════
 function opBadgeClass(op) {
-  if (op.startsWith('create')) return 'op-create';
+  if (!op) return 'op-other';
+  if (op.startsWith('create') || op.startsWith('duplicate')) return 'op-create';
   if (op.startsWith('delete')) return 'op-delete';
-  if (op.startsWith('update') || op.startsWith('revoke') && op.includes('access') === false) return 'op-update';
   if (op === 'revoke_user_access') return 'op-revoke';
   if (op === 'grant_user_access') return 'op-grant';
-  if (op.startsWith('move')) return 'op-move';
+  if (op.startsWith('update') || op.startsWith('reorder')) return 'op-update';
+  if (op.startsWith('move') || op.startsWith('assign')) return 'op-move';
   if (op.startsWith('switch')) return 'op-switch';
   return 'op-other';
 }
 
 function entityBadgeClass(et) {
   const m = {
-    'user': 'badge-user',
-    'tank_browser': 'badge-tank',
-    'client': 'badge-client',
-    'system_settings': 'badge-settings',
-    'admin_dashboard': 'badge-admin',
+    user: 'badge-user',
+    tank_browser: 'badge-tank',
+    client: 'badge-client',
+    system_settings: 'badge-settings',
+    admin_dashboard: 'badge-admin',
   };
   return m[et] || 'badge-admin';
+}
+
+function etLabel(et) {
+  const m = {
+    user: 'User', tank_browser: 'Tank', client: 'Client',
+    system_settings: 'Settings', admin_dashboard: 'Dashboard',
+  };
+  return m[et] || et;
 }
 
 function formatTs(iso) {
@@ -1489,33 +1109,20 @@ function formatTs(iso) {
     const date = d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
     const time = d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
     return `<span class="ts-cell"><span class="ts-date">${date}</span><span class="ts-time">${time}</span></span>`;
-  } catch { return `<span class="ts-cell">${iso}</span>`; }
-}
-
-function opLabel(op) {
-  return op.replace(/_/g, ' ');
-}
-
-function etLabel(et) {
-  const m = {
-    'user': 'User', 'tank_browser': 'Tank', 'client': 'Client',
-    'system_settings': 'Settings', 'admin_dashboard': 'Dashboard'
-  };
-  return m[et] || et;
+  } catch { return `<span class="ts-cell">${escHtml(iso)}</span>`; }
 }
 
 function renderTable() {
   const tbody = document.getElementById('audit-tbody');
   const table = document.getElementById('audit-table');
   const empty = document.getElementById('empty-state');
-  const pag = document.getElementById('pagination');
-
+  const pag   = document.getElementById('pagination');
   const total = state.filtered.length;
 
   if (total === 0) {
     table.style.display = 'none';
     empty.style.display = 'block';
-    pag.style.display = 'none';
+    pag.style.display   = 'none';
     return;
   }
 
@@ -1525,25 +1132,22 @@ function renderTable() {
   const start = (state.page - 1) * state.perPage;
   const slice = state.filtered.slice(start, start + state.perPage);
 
-  const rows = slice.map((log, i) => {
-    const idx = start + i;
-    const rid = `row-${idx}`;
-    const did = `detail-${idx}`;
+  tbody.innerHTML = slice.map((log, i) => {
+    const idx   = start + i;
+    const did   = `detail-${idx}`;
     const isOpen = state.openRows.has(idx);
-    const et = log.entity_type || '';
-    const op = log.operation || '';
-
-    const detailsHtml = renderDetails(log);
+    const et    = log.entity_type || '';
+    const op    = log.operation   || '';
 
     return `
-      <tr class="data-row" data-idx="${idx}">
+      <tr class="data-row">
         <td>${formatTs(log.timestamp)}</td>
         <td>
           <div class="actor-cell">${escHtml(log.actor_name || '—')}</div>
-          <div class="actor-role">${escHtml(log.actor_username || '')} · ${escHtml(log.actor_role || '')}</div>
+          <div class="actor-role">${escHtml(log.actor_username || '')}${log.actor_role ? ' · ' + escHtml(log.actor_role) : ''}</div>
         </td>
         <td>
-          <span class="op-badge ${opBadgeClass(op)}">${escHtml(opLabel(op))}</span>
+          <span class="op-badge ${opBadgeClass(op)}">${escHtml(op.replace(/_/g,' '))}</span>
         </td>
         <td class="col-entity">
           <span class="badge ${entityBadgeClass(et)}">
@@ -1552,7 +1156,7 @@ function renderTable() {
         </td>
         <td class="col-entity">
           <div class="entity-cell">${escHtml(log.entity_name || '—')}</div>
-          ${log.entity_id ? `<div class="entity-id">${escHtml(log.entity_id.slice(0,20))}${log.entity_id.length > 20 ? '…' : ''}</div>` : ''}
+          ${log.entity_id ? `<div class="entity-id">${escHtml(String(log.entity_id).slice(0,24))}${String(log.entity_id).length > 24 ? '…' : ''}</div>` : ''}
         </td>
         <td>
           <span class="outcome-badge ${log.outcome === 'success' ? 'success' : 'failure'}">
@@ -1564,26 +1168,24 @@ function renderTable() {
           </span>
         </td>
         <td>
-          <button class="detail-btn${isOpen ? ' open' : ''}" data-idx="${idx}" title="Show details" aria-label="Show details">
+          <button class="detail-btn${isOpen ? ' open' : ''}" data-idx="${idx}" title="Details" aria-label="Show details">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
         </td>
       </tr>
       <tr class="detail-row" id="${did}">
         <td colspan="7">
-          <div class="detail-content${isOpen ? ' open' : ''}">${detailsHtml}</div>
+          <div class="detail-content${isOpen ? ' open' : ''}">${renderDetails(log)}</div>
         </td>
       </tr>`;
-  });
-
-  tbody.innerHTML = rows.join('');
+  }).join('');
 
   // Bind expand buttons
   qsa('#audit-tbody .detail-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const idx = parseInt(btn.dataset.idx);
-      const detailContent = document.getElementById(`detail-${idx}`)
-        .querySelector('.detail-content');
+      const detailContent = document.getElementById(`detail-${idx}`)?.querySelector('.detail-content');
+      if (!detailContent) return;
       if (state.openRows.has(idx)) {
         state.openRows.delete(idx);
         btn.classList.remove('open');
@@ -1601,12 +1203,11 @@ function renderTable() {
 
 function renderDetails(log) {
   const parts = [];
-
-  if (log.timestamp) parts.push(['Full Timestamp', log.timestamp]);
-  if (log.tab) parts.push(['Tab', log.tab]);
-  if (log.actor_id) parts.push(['Actor ID', log.actor_id]);
-  if (log.client_id) parts.push(['Client ID', log.client_id]);
-  if (log.client_db_key) parts.push(['DB Key', log.client_db_key]);
+  if (log.timestamp)    parts.push(['Full Timestamp', log.timestamp]);
+  if (log.tab)          parts.push(['Tab', log.tab]);
+  if (log.actor_id)     parts.push(['Actor ID', log.actor_id]);
+  if (log.client_id)    parts.push(['Client ID', log.client_id]);
+  if (log.client_db_key)parts.push(['DB Key', log.client_db_key]);
 
   const det = log.details || {};
   for (const [k, v] of Object.entries(det)) {
@@ -1617,7 +1218,8 @@ function renderDetails(log) {
     }
   }
 
-  if (parts.length === 0) return '<div style="font-size:12px;color:var(--t3)">No additional details.</div>';
+  if (parts.length === 0)
+    return '<div style="font-size:12px;color:var(--t3)">No additional details.</div>';
 
   return `<div class="detail-grid">${parts.map(([k, v, type]) => {
     const valHtml = type === 'list'
@@ -1630,6 +1232,9 @@ function renderDetails(log) {
   }).join('')}</div>`;
 }
 
+// ════════════════════════════════════════════════════
+// Pagination
+// ════════════════════════════════════════════════════
 function renderPagination(total) {
   const pag = document.getElementById('pagination');
   const pages = Math.ceil(total / state.perPage);
@@ -1638,14 +1243,11 @@ function renderPagination(total) {
   pag.style.display = 'flex';
   const cur = state.page;
 
-  let html = `
-    <button class="page-btn" id="pag-prev" ${cur === 1 ? 'disabled' : ''} title="Previous">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
-    </button>`;
+  let html = `<button class="page-btn" id="pag-prev" ${cur === 1 ? 'disabled' : ''} title="Previous">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+  </button>`;
 
-  // Page numbers with ellipsis
-  const range = [];
-  range.push(1);
+  const range = [1];
   for (let p = Math.max(2, cur - 1); p <= Math.min(pages - 1, cur + 1); p++) range.push(p);
   if (pages > 1) range.push(pages);
 
@@ -1656,14 +1258,12 @@ function renderPagination(total) {
     prev = p;
   }
 
-  html += `
-    <button class="page-btn" id="pag-next" ${cur === pages ? 'disabled' : ''} title="Next">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
-    </button>
-    <span class="page-info">Page ${cur} of ${pages}</span>`;
+  html += `<button class="page-btn" id="pag-next" ${cur === pages ? 'disabled' : ''} title="Next">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+  </button>
+  <span class="page-info">Page ${cur} of ${pages}</span>`;
 
   pag.innerHTML = html;
-
   document.getElementById('pag-prev')?.addEventListener('click', () => goPage(cur - 1));
   document.getElementById('pag-next')?.addEventListener('click', () => goPage(cur + 1));
   qsa('#pagination [data-page]').forEach(btn =>
@@ -1675,87 +1275,40 @@ function goPage(n) {
   state.page = Math.max(1, Math.min(n, pages));
   state.openRows.clear();
   renderTable();
-  qs('.dash-content').scrollIntoView({ behavior: 'smooth' });
+  qs('.dash-content')?.scrollIntoView({ behavior: 'smooth' });
 }
 
-/* ── CSV export ──────────────────────────────────────────────── */
+// ════════════════════════════════════════════════════
+// CSV export
+// ════════════════════════════════════════════════════
 document.getElementById('btn-csv').addEventListener('click', () => {
-  if (state.filtered.length === 0) {
-    showToast('No data to export.', 'error');
-    return;
-  }
-  const cols = ['timestamp','actor_name','actor_username','actor_role','operation',
-                 'entity_type','entity_name','entity_id','outcome','tab','details'];
+  if (state.filtered.length === 0) { showToast('No data to export.', 'error'); return; }
+  const cols = ['timestamp','actor_name','actor_username','actor_role',
+                'operation','entity_type','entity_name','entity_id','outcome','tab','details'];
   const lines = [cols.join(',')];
   for (const l of state.filtered) {
     const row = cols.map(c => {
-      let v = c === 'details' ? JSON.stringify(l.details || {}) : (l[c] ?? '');
+      const v = c === 'details' ? JSON.stringify(l.details || {}) : (l[c] ?? '');
       return `"${String(v).replace(/"/g,'""')}"`;
     });
     lines.push(row.join(','));
   }
   const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
   a.download = `vapli_audit_${state.selectedClient?.db_key || 'export'}_${new Date().toISOString().slice(0,10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
   showToast(`Exported ${state.filtered.length} entries.`);
 });
 
-/* ── Logout ──────────────────────────────────────────────────── */
-document.getElementById('btn-logout').addEventListener('click', () => {
-  sessionStorage.removeItem('vapli_audit_session');
-  state.logs = [];
-  state.filtered = [];
-  state.selectedClient = null;
-  pendingClient = null;
-  companyInput.value = '';
-  btnCompanyNext.disabled = true;
-  setStep(1);
-  document.getElementById('login-shell').style.display = 'flex';
-  document.getElementById('dashboard').style.display = 'none';
-  showToast('Signed out successfully.');
-});
-
-/* ── Escape HTML ─────────────────────────────────────────────── */
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-/* ── Session restore ─────────────────────────────────────────── */
-async function tryRestoreSession() {
-  try {
-    const raw = sessionStorage.getItem('vapli_audit_session');
-    if (!raw) return;
-    const sess = JSON.parse(raw);
-    if (!sess || Date.now() > sess.expiresAt) {
-      sessionStorage.removeItem('vapli_audit_session');
-      return;
-    }
-    // Restore state
-    state.selectedClient = {
-      id: sess.clientId, name: sess.clientName, db_key: sess.dbKey
-    };
-    await loadDashboard({
-      fullName: sess.fullName,
-      username: sess.username,
-      clientName: sess.clientName,
-      dbKey: sess.dbKey,
-    });
-  } catch (e) {
-    sessionStorage.removeItem('vapli_audit_session');
-  }
-}
-
-/* ── Boot ────────────────────────────────────────────────────── */
+// ════════════════════════════════════════════════════
+// Boot
+// ════════════════════════════════════════════════════
 (async () => {
   if (typeof firebase === 'undefined' || typeof VAPLI_FIREBASE_CONFIG === 'undefined') return;
   await loadClients();
-  await tryRestoreSession();
 })();
 </script>
 </body>
