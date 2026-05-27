@@ -6,7 +6,15 @@ part of '../dashboard_tab.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 class _TankStatsCard extends StatefulWidget {
   final TankModel tank;
-  const _TankStatsCard({required this.tank});
+  final GlobalKey captureKey;
+  final Future<void> Function() onDownloadPng;
+  final bool forceExpandLastInspection;
+  const _TankStatsCard({
+    required this.tank,
+    required this.captureKey,
+    required this.onDownloadPng,
+    this.forceExpandLastInspection = false,
+  });
 
   @override
   State<_TankStatsCard> createState() => _TankStatsCardState();

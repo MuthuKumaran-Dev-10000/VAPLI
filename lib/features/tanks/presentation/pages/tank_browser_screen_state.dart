@@ -23,6 +23,18 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   @override
   void initState() {
     super.initState();
+    _initClientRootAndLoad();
+  }
+
+  Future<void> _initClientRootAndLoad() async {
+    if (widget.rootFolderId != null && widget.rootFolderId!.trim().isNotEmpty) {
+      final rootNode = await _treeRepo.fetchNode(widget.rootFolderId!);
+      if (rootNode != null && mounted) {
+        _pathStack
+          ..clear()
+          ..add(rootNode);
+      }
+    }
     _subscribeToCurrentFolder();
   }
 
@@ -127,6 +139,12 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     try {
       await _treeRepo.moveNode(
           nodeId: payload.node.id, newParentId: targetFolder.id);
+      await widget.onAudit?.call('move_node', {
+        'node_id': payload.node.id,
+        'node_name': payload.node.name,
+        'to_parent_id': targetFolder.id,
+        'to_parent_name': targetFolder.name,
+      });
     } catch (e) {
       if (mounted) _snack('Move failed: $e', _kDanger);
     }
@@ -139,6 +157,11 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     try {
       await _treeRepo.moveNode(
           nodeId: payload.node.id, newParentId: newParentId);
+      await widget.onAudit?.call('move_node_to_parent', {
+        'node_id': payload.node.id,
+        'node_name': payload.node.name,
+        'to_parent_id': newParentId ?? '',
+      });
     } catch (e) {
       if (mounted) _snack('Move failed: $e', _kDanger);
     }
@@ -159,6 +182,10 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
 
     try {
       await _treeRepo.reorderNodes(_nodes.map((n) => n.id).toList());
+      await widget.onAudit?.call('reorder_nodes', {
+        'parent_id': _currentFolder?.id ?? '',
+        'order': _nodes.map((n) => n.id).toList(),
+      });
     } catch (_) {}
   }
 
@@ -235,6 +262,11 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
         destParentId: _currentFolder?.id,
         siblingNames: siblingNames,
       );
+      await widget.onAudit?.call('duplicate_group', {
+        'node_id': node.id,
+        'node_name': node.name,
+        'parent_id': _currentFolder?.id ?? '',
+      });
       if (mounted) _snack('"${node.name}" cloned successfully', _kSuccess);
     } catch (e) {
       if (mounted) _snack('Clone failed: $e', _kDanger);
@@ -245,6 +277,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   // Uses a plain InkWell inside a Stack so no Flutter FAB theme issues.
 
   void _showFabMenu() {
+    if (!widget.canCreate) return;
     HapticFeedback.lightImpact();
     showModalBottomSheet(
       context: context,
@@ -302,9 +335,14 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                   description: descCtrl.text.trim().isEmpty
                       ? null
                       : descCtrl.text.trim(),
-                  zone: 'root',
+                  zone: widget.rootLabel,
                   parentId: _currentFolder?.id,
                 );
+                await widget.onAudit?.call('create_group', {
+                  'name': name,
+                  'description': descCtrl.text.trim(),
+                  'parent_id': _currentFolder?.id ?? '',
+                });
                 if (ctx.mounted) Navigator.pop(ctx);
               } catch (e) {
                 setDlg(() {
@@ -352,9 +390,15 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     await _treeRepo.createLeaf(
       name: newTank.tankName,
       tankId: newTank.id,
-      zone: 'root',
+      zone: widget.rootLabel,
       parentId: _currentFolder?.id,
     );
+    await widget.onAudit?.call('create_tank_leaf', {
+      'tank_id': newTank.id,
+      'tank_code': newTank.tankCode,
+      'tank_name': newTank.tankName,
+      'parent_id': _currentFolder?.id ?? '',
+    });
   }
 
   // Future<void> _deleteNode(TankNode node) async {
@@ -370,6 +414,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   // }
 
   Future<void> _deleteNode(TankNode node) async {
+    if (!widget.canDelete) return;
     final confirmed = await _confirmDialog(
       context,
       title: 'Delete ${node.isFolder ? 'Group' : 'Tank'}',
@@ -392,6 +437,11 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
         await _tankRepo.deleteTank(
           node.tankId!,
         );
+        await widget.onAudit?.call('delete_tank', {
+          'node_id': node.id,
+          'node_name': node.name,
+          'tank_id': node.tankId,
+        });
       }
 
       // ─────────────────────────────────────────────
@@ -401,28 +451,25 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
         debugPrint(
           '[DELETE] Folder delete nodeId=${node.id}',
         );
-        final all = await _treeRepo.fetchAll();
-        final deleteIds = <String>{node.id};
-        final queue = <String>[node.id];
-        while (queue.isNotEmpty) {
-          final current = queue.removeLast();
-          for (final child in all.where((e) => e.parentId == current)) {
-            if (deleteIds.add(child.id)) {
-              queue.add(child.id);
-            }
-          }
-        }
-        final tankIds = all
-            .where((e) => deleteIds.contains(e.id) && e.isLeaf && e.tankId != null)
-            .map((e) => e.tankId!)
-            .toSet()
-            .toList();
+
+        final subtree = await _treeRepo.fetchSubtree(node.id);
+        final tankIds = subtree
+            .where((n) => n.isLeaf && n.tankId != null)
+            .map((n) => n.tankId!)
+            .toSet();
+
         for (final tankId in tankIds) {
           await _tankRepo.deleteTank(tankId);
         }
+
         await _treeRepo.deleteNode(
           node.id,
         );
+        await widget.onAudit?.call('delete_group', {
+          'node_id': node.id,
+          'node_name': node.name,
+          'deleted_tank_count': tankIds.length,
+        });
       }
 
       if (mounted) {
@@ -446,6 +493,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   }
 
   Future<void> _showRenameDialog(TankNode node) async {
+    if (!widget.canModify) return;
     final nameCtrl = TextEditingController(text: node.name);
     final descCtrl = TextEditingController(text: node.description ?? '');
 
@@ -477,8 +525,14 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                   description: descCtrl.text.trim().isEmpty
                       ? null
                       : descCtrl.text.trim(),
-                  zone: 'root',
+                  zone: widget.rootLabel,
                 );
+                await widget.onAudit?.call('update_group', {
+                  'node_id': node.id,
+                  'old_name': node.name,
+                  'new_name': name,
+                  'description': descCtrl.text.trim(),
+                });
                 if (ctx.mounted) Navigator.pop(ctx);
               } catch (e) {
                 setDlg(() {
@@ -601,51 +655,42 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
               child: _loading
                   ? const Center(child: _LoadingPulse())
                   : _nodes.isEmpty
-                      ? _EmptyState(onAdd: _showFabMenu)
+                      ? _EmptyState(
+                          onAdd: widget.canCreate ? _showFabMenu : () {},
+                        )
                       : _buildNodeList(),
             ),
           ]),
 
           // ── FAB (theme-independent, always visible) ──────────────────
-          Positioned(
-            right: 20,
-            bottom: 28,
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                onTap: _showFabMenu,
-                borderRadius: BorderRadius.circular(28),
-                child: Ink(
-                  width: 56,
-                  height: 56,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: const LinearGradient(
-                      colors: [_kCopperL, _kCopper, _kCopperD],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
+          if (widget.canCreate)
+            Positioned(
+              right: 20,
+              bottom: 28,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _showFabMenu,
+                  borderRadius: BorderRadius.circular(28),
+                  child: Ink(
+                    width: 56,
+                    height: 56,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const LinearGradient(
+                        colors: [_kCopperL, _kCopper, _kCopperD],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
                     ),
-                    // boxShadow: [
-                    //   // BoxShadow(
-                    //   //   color: _kCopper.withOpacity(0.55),
-                    //   //   blurRadius: 22,
-                    //   //   offset: const Offset(0, 7),
-                    //   // ),
-                    //   // BoxShadow(
-                    //   //   color: _kCopper.withOpacity(0.18),
-                    //   //   blurRadius: 44,
-                    //   //   spreadRadius: 6,
-                    //   // ),
-                    // ],
-                  ),
-                  child: const Center(
-                    child:
-                        Icon(Icons.add_rounded, color: Colors.white, size: 30),
+                    child: const Center(
+                      child:
+                          Icon(Icons.add_rounded, color: Colors.white, size: 30),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -714,7 +759,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                           size: 12,
                           color: _pathStack.length > 1 ? _kCopper : _kText),
                       const SizedBox(width: 5),
-                      Text('Root',
+                      Text(widget.rootLabel,
                           style: GoogleFonts.raleway(
                               color: _pathStack.length > 1 ? _kCopper : _kText,
                               fontSize: 12,
@@ -889,6 +934,9 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
               onDelete: () {},
               onMove: () {},
               onDuplicate: () {},
+              canModify: widget.canModify,
+              canDelete: widget.canDelete,
+              canDuplicate: widget.canCreate,
             ),
           ),
           childWhenDragging: Opacity(
@@ -903,6 +951,9 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
               onDelete: () {},
               onMove: () {},
               onDuplicate: () {},
+              canModify: widget.canModify,
+              canDelete: widget.canDelete,
+              canDuplicate: widget.canCreate,
             ),
           ),
           child: AnimatedContainer(
@@ -924,10 +975,14 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
               isDropTarget: isDropTarget,
               isGhost: false,
               onOpen: () => _openFolder(node),
-              onRename: () => _showRenameDialog(node),
-              onDelete: () => _deleteNode(node),
-              onMove: () => _showMoveDialog(node),
-              onDuplicate: () => _duplicateFolder(node),
+              onRename: widget.canModify ? () => _showRenameDialog(node) : () {},
+              onDelete: widget.canDelete ? () => _deleteNode(node) : () {},
+              onMove: widget.canModify ? () => _showMoveDialog(node) : () {},
+              onDuplicate:
+                  widget.canCreate ? () => _duplicateFolder(node) : () {},
+              canModify: widget.canModify,
+              canDelete: widget.canDelete,
+              canDuplicate: widget.canCreate,
             ),
           ),
         );
@@ -958,6 +1013,9 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
           currentParentId: _currentFolder?.id,
           onDelete: () {},
           onMove: () {},
+          canModify: widget.canModify,
+          canDuplicate: widget.canCreate,
+          canDelete: widget.canDelete,
           onTankCacheUpdate: (_, __) {},
         ),
       ),
@@ -972,6 +1030,9 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
           currentParentId: _currentFolder?.id,
           onDelete: () {},
           onMove: () {},
+          canModify: widget.canModify,
+          canDuplicate: widget.canCreate,
+          canDelete: widget.canDelete,
           onTankCacheUpdate: (_, __) {},
         ),
       ),
@@ -982,8 +1043,11 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
         treeRepo: _treeRepo,
         tankRepo: _tankRepo,
         currentParentId: _currentFolder?.id,
-        onDelete: () => _deleteNode(node),
-        onMove: () => _showMoveDialog(node),
+        onDelete: widget.canDelete ? () => _deleteNode(node) : () {},
+        onMove: widget.canModify ? () => _showMoveDialog(node) : () {},
+        canModify: widget.canModify,
+        canDuplicate: widget.canCreate,
+        canDelete: widget.canDelete,
         onTankCacheUpdate: (id, t) => setState(() => _tankCache[id] = t),
       ),
     );

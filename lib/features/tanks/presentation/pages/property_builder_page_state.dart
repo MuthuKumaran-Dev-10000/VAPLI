@@ -43,6 +43,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   String _type = 'number';
   bool _required = true;
   bool _captureImage = false;
+  bool _keepPreviousCapture = false;
   final List<String> _options = [];
   final List<Map<String, dynamic>> _constraints = [];
   bool _constraintsExpanded = false;
@@ -88,6 +89,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       _type = ep['type'] ?? 'number';
       _required = ep['required'] == true;
       _captureImage = ep['capture_image'] == true;
+      _keepPreviousCapture = ep['keep_previous_capture'] == true;
       _leftLabelCtrl.text = ep['left_label'] ?? 'Before';
       _rightLabelCtrl.text = ep['right_label'] ?? 'After';
       _minCtrl.text = (ep['min'] ?? 0).toString();
@@ -151,7 +153,26 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   Future<void> _loadSessionParams() async {
     final myId = widget.existing?['id']?.toString() ?? '';
     final rows = await SessionParamStore.getAll(widget.scopeId, myId);
-    if (mounted) setState(() => _sessionParams = rows);
+    final expanded = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      final base = Map<String, dynamic>.from(row);
+      base['token'] = base['id'];
+      expanded.add(base);
+
+      final trackPrev = (base['track_previous_capture'] as int? ?? 0) == 1;
+      final pid = base['id']?.toString() ?? '';
+      final label = base['label']?.toString() ?? '';
+      if (trackPrev && pid.isNotEmpty && label.isNotEmpty) {
+        expanded.add({
+          ...base,
+          'id': '${pid}__last',
+          'token': '${pid}__last',
+          'label': '$label (last)',
+          'is_previous_value': true,
+        });
+      }
+    }
+    if (mounted) setState(() => _sessionParams = expanded);
   }
 
   @override
@@ -197,6 +218,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       for (final p in _sessionParams) {
         final pid = p['id']?.toString() ?? '';
         if (pid.isEmpty) continue;
+        // Preserve explicit previous-value tokens exactly.
+        if (token == '${pid}__last') return '\${${pid}__last}';
         if (token == pid) return '\${$pid}';
         if (token.startsWith('${pid}_')) {
           if (token.endsWith('_left')) return '\${$pid:left}';
@@ -223,7 +246,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       final id = parts.first.trim();
       final side = parts.length > 1 ? parts[1].trim().toLowerCase() : '';
       final param = _sessionParams.cast<Map<String, dynamic>?>().firstWhere(
-            (e) => (e?['id']?.toString() ?? '') == id,
+            (e) => (e?['token']?.toString() ?? e?['id']?.toString() ?? '') == id,
             orElse: () => null,
           );
       final label = (param?['label']?.toString().trim().isNotEmpty ?? false)
@@ -269,39 +292,56 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
   // ── Delete — removes full token from raw, matching part from display ───────
 
-  void _deleteAtCursor() {
-    // Delete from raw expression
+  void _deleteAtCursor({bool forward = false}) {
     final ctrl = _exprCtrl;
     final sel = ctrl.selection;
     final current = ctrl.text;
     if (current.isEmpty) return;
-    final start = sel.start < 0 ? current.length : sel.start;
-    final end = sel.end < 0 ? current.length : sel.end;
+    final start = sel.start < 0 ? current.length : sel.start.clamp(0, current.length);
+    final end = sel.end < 0 ? current.length : sel.end.clamp(0, current.length);
 
+    int delStart = start;
+    int delEnd = end;
+
+    final tokenRe = RegExp(r'\$\{[^}]+\}');
     if (start != end) {
-      ctrl.value = TextEditingValue(
-        text: current.replaceRange(start, end, ''),
-        selection: TextSelection.collapsed(offset: start),
-      );
-    } else if (start > 0) {
-      final before = current.substring(0, start);
-      final tokenMatch = RegExp(r'\$\{[^}]*\}$').firstMatch(before);
-      if (tokenMatch != null) {
-        // Deleted a whole ${...} token from raw
-        final tokenStart = tokenMatch.start;
-        ctrl.value = TextEditingValue(
-          text: current.replaceRange(tokenStart, start, ''),
-          selection: TextSelection.collapsed(offset: tokenStart),
-        );
-        _displayExprCtrl.text = _displayFromRaw(ctrl.text);
-      } else {
-        ctrl.value = TextEditingValue(
-          text: current.replaceRange(start - 1, start, ''),
-          selection: TextSelection.collapsed(offset: start - 1),
-        );
-        _displayExprCtrl.text = _displayFromRaw(ctrl.text);
+      for (final m in tokenRe.allMatches(current)) {
+        final overlaps = !(m.end <= delStart || m.start >= delEnd);
+        if (overlaps) {
+          delStart = delStart < m.start ? delStart : m.start;
+          delEnd = delEnd > m.end ? delEnd : m.end;
+        }
+      }
+    } else {
+      bool deletedToken = false;
+      for (final m in tokenRe.allMatches(current)) {
+        final insideToken = start >= m.start && start <= m.end;
+        if (insideToken) {
+          delStart = m.start;
+          delEnd = m.end;
+          deletedToken = true;
+          break;
+        }
+      }
+      if (!deletedToken) {
+        if (forward) {
+          if (start >= current.length) return;
+          delStart = start;
+          delEnd = start + 1;
+        } else {
+          if (start == 0) return;
+          delStart = start - 1;
+          delEnd = start;
+        }
       }
     }
+
+    final next = current.replaceRange(delStart, delEnd, '');
+    ctrl.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: delStart),
+    );
+    _displayExprCtrl.text = _displayFromRaw(next);
 
     setState(() => _exprDirty = true);
     _exprFocus.requestFocus();
@@ -364,7 +404,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
   Future<void> _onParamSelected(Map<String, dynamic>? param) async {
     if (param == null) return;
-    final id = param['id']?.toString() ?? '';
+    final id = param['token']?.toString() ?? param['id']?.toString() ?? '';
     final label = param['label']?.toString() ?? '';
     final type = param['type']?.toString() ?? '';
 
@@ -910,6 +950,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       'type': _type,
       'required': _required,
       'capture_image': _captureImage,
+      'keep_previous_capture': _keepPreviousCapture,
       'options': List<String>.from(_options),
       if (_type == 'dual_text') ...{
         'left_label': _leftLabelCtrl.text.trim().isEmpty
@@ -1084,6 +1125,63 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                       _captureImage = v;
                       if (v) _required = true;
                     }),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                  decoration: BoxDecoration(
+                      color: _kSurface,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kBorder)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Keep track of previous captured value',
+                          style: GoogleFonts.inter(
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                              color: _kText)),
+                      const SizedBox(height: 4),
+                      Text(
+                        _keepPreviousCapture
+                            ? 'Enabled - this parameter can be used as "(last)" in autofill'
+                            : 'Disabled',
+                        style: const TextStyle(color: _kSub, fontSize: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: RadioListTile<bool>(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Enable',
+                                  style: TextStyle(color: _kText, fontSize: 13)),
+                              value: true,
+                              activeColor: _kAccent,
+                              groupValue: _keepPreviousCapture,
+                              onChanged: (v) =>
+                                  setState(() => _keepPreviousCapture = v == true),
+                            ),
+                          ),
+                          Expanded(
+                            child: RadioListTile<bool>(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('Disable',
+                                  style: TextStyle(color: _kText, fontSize: 13)),
+                              value: false,
+                              activeColor: _kAccent,
+                              groupValue: _keepPreviousCapture,
+                              onChanged: (v) => setState(
+                                  () => _keepPreviousCapture = v == true),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
 
@@ -1584,6 +1682,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                 displayController: _displayExprCtrl,
                 focusNode: _exprFocus,
                 error: _exprError,
+                onDeleteBackward: () => _deleteAtCursor(forward: false),
+                onDeleteForward: () => _deleteAtCursor(forward: true),
               ),
               const SizedBox(height: 10),
 

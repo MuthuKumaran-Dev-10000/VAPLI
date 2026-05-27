@@ -15,51 +15,51 @@ class AppTheme {
           error: AppColors.error,
         ),
         textTheme:
-            GoogleFonts.interTextTheme(ThemeData.dark().textTheme).copyWith(
-          headlineLarge: GoogleFonts.inter(
-            color: AppColors.textPrimary,
-            fontWeight: FontWeight.w800,
-            fontSize: 28,
-            letterSpacing: -0.5,
-          ),
-          headlineMedium: GoogleFonts.inter(
+            GoogleFonts.ibmPlexSansTextTheme(ThemeData.dark().textTheme).copyWith(
+          headlineLarge: GoogleFonts.ibmPlexSans(
             color: AppColors.textPrimary,
             fontWeight: FontWeight.w700,
-            fontSize: 22,
+            fontSize: 26,
+            letterSpacing: -0.2,
           ),
-          titleLarge: GoogleFonts.inter(
+          headlineMedium: GoogleFonts.ibmPlexSans(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w700,
+            fontSize: 21,
+          ),
+          titleLarge: GoogleFonts.ibmPlexSans(
             color: AppColors.textPrimary,
             fontWeight: FontWeight.w600,
             fontSize: 18,
           ),
-          titleMedium: GoogleFonts.inter(
+          titleMedium: GoogleFonts.ibmPlexSans(
             color: AppColors.textPrimary,
             fontWeight: FontWeight.w500,
             fontSize: 16,
           ),
-          bodyLarge: GoogleFonts.inter(
+          bodyLarge: GoogleFonts.ibmPlexSans(
             color: AppColors.textSecondary,
             fontSize: 15,
           ),
-          bodyMedium: GoogleFonts.inter(
+          bodyMedium: GoogleFonts.ibmPlexSans(
             color: AppColors.textSecondary,
             fontSize: 14,
           ),
-          labelSmall: GoogleFonts.inter(
+          labelSmall: GoogleFonts.ibmPlexSans(
             color: AppColors.textSecondary,
             fontSize: 11,
-            letterSpacing: 1.2,
+            letterSpacing: 0.8,
           ),
         ),
         appBarTheme: AppBarTheme(
           backgroundColor: AppColors.topBar,
           elevation: 0,
           centerTitle: false,
-          titleTextStyle: GoogleFonts.inter(
+          titleTextStyle: GoogleFonts.ibmPlexSans(
             color: AppColors.textPrimary,
             fontWeight: FontWeight.w700,
-            fontSize: 20,
-            letterSpacing: -0.3,
+            fontSize: 19,
+            letterSpacing: -0.1,
           ),
           iconTheme: const IconThemeData(color: AppColors.textPrimary),
         ),
@@ -70,24 +70,24 @@ class AppTheme {
             elevation: 0,
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
             shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             textStyle:
-                GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 15),
+                GoogleFonts.ibmPlexSans(fontWeight: FontWeight.w600, fontSize: 15),
           ),
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: AppColors.topBar,
           border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFF334155), width: 1),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: AppColors.border, width: 1),
           ),
           enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-            borderSide: const BorderSide(color: Color(0xFF334155), width: 1),
+            borderRadius: BorderRadius.circular(10),
+            borderSide: const BorderSide(color: AppColors.border, width: 1),
           ),
           focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
             borderSide: const BorderSide(color: AppColors.primary, width: 2),
           ),
           labelStyle: const TextStyle(color: AppColors.textSecondary),
@@ -99,16 +99,16 @@ class AppTheme {
           color: AppColors.surface,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: const BorderSide(color: Color(0xFF334155), width: 1),
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: AppColors.border, width: 1),
           ),
         ),
-        dividerColor: const Color(0xFF334155),
+        dividerColor: AppColors.border,
         chipTheme: ChipThemeData(
           backgroundColor: AppColors.topBar,
           selectedColor: AppColors.primary.withOpacity(0.3),
           labelStyle: const TextStyle(color: AppColors.textPrimary),
-          side: const BorderSide(color: Color(0xFF334155)),
+          side: const BorderSide(color: AppColors.border),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       );

@@ -86,7 +86,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
           ? '${t['tank_name']} (copy)'
           : (t['tank_name'] ?? '');
       _locCtrl.text = t['location'] ?? '';
-      if (_locCtrl.text.trim().isEmpty) _locCtrl.text = 'root';
+      if (_locCtrl.text.trim().isEmpty) _locCtrl.text = '';
       if (t['inspection_properties'] != null) {
         _properties.addAll(
           (t['inspection_properties'] as List)
@@ -97,7 +97,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
           '[CreateTankScreen] Loaded existing tank: code=${_codeCtrl.text} '
           'name=${_nameCtrl.text} props=${_properties.length}');
     }
-    if (_locCtrl.text.trim().isEmpty) _locCtrl.text = 'root';
+    if (_locCtrl.text.trim().isEmpty) _locCtrl.text = '';
     _syncScopeParams();
   }
 
@@ -145,15 +145,12 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
             existing['location'] != location;
         debugPrint('[Save] identityChanged=$identityChanged');
 
-        String? newQrUrl;
-        if (identityChanged) {
-          debugPrint('[Save] Identity changed → regenerating QR');
-          newQrUrl = await generateAndUploadQr(
-            tankCode: tankCode,
-            tankName: tankName,
-            location: location,
-          );
-        }
+        debugPrint('[Save] Tank changed -> regenerating QR');
+        final newQrUrl = await generateAndUploadQr(
+          tankCode: tankCode,
+          tankName: tankName,
+          location: location,
+        );
 
         debugPrint(
             '[Save] Calling TankRepository.updateTank id=${existing['id']}');
@@ -326,6 +323,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
     final hint = p['hint'] as String? ?? '';
     final isRequired = p['required'] == true;
     final captureImage = p['capture_image'] == true;
+    final keepPrevious = p['keep_previous_capture'] == true;
     final color = _typeColor(type);
     final constraints = List<Map<String, dynamic>>.from(p['constraints'] ?? []);
 
@@ -416,6 +414,27 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
                       style: TextStyle(
                         fontSize: 10,
                         color: kAccent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+                if (keepPrevious) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: kWarn.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Text(
+                      'Last',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: kWarn,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -805,4 +824,3 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
         ]),
       );
 }
-

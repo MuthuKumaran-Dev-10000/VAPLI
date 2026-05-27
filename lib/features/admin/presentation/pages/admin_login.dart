@@ -35,7 +35,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => AdminDashboard(adminName: user.fullName),
+          builder: (_) => AdminDashboard(
+            adminName: user.fullName,
+            currentUser: user,
+          ),
         ),
       );
     } catch (e) {
@@ -98,4 +101,3 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     );
   }
 }
-

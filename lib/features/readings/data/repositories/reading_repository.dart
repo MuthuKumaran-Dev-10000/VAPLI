@@ -15,8 +15,6 @@ import 'package:lubrication_indicator/core/utils/hash_util.dart';
 import '../models/reading_model.dart';
 
 class ReadingRepository {
-  final _db = DatabaseModeService.ref();
-
   Future<ReadingModel> saveReading({
     required String tankId,
     required String tankName,
@@ -48,14 +46,14 @@ class ReadingRepository {
       capturedAt: DateTime.now().toIso8601String(),
     );
 
-    await _db.child("${AppConstants.readingsPath}/$id").set(reading.toMap());
+    await DatabaseModeService.ref("${AppConstants.readingsPath}/$id")
+        .set(reading.toMap());
 
     return reading;
   }
 
   Stream<List<ReadingModel>> watchReadingsForTank(String tankId) {
-    return _db
-        .child(AppConstants.readingsPath)
+    return DatabaseModeService.ref(AppConstants.readingsPath)
         .orderByChild("tank_id")
         .equalTo(tankId)
         .onValue
@@ -74,8 +72,7 @@ class ReadingRepository {
     required DateTime from,
     required DateTime to,
   }) async {
-    final snap = await _db
-        .child(AppConstants.readingsPath)
+    final snap = await DatabaseModeService.ref(AppConstants.readingsPath)
         .orderByChild("tank_id")
         .equalTo(tankId)
         .get();
@@ -95,7 +92,7 @@ class ReadingRepository {
   }
 
   Future<List<ReadingModel>> getAllReadings() async {
-    final snap = await _db.child(AppConstants.readingsPath).get();
+    final snap = await DatabaseModeService.ref(AppConstants.readingsPath).get();
     if (!snap.exists) return [];
     final map = Map<String, dynamic>.from(snap.value as Map);
     return map.values

@@ -13,6 +13,9 @@ class _LeafCardContent extends StatefulWidget {
   final String? currentParentId;
   final VoidCallback onDelete;
   final VoidCallback onMove;
+  final bool canModify;
+  final bool canDuplicate;
+  final bool canDelete;
   final void Function(String tankId, TankModel t) onTankCacheUpdate;
 
   const _LeafCardContent({
@@ -24,6 +27,9 @@ class _LeafCardContent extends StatefulWidget {
     required this.currentParentId,
     required this.onDelete,
     required this.onMove,
+    required this.canModify,
+    required this.canDuplicate,
+    required this.canDelete,
     required this.onTankCacheUpdate,
   });
 

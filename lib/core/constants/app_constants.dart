@@ -1,43 +1,28 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  // Main backgrounds
-  static const background = Color(0xFF0C0D0F);
-
-  static const surface = Color(0xFF141618);
-
-  // App bars / headers
-  static const topBar = Color(0xFF1A1C20);
-
-  // Primary action
-  // Copper (oil / machinery)
-  static const primary = Color(0xFFCB8C3E);
-
-  // Accent / live data
-  // Teal
-  static const secondary = Color(0xFF1ABCBD);
+  // Industrial enterprise palette
+  static const background = Color(0xFF0B1220); // deep slate navy
+  static const surface = Color(0xFF111827); // industrial navy
+  static const topBar = Color(0xFF1F2937); // gunmetal
+  static const primary = Color(0xFFF97316); // safety orange
+  static const secondary = Color(0xFF22D3EE); // cyan highlight
 
   // States
   static const success = Color(0xFF22C55E);
-
   static const error = Color(0xFFEF4444);
-
   static const warning = Color(0xFFF59E0B);
-
   static const disabled = Color(0xFF484C57);
 
   // Text
-  static const textPrimary = Color(0xFFF0EEE9);
-
-  static const textSecondary = Color(0xFF8A8F9C);
+  static const textPrimary = Color(0xFFF8FAFC);
+  static const textSecondary = Color(0xFF94A3B8);
 
   // Extra (for borders/cards)
-  static const border = Color(0xFF252830);
+  static const border = Color(0xFF334155);
+  static const borderHover = Color(0xFF475569);
 
-  static const borderHover = Color(0xFF32363F);
-
-  // Optional darker copper
-  static const primaryDark = Color(0xFF8A5A1E);
+  static const primaryDark = Color(0xFFC2410C);
 }
 
 class AppConstants {

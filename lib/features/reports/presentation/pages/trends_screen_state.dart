@@ -1,4 +1,37 @@
 part of 'trends_screen.dart'; 
+
+enum _AbnormalityRange { day, week, month, year }
+
+extension _AbnormalityRangeX on _AbnormalityRange {
+  String get label {
+    switch (this) {
+      case _AbnormalityRange.day:
+        return 'Day';
+      case _AbnormalityRange.week:
+        return 'Week';
+      case _AbnormalityRange.month:
+        return 'Month';
+      case _AbnormalityRange.year:
+        return 'Year';
+    }
+  }
+}
+
+enum _AbnormalityType { alerts, completed, both }
+
+extension _AbnormalityTypeX on _AbnormalityType {
+  String get label {
+    switch (this) {
+      case _AbnormalityType.alerts:
+        return 'Abnormalities';
+      case _AbnormalityType.completed:
+        return 'Completed';
+      case _AbnormalityType.both:
+        return 'Both';
+    }
+  }
+}
+
 class _TrendsScreenState extends State<TrendsScreen> {
   // ── Selection state ────────────────────────────────────────────────────────
   String? _selectedTankId;
@@ -12,12 +45,249 @@ class _TrendsScreenState extends State<TrendsScreen> {
   bool _loading = false;
   bool _chartReady = false;
   bool _exporting = false;
+  bool _abnormalityExporting = false;
+
+  _AbnormalityRange _abnormalityRange = _AbnormalityRange.day;
+  _AbnormalityType _abnormalityType = _AbnormalityType.both;
 
   // ── In-memory cache: tankId → sorted readings (oldest→newest) ────────────
   final Map<String, List<ReadingModel>> _cache = {};
 
   final _chartKey = GlobalKey();
   final _repo = ReadingRepository();
+
+  DateTimeRange _abnormalityWindow() {
+    final now = DateTime.now();
+    switch (_abnormalityRange) {
+      case _AbnormalityRange.day:
+        return DateTimeRange(
+          start: DateTime(now.year, now.month, now.day),
+          end: now,
+        );
+      case _AbnormalityRange.week:
+        return DateTimeRange(start: now.subtract(const Duration(days: 7)), end: now);
+      case _AbnormalityRange.month:
+        return DateTimeRange(start: DateTime(now.year, now.month - 1, now.day), end: now);
+      case _AbnormalityRange.year:
+        return DateTimeRange(start: DateTime(now.year - 1, now.month, now.day), end: now);
+    }
+  }
+
+  bool _inRange(String? iso, DateTimeRange range) {
+    if (iso == null || iso.isEmpty) return false;
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return false;
+    return !dt.isBefore(range.start) && !dt.isAfter(range.end);
+  }
+
+  String _alertTime(Map<dynamic, dynamic> m) =>
+      m['captured_at']?.toString() ?? m['timestamp']?.toString() ?? '';
+
+  String _alertSeverity(Map<dynamic, dynamic> m) =>
+      m['constraint_severity']?.toString() ??
+      m['severity']?.toString() ??
+      'warning';
+
+  String _alertParamLabel(Map<dynamic, dynamic> m) =>
+      m['constraint_label']?.toString() ??
+      m['param_label']?.toString() ??
+      '-';
+
+  String _alertParamValue(Map<dynamic, dynamic> m) =>
+      m['violated_value']?.toString() ??
+      m['param_value']?.toString() ??
+      '-';
+
+  String _alertStatus(Map<dynamic, dynamic> m) {
+    if (m['resolved'] == true) return 'Resolved';
+    if (m['acknowledged'] == true) return 'Acknowledged';
+    return 'Open';
+  }
+
+  List<String> _extractAlertImageUrls(Map<dynamic, dynamic> m) {
+    final urls = <String>{};
+    final top = m['image_url']?.toString() ?? '';
+    if (top.startsWith('http')) urls.add(top);
+
+    final lastVals = m['last_inspection_values'];
+    if (lastVals is Map) {
+      final lv = Map<dynamic, dynamic>.from(lastVals);
+      for (final e in lv.entries) {
+        final key = e.key.toString().toLowerCase();
+        final value = e.value?.toString() ?? '';
+        if (!value.startsWith('http')) continue;
+        if (key.contains('image_url') || key.contains('violation')) {
+          urls.add(value);
+        }
+      }
+    }
+    return urls.toList();
+  }
+
+  Future<void> _downloadAbnormalityPdf() async {
+    if (_selectedTankId == null || _isAllTanks) {
+      _snack('Select a single tank for abnormality report');
+      return;
+    }
+
+    setState(() => _abnormalityExporting = true);
+    try {
+      final selectedTank = _selectedTank;
+      if (selectedTank == null) {
+        _snack('Selected tank not found');
+        return;
+      }
+
+      final window = _abnormalityWindow();
+      final alertsSnap = await DatabaseModeService.ref('alerts').get();
+      final completedSnap = await DatabaseModeService.ref('completed_tasks').get();
+
+      final alerts = <Map<String, dynamic>>[];
+      final completed = <Map<String, dynamic>>[];
+      final imageUrls = <String>{};
+
+      if (alertsSnap.exists && alertsSnap.value is Map) {
+        final raw = Map<dynamic, dynamic>.from(alertsSnap.value as Map);
+        for (final v in raw.values) {
+          final m = Map<dynamic, dynamic>.from(v as Map);
+          if (m['tank_id']?.toString() != _selectedTankId) continue;
+          if (!_inRange(_alertTime(m), window)) continue;
+          imageUrls.addAll(_extractAlertImageUrls(m));
+          alerts.add(m.map((k, val) => MapEntry(k.toString(), val)));
+        }
+      }
+
+      if (completedSnap.exists && completedSnap.value is Map) {
+        final raw = Map<dynamic, dynamic>.from(completedSnap.value as Map);
+        for (final v in raw.values) {
+          final m = Map<dynamic, dynamic>.from(v as Map);
+          final alertMap = m['alert'] is Map
+              ? Map<dynamic, dynamic>.from(m['alert'] as Map)
+              : <dynamic, dynamic>{};
+          if (alertMap['tank_id']?.toString() != _selectedTankId) continue;
+          if (!_inRange(m['completed_at']?.toString(), window)) continue;
+          imageUrls.addAll(_extractAlertImageUrls(alertMap));
+          completed.add({
+            ...m.map((k, val) => MapEntry(k.toString(), val)),
+            'alert': alertMap.map((k, val) => MapEntry(k.toString(), val)),
+          });
+        }
+      }
+
+      final includeAlerts = _abnormalityType == _AbnormalityType.alerts ||
+          _abnormalityType == _AbnormalityType.both;
+      final includeCompleted = _abnormalityType == _AbnormalityType.completed ||
+          _abnormalityType == _AbnormalityType.both;
+      final pdfImages = <MapEntry<String, pw.MemoryImage>>[];
+      for (final url in imageUrls) {
+        try {
+          final resp = await http.get(Uri.parse(url));
+          if (resp.statusCode < 200 || resp.statusCode >= 300) continue;
+          if (resp.bodyBytes.isEmpty) continue;
+          pdfImages.add(MapEntry(url, pw.MemoryImage(resp.bodyBytes)));
+        } catch (_) {}
+      }
+
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          build: (_) {
+            final widgets = <pw.Widget>[
+              pw.Text(
+                'Abnormality Report',
+                style: pw.TextStyle(fontSize: 18, fontWeight: pw.FontWeight.bold),
+              ),
+              pw.SizedBox(height: 6),
+              pw.Text('Tank: ${selectedTank.tankName} (${selectedTank.tankCode})'),
+              pw.Text(
+                  'Range: ${DateFormat('dd MMM yyyy').format(window.start)} - ${DateFormat('dd MMM yyyy').format(window.end)}'),
+              pw.Text('Type: ${_abnormalityType.label}'),
+              pw.SizedBox(height: 14),
+            ];
+
+            if (includeAlerts) {
+              widgets.add(pw.Text('Abnormalities (Alerts)',
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold)));
+              widgets.add(pw.SizedBox(height: 6));
+              if (alerts.isEmpty) {
+                widgets.add(pw.Text('No alert records in selected range.'));
+              } else {
+                widgets.add(pw.TableHelper.fromTextArray(
+                  headers: const ['Time', 'Severity', 'Param', 'Value', 'Status'],
+                  data: alerts.map((a) {
+                    return [
+                      _fmt(_alertTime(a), pattern: 'dd-MM-yyyy HH:mm'),
+                      _alertSeverity(a),
+                      _alertParamLabel(a),
+                      _alertParamValue(a),
+                      _alertStatus(a),
+                    ];
+                  }).toList(),
+                ));
+              }
+              widgets.add(pw.SizedBox(height: 12));
+            }
+
+            if (includeCompleted) {
+              widgets.add(pw.Text('Completed Tasks',
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold)));
+              widgets.add(pw.SizedBox(height: 6));
+              if (completed.isEmpty) {
+                widgets.add(pw.Text('No completed records in selected range.'));
+              } else {
+                widgets.add(pw.TableHelper.fromTextArray(
+                  headers: const ['Completed At', 'By', 'Param', 'Value', 'Severity'],
+                  data: completed.map((c) {
+                    final alert = c['alert'] as Map<String, dynamic>? ?? {};
+                    return [
+                      _fmt(c['completed_at']?.toString(),
+                          pattern: 'dd-MM-yyyy HH:mm'),
+                      c['completed_by']?.toString() ?? '-',
+                      _alertParamLabel(alert),
+                      _alertParamValue(alert),
+                      _alertSeverity(alert),
+                    ];
+                  }).toList(),
+                ));
+              }
+            }
+
+            if (pdfImages.isNotEmpty) {
+              widgets.add(pw.SizedBox(height: 12));
+              widgets.add(pw.Text('Attached Images',
+                  style: pw.TextStyle(fontWeight: pw.FontWeight.bold)));
+              widgets.add(pw.SizedBox(height: 6));
+
+              for (final image in pdfImages) {
+                widgets.add(
+                  pw.Text(image.key, style: const pw.TextStyle(fontSize: 8)),
+                );
+                widgets.add(pw.SizedBox(height: 4));
+                widgets.add(
+                  pw.Container(
+                    margin: const pw.EdgeInsets.only(bottom: 10),
+                    child: pw.Image(image.value, fit: pw.BoxFit.contain),
+                  ),
+                );
+              }
+            }
+
+            return widgets;
+          },
+        ),
+      );
+
+      final dir = await getTemporaryDirectory();
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final file = File('${dir.path}/abnormality_${selectedTank.tankCode}_$ts.pdf');
+      await file.writeAsBytes(await doc.save(), flush: true);
+      await Share.shareXFiles([XFile(file.path)], text: 'Abnormality Report');
+    } catch (e) {
+      _snack('Abnormality PDF failed: $e');
+    } finally {
+      if (mounted) setState(() => _abnormalityExporting = false);
+    }
+  }
 
   // ── Derived helpers ────────────────────────────────────────────────────────
 
@@ -256,8 +526,36 @@ class _TrendsScreenState extends State<TrendsScreen> {
         xl.TextCellValue('Captured By'),
       ]);
 
-      for (final tank in tanksToExport) {
-        for (final r in _filtered(tank.id)) {
+      // for (final tank in tanksToExport) {
+      //   for (final r in _filtered(tank.id)) {
+      //     final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
+      //     summarySheet.appendRow([
+      //       xl.TextCellValue(tank.tankCode),
+      //       xl.TextCellValue(tank.tankName),
+      //       xl.TextCellValue(
+      //           dt != null ? DateFormat('dd-MM-yyyy').format(dt) : '—'),
+      //       xl.TextCellValue(
+      //           dt != null ? DateFormat('HH:mm:ss').format(dt) : '—'),
+      //       xl.TextCellValue(r.capturedByName),
+      //     ]);
+      //   }
+      // }
+
+       for (final tank in tanksToExport) {
+
+  final allReadings = await _repo.getAllReadings();
+
+  final readings = allReadings.where((r) {
+    if (r.tankId != tank.id) return false;
+
+    final dt = DateTime.tryParse(r.capturedAt);
+    if (dt == null) return false;
+
+    return !dt.isBefore(_rangeFrom) &&
+           !dt.isAfter(_rangeTo);
+  }).toList();
+
+  for (final r in readings) {
           final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
           summarySheet.appendRow([
             xl.TextCellValue(tank.tankCode),
@@ -298,6 +596,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
             // Extra column immediately after the param value column
             headerCells.add(xl.TextCellValue('${col['label']} — Photo URL'));
           }
+          
         }
 
         final sheetName =
@@ -307,7 +606,21 @@ class _TrendsScreenState extends State<TrendsScreen> {
         sheet.appendRow(headerCells);
 
         // Build data rows
-        for (final r in _filtered(tank.id)) {
+        // Build data rows
+
+final allReadings = await _repo.getAllReadings();
+
+final readings = allReadings.where((r) {
+  if (r.tankId != tank.id) return false;
+
+  final dt = DateTime.tryParse(r.capturedAt);
+  if (dt == null) return false;
+
+  return !dt.isBefore(_rangeFrom) &&
+         !dt.isAfter(_rangeTo);
+}).toList();
+
+for (final r in readings) {
           final dataCells = <xl.CellValue>[
             xl.TextCellValue(tank.tankCode),
             xl.TextCellValue(tank.tankName),
@@ -320,7 +633,9 @@ class _TrendsScreenState extends State<TrendsScreen> {
             final label = col['label'] as String;
             final id = col['id'] as String;
             final hasImage = col['hasImage'] as bool;
-
+            debugPrint(
+  'LOOKUP => label=$label value=${r.inspectionValues[label]} keys=${r.inspectionValues.keys.toList()}',
+);
             // Param value cell
             final v = r.inspectionValues[label];
             if (v is Map) {
@@ -337,10 +652,52 @@ class _TrendsScreenState extends State<TrendsScreen> {
                   r.inspectionValues['${id}__image_url']?.toString() ?? '';
               dataCells.add(xl.TextCellValue(imageUrl));
             }
+            debugPrint('COLUMN => ${col['label']}');
+            debugPrint('VALUES => ${r.inspectionValues}');
           }
 
           sheet.appendRow(dataCells);
         }
+
+//         // Build data rows
+//         for (final r in _filtered(tank.id)) {
+//           final dataCells = <xl.CellValue>[
+//             xl.TextCellValue(tank.tankCode),
+//             xl.TextCellValue(tank.tankName),
+//             xl.TextCellValue(
+//                 _fmt(r.capturedAt, pattern: 'dd-MM-yyyy HH:mm:ss')),
+//             xl.TextCellValue(r.capturedByName),
+//           ];
+
+//           for (final col in colDescs) {
+//             final label = col['label'] as String;
+//             final id = col['id'] as String;
+//             final hasImage = col['hasImage'] as bool;
+//             debugPrint(
+//   'LOOKUP => label=$label value=${r.inspectionValues[label]} keys=${r.inspectionValues.keys.toList()}',
+// );
+//             // Param value cell
+//             final v = r.inspectionValues[label];
+//             if (v is Map) {
+//               dataCells.add(
+//                   xl.TextCellValue('${v['left'] ?? ''} | ${v['right'] ?? ''}'));
+//             } else {
+//               dataCells.add(xl.TextCellValue(v?.toString() ?? ''));
+//             }
+
+//             // Photo URL cell (immediately after value, only if hasImage)
+//             if (hasImage) {
+//               // Key convention matches reading_entry_screen: "<id>__image_url"
+//               final imageUrl =
+//                   r.inspectionValues['${id}__image_url']?.toString() ?? '';
+//               dataCells.add(xl.TextCellValue(imageUrl));
+//             }
+//             debugPrint('COLUMN => ${col['label']}');
+//             debugPrint('VALUES => ${r.inspectionValues}');
+//           }
+
+//           sheet.appendRow(dataCells);
+//         }
       }
 
       // ── File name ────────────────────────────────────────────────────────
@@ -533,6 +890,19 @@ class _TrendsScreenState extends State<TrendsScreen> {
               const SizedBox(height: 14),
               _buildPngButton(),
             ],
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: _kSurface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _kBorder),
+              ),
+              child: Text(
+                'Abnormality report download moved to Dashboard tab.',
+                style: GoogleFonts.dmSans(color: _kSub, fontSize: 12),
+              ),
+            ),
           ],
         ),
       ),
@@ -886,6 +1256,129 @@ class _TrendsScreenState extends State<TrendsScreen> {
               style: GoogleFonts.dmSans(
                   color: _kText, fontWeight: FontWeight.w600, fontSize: 13)),
         ]),
+      ),
+    );
+  }
+
+  Widget _buildAbnormalityReportSection() {
+    final canDownload = _selectedTankId != null && !_isAllTanks;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Download Abnormality Reports',
+            style: GoogleFonts.spaceGrotesk(
+              color: _kText,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _DropContainer(
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<_AbnormalityRange>(
+                      value: _abnormalityRange,
+                      isExpanded: true,
+                      dropdownColor: _kCard,
+                      iconEnabledColor: _kSub,
+                      items: _AbnormalityRange.values
+                          .map((v) => DropdownMenuItem<_AbnormalityRange>(
+                                value: v,
+                                child: Text(v.label,
+                                    style: GoogleFonts.dmSans(
+                                        color: _kText, fontSize: 13)),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _abnormalityRange = v);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _DropContainer(
+                  child: DropdownButtonHideUnderline(
+                    child: DropdownButton<_AbnormalityType>(
+                      value: _abnormalityType,
+                      isExpanded: true,
+                      dropdownColor: _kCard,
+                      iconEnabledColor: _kSub,
+                      items: _AbnormalityType.values
+                          .map((v) => DropdownMenuItem<_AbnormalityType>(
+                                value: v,
+                                child: Text(v.label,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: GoogleFonts.dmSans(
+                                        color: _kText, fontSize: 13)),
+                              ))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _abnormalityType = v);
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          GestureDetector(
+            onTap: canDownload && !_abnormalityExporting ? _downloadAbnormalityPdf : null,
+            child: Container(
+              height: 44,
+              decoration: BoxDecoration(
+                color: canDownload ? _kDanger.withOpacity(0.12) : _kSurface,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: canDownload ? _kDanger.withOpacity(0.4) : _kBorder),
+              ),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                if (_abnormalityExporting)
+                  const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                          color: _kDanger, strokeWidth: 2))
+                else
+                  Icon(Icons.picture_as_pdf_outlined,
+                      color: canDownload ? _kDanger : _kSubL, size: 18),
+                const SizedBox(width: 8),
+                Text(
+                  _abnormalityExporting
+                      ? 'Preparing PDF...'
+                      : 'Download Alert Report (PDF)',
+                  style: GoogleFonts.dmSans(
+                    color: canDownload ? _kDanger : _kSubL,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ]),
+            ),
+          ),
+          if (!canDownload) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Select a single tank (not All Tanks) to download abnormality reports.',
+              style: GoogleFonts.dmSans(color: _kSubL, fontSize: 11),
+            ),
+          ],
+        ],
       ),
     );
   }

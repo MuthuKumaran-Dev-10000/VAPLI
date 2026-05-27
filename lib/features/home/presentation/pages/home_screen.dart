@@ -4,6 +4,10 @@ import 'package:intl/intl.dart';
 import 'package:lubrication_indicator/features/readings/data/models/reading_model.dart';
 import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
 import 'package:lubrication_indicator/features/admin/presentation/pages/admin_dashboard.dart';
+import 'package:lubrication_indicator/core/models/client_model.dart';
+import 'package:lubrication_indicator/core/services/access_control_service.dart';
+import 'package:lubrication_indicator/core/services/client_context_service.dart';
+import 'package:lubrication_indicator/core/services/client_repository.dart';
 import 'package:lubrication_indicator/features/dashboard/presentation/pages/dashboard_tab.dart';
 import 'package:lubrication_indicator/features/home/presentation/pages/tank_input_browser.dart';
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
@@ -29,14 +33,50 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabCtrl;
+  int _tabRefreshTick = 0;
 
   UserModel? _currentUser;
+  ClientModel? _activeClient;
 
   List<TankModel> _tanks = [];
 
   TankModel? _selectedTank;
 
   bool _loadingTanks = true;
+
+  Future<void> _openClientPicker() async {
+    if (_currentUser == null) return;
+    final all = await ClientRepository().getAllClients();
+    final isSuper =
+        _currentUser!.role.toLowerCase() == AccessControlService.roleSuperAdmin;
+    final visible = isSuper
+        ? all
+        : all.where((c) => _currentUser!.clientIds.contains(c.id)).toList();
+    if (!mounted || visible.isEmpty) return;
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      builder: (_) => ListView(
+        children: visible
+            .map((c) => ListTile(
+                  leading: const Icon(Icons.apartment_outlined),
+                  title: Text(c.name),
+                  subtitle: Text(c.description),
+                  onTap: () async {
+                    await ClientContextService.setActiveClient(c);
+                    await DatabaseModeService.setClientScope(c.dbKey);
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    Navigator.pushReplacement(
+                      context,
+                      MaterialPageRoute(builder: (_) => const HomeScreen()),
+                    );
+                  },
+                ))
+            .toList(),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -46,12 +86,18 @@ class _HomeScreenState extends State<HomeScreen>
       length: 3,
       vsync: this,
     );
+    _tabCtrl.addListener(() {
+      if (!_tabCtrl.indexIsChanging && mounted) {
+        setState(() => _tabRefreshTick++);
+      }
+    });
 
     _init();
   }
 
   Future<void> _init() async {
     _currentUser = await SessionManager.getCurrentUser();
+    _activeClient = await ClientContextService.getActiveClient();
 
     if (_currentUser == null && mounted) {
       Navigator.pushReplacement(
@@ -112,11 +158,12 @@ class _HomeScreenState extends State<HomeScreen>
         actions: [
           ElevatedButton(
             onPressed: () async {
+              await ClientContextService.clearActiveClient();
+              await DatabaseModeService.setClientScope(null);
               await SessionManager.clearSession();
 
               if (mounted) {
-                Navigator.pushAndRemoveUntil(
-                  context,
+                Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute(
                     builder: (_) => const LoginScreen(),
                   ),
@@ -251,6 +298,60 @@ class _HomeScreenState extends State<HomeScreen>
         // UPDATED HERE
         // ======================================
         actions: [
+          if (_activeClient != null &&
+              !(_currentUser != null &&
+                  _currentUser!.role.toLowerCase() ==
+                      AccessControlService.roleSuperAdmin))
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppColors.border),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.apartment_outlined, size: 14, color: AppColors.secondary),
+                      const SizedBox(width: 6),
+                      Text(
+                        _activeClient!.name,
+                        style: GoogleFonts.inter(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          if (_currentUser != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.primary.withOpacity(0.45)),
+                  ),
+                  child: Text(
+                    _currentUser!.role.toUpperCase(),
+                    style: GoogleFonts.inter(
+                      color: AppColors.primary,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 10,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ValueListenableBuilder<bool>(
             valueListenable: DatabaseModeService.isDevelopment,
             builder: (context, isDev, _) {
@@ -308,9 +409,22 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             ),
+          if (_currentUser != null &&
+              _currentUser!.role.toLowerCase() ==
+                  AccessControlService.roleSuperAdmin)
+            IconButton(
+              icon: const Icon(Icons.apartment_outlined,
+                  color: AppColors.textSecondary),
+              tooltip: 'Switch Client',
+              onPressed: _openClientPicker,
+            ),
 
           // ADMIN ONLY
-          if (_currentUser != null && _currentUser!.role == "admin")
+          if (_currentUser != null &&
+              AccessControlService.can(
+                _currentUser,
+                AccessControlService.pOpenAdminPage,
+              ))
             IconButton(
               icon: const Icon(
                 Icons.admin_panel_settings_outlined,
@@ -323,6 +437,8 @@ class _HomeScreenState extends State<HomeScreen>
                   MaterialPageRoute(
                     builder: (_) => AdminDashboard(
                       adminName: _currentUser!.fullName,
+                      currentUser: _currentUser!,
+                      activeClient: _activeClient,
                     ),
                   ),
                 );
@@ -336,14 +452,16 @@ class _HomeScreenState extends State<HomeScreen>
               color: AppColors.textSecondary,
             ),
             onPressed: () async {
+              await ClientContextService.clearActiveClient();
+              await DatabaseModeService.setClientScope(null);
               await SessionManager.clearSession();
 
               if (mounted) {
-                Navigator.pushReplacement(
-                  context,
+                Navigator.of(context).pushAndRemoveUntil(
                   MaterialPageRoute(
                     builder: (_) => const LoginScreen(),
                   ),
+                  (_) => false,
                 );
               }
             },
@@ -398,12 +516,20 @@ class _HomeScreenState extends State<HomeScreen>
           //   onScanQr: _scanQr,
           // ),
           TankInputBrowser(
+            key: ValueKey('input-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
             currentUser: _currentUser,
+            rootTitleOverride: _activeClient?.name ?? 'Client',
+            // clientNameOverride: _activeClient?.name,
+            rootFolderIdOverride: _activeClient?.rootFolderId,
+            onRootTap: _openClientPicker,
           ),
           TrendsScreen(
+            key: ValueKey('trends-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
             tanks: _tanks,
           ),
-          const DashboardTab(),
+          DashboardTab(
+            key: ValueKey('dash-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
+          ),
         ],
       ),
     );

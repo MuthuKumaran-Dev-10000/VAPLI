@@ -26,6 +26,8 @@ class TankModel {
   final String createdAt;
 
   final String updatedAt;
+  final String inspectionFrequencyType; // daily|weekly_once|weekly_thrice|custom_days
+  final int inspectionFrequencyDays;
 
   TankModel({
     required this.id,
@@ -42,6 +44,8 @@ class TankModel {
     required this.createdBy,
     required this.createdAt,
     required this.updatedAt,
+    this.inspectionFrequencyType = 'daily',
+    this.inspectionFrequencyDays = 1,
   });
 
   String get uniqueKey => "${tankCode}_${tankName}_${location ?? "nozone"}"
@@ -66,6 +70,8 @@ class TankModel {
         "created_by": createdBy,
         "created_at": createdAt,
         "updated_at": updatedAt,
+        "inspection_frequency_type": inspectionFrequencyType,
+        "inspection_frequency_days": inspectionFrequencyDays,
       };
 
   factory TankModel.fromMap(
@@ -74,15 +80,26 @@ class TankModel {
     List<Map<String, dynamic>> properties = [];
 
     if (m["inspection_properties"] != null) {
-      properties = List<dynamic>.from(
-        m["inspection_properties"],
-      ).map(
-        (e) {
-          return Map<String, dynamic>.from(
-            e,
-          );
-        },
-      ).toList();
+      final raw = m["inspection_properties"];
+      if (raw is List) {
+        properties = raw
+            .whereType<Map>()
+            .map(
+              (e) => Map<String, dynamic>.from(
+                e.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            )
+            .toList();
+      } else if (raw is Map) {
+        properties = raw.values
+            .whereType<Map>()
+            .map(
+              (e) => Map<String, dynamic>.from(
+                e.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            )
+            .toList();
+      }
     }
 
     return TankModel(
@@ -100,6 +117,15 @@ class TankModel {
       createdBy: m["created_by"] ?? "",
       createdAt: m["created_at"] ?? DateTime.now().toIso8601String(),
       updatedAt: m["updated_at"] ?? DateTime.now().toIso8601String(),
+      inspectionFrequencyType:
+          (m["inspection_frequency_type"] ?? 'daily').toString(),
+      inspectionFrequencyDays: (m["inspection_frequency_days"] as num?)?.toInt() ??
+          (((m["inspection_frequency_type"] ?? 'daily').toString() == 'weekly_once')
+              ? 7
+              : ((m["inspection_frequency_type"] ?? 'daily').toString() ==
+                      'weekly_thrice')
+                  ? 2
+                  : 1),
     );
   }
 }

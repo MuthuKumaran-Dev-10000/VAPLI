@@ -1,5 +1,6 @@
 import 'package:lubrication_indicator/features/auth/data/models/user_model.dart';
 import 'package:lubrication_indicator/features/auth/data/repositories/auth_repository.dart';
+import 'package:lubrication_indicator/core/services/access_control_service.dart';
 
 class AuthController {
   AuthController({AuthRepository? repository})
@@ -19,7 +20,7 @@ class AuthController {
     required String password,
   }) async {
     final user = await loginUser(username: username, password: password);
-    if (user.role != 'admin') {
+    if (!AccessControlService.isAdminLike(user)) {
       throw Exception('Not an admin account');
     }
     return user;
@@ -29,4 +30,3 @@ class AuthController {
     return error.toString().replaceAll('Exception: ', '').trim();
   }
 }
-

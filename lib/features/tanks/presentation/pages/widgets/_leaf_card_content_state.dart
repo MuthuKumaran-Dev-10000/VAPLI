@@ -231,11 +231,13 @@ class _LeafCardContentState extends State<_LeafCardContent> {
                 : Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
+                        if (widget.canModify)
                         _ActionChip(
                             icon: Icons.edit_outlined,
                             label: 'Edit',
                             color: _kTeal,
                             onTap: _modify),
+                        if (widget.canDuplicate)
                         _ActionChip(
                             icon: Icons.copy_outlined,
                             label: 'Clone',
@@ -246,11 +248,13 @@ class _LeafCardContentState extends State<_LeafCardContent> {
                             label: 'QR',
                             color: _kCopper,
                             onTap: _downloadQr),
+                        if (widget.canModify)
                         _ActionChip(
                             icon: Icons.drive_file_move_outline,
                             label: 'Move',
                             color: _kPurple,
                             onTap: widget.onMove),
+                        if (widget.canDelete)
                         _ActionChip(
                             icon: Icons.delete_outline_rounded,
                             label: 'Del',
