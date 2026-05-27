@@ -84,7 +84,9 @@ class _ParamPickerSheet extends StatelessWidget {
                     return _PickerTile(
                       icon: _iconForType(p['type']?.toString() ?? ''),
                       label: p['label']?.toString() ?? '',
-                      subtitle: p['type']?.toString() ?? '',
+                      subtitle: p['is_previous_value'] == true
+                          ? '${p['type']?.toString() ?? ''}  •  LAST'
+                          : p['type']?.toString() ?? '',
                       typeColor:
                           _colorForType(p['type']?.toString() ?? ''),
                       isSelected: isSelected,

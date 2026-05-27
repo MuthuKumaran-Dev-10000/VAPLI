@@ -65,7 +65,23 @@ const _kAmber = Color(0xFFD97706);
 // DRAG PAYLOAD
 // ─────────────────────────────────────────────────────────────────────────────
 class TankBrowserScreen extends StatefulWidget {
-  const TankBrowserScreen({super.key});
+  final String rootLabel;
+  final String? rootFolderId;
+  final bool canCreate;
+  final bool canModify;
+  final bool canDelete;
+  final Future<void> Function(String operation, Map<String, dynamic> details)?
+      onAudit;
+
+  const TankBrowserScreen({
+    super.key,
+    this.rootLabel = '',
+    this.rootFolderId,
+    this.canCreate = true,
+    this.canModify = true,
+    this.canDelete = true,
+    this.onAudit,
+  });
 
   @override
   State<TankBrowserScreen> createState() => _TankBrowserScreenState();

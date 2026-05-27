@@ -55,10 +55,13 @@ dependencies:
   audioplayers: ^6.6.0
   flutter_dotenv: ^5.2.1
   file_picker: ^8.1.2
+  pdf: ^3.11.3
  
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
   flutter_lints: ^3.0.0
 

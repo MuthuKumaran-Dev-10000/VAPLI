@@ -1,12 +1,24 @@
 import 'package:firebase_database/firebase_database.dart';
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
+import 'package:lubrication_indicator/core/services/access_control_service.dart';
+import 'package:lubrication_indicator/core/services/client_context_service.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/utils/hash_util.dart';
 import 'package:lubrication_indicator/core/utils/session_manager.dart';
 import '../models/user_model.dart';
 
 class AuthRepository {
-  final _db = DatabaseModeService.ref();
+  DatabaseReference get _db => DatabaseModeService.ref();
+  Map<String, dynamic>? _safeMap(dynamic value) {
+    if (value is! Map) return null;
+    try {
+      return Map<String, dynamic>.from(
+        (value as Map).map((k, v) => MapEntry(k.toString(), v)),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<UserModel> login(String username, String password) async {
     final snap = await _db
@@ -17,10 +29,26 @@ class AuthRepository {
 
     if (!snap.exists) throw Exception('User not found');
 
-    final data = Map<String, dynamic>.from(
-      (snap.value as Map).values.first as Map,
-    );
-    final user = UserModel.fromMap(data);
+    final root = _safeMap(snap.value);
+    if (root == null || root.isEmpty) throw Exception('User not found');
+    final selectedClient = await ClientContextService.getActiveClient();
+    final selectedClientId = selectedClient?.id;
+    final candidates = <UserModel>[];
+    for (final raw in root.values) {
+      final data = _safeMap(raw);
+      if (data == null) continue;
+      final user = UserModel.fromMap(data);
+      candidates.add(user);
+    }
+    if (candidates.isEmpty) throw Exception('User not found');
+    final user = (selectedClientId == null || selectedClientId.trim().isEmpty)
+        ? candidates.first
+        : candidates.firstWhere(
+            (u) =>
+                u.clientIds.contains(selectedClientId) ||
+                u.role.toLowerCase() == AccessControlService.roleSuperAdmin,
+            orElse: () => throw Exception('User not found for selected client'),
+          );
 
     if (!user.isActive) throw Exception('Account is deactivated');
 
@@ -74,16 +102,33 @@ class AuthRepository {
     required String fullName,
     required String password,
     String role = 'user',
+    List<String> clientIds = const [],
+    Map<String, bool>? privileges,
     String? phone,
     String? email,
   }) async {
-    // Check duplicate username
+    // Check duplicate username only within same client assignment scope.
     final existing = await _db
         .child(AppConstants.usersPath)
         .orderByChild('username')
         .equalTo(username)
         .get();
-    if (existing.exists) throw Exception('Username already exists');
+    if (existing.exists) {
+      final data = Map<String, dynamic>.from(existing.value as Map);
+      final target = clientIds.toSet();
+      for (final raw in data.values) {
+        final m = _safeMap(raw);
+        if (m == null) continue;
+        final existingIds = ((m['client_ids'] as List?) ?? const [])
+            .map((e) => e.toString())
+            .toSet();
+        final overlap = target.intersection(existingIds).isNotEmpty;
+        final bothGlobal = target.isEmpty && existingIds.isEmpty;
+        if (overlap || bothGlobal) {
+          throw Exception('Username already exists in this client');
+        }
+      }
+    }
 
     final id = HashUtil.generateId();
     final user = UserModel(
@@ -92,6 +137,9 @@ class AuthRepository {
       fullName: fullName,
       passwordHash: HashUtil.hashPassword(password),
       role: role,
+      privileges: privileges ??
+          AccessControlService.defaultPrivilegesForRole(role),
+      clientIds: clientIds,
       phone: phone,
       email: email,
       createdAt: DateTime.now().toIso8601String(),

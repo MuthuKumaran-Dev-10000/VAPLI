@@ -53,14 +53,19 @@ class _TankStatsCardState extends State<_TankStatsCard> {
     final props = List<Map<String, dynamic>>.from(tank.inspectionProperties);
     final hasData = stats != null && stats.count > 0;
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: _kCard,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _kBorder),
-      ),
-      child: Column(
+    final showLastInspectionExpanded =
+        _lastExpanded || widget.forceExpandLastInspection;
+
+    return RepaintBoundary(
+      key: widget.captureKey,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _kBorder),
+        ),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           _buildCardHeader(tank, stats),
@@ -93,9 +98,14 @@ class _TankStatsCardState extends State<_TankStatsCard> {
                 ),
               ),
             const _Divider(),
-            _buildLastInspection(props, stats),
+            _buildLastInspection(
+              props,
+              stats,
+              forceExpanded: showLastInspectionExpanded,
+            ),
           ],
         ],
+      ),
       ),
     );
   }
@@ -170,6 +180,12 @@ class _TankStatsCardState extends State<_TankStatsCard> {
                   style: GoogleFonts.dmSans(fontSize: 9, color: _kCopperD)),
             ]),
           ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Download tank as PNG',
+          onPressed: widget.onDownloadPng,
+          icon: const Icon(Icons.download_rounded, color: _kCopper),
+        ),
       ]),
     );
   }
@@ -244,12 +260,17 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
   }
 
   Widget _buildLastInspection(
-      List<Map<String, dynamic>> props, DashboardStatsModel stats) {
+    List<Map<String, dynamic>> props,
+    DashboardStatsModel stats, {
+    required bool forceExpanded,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         InkWell(
-          onTap: () => setState(() => _lastExpanded = !_lastExpanded),
+          onTap: widget.forceExpandLastInspection
+              ? null
+              : () => setState(() => _lastExpanded = !_lastExpanded),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
             child: Row(children: [
@@ -263,7 +284,7 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
                         color: _kText)),
               ),
               Icon(
-                  _lastExpanded
+                  forceExpanded
                       ? Icons.keyboard_arrow_up_rounded
                       : Icons.keyboard_arrow_down_rounded,
                   color: _kSub,
@@ -271,7 +292,7 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
             ]),
           ),
         ),
-        if (_lastExpanded)
+        if (forceExpanded)
           Container(
             margin: const EdgeInsets.fromLTRB(16, 0, 16, 14),
             decoration: BoxDecoration(
@@ -286,7 +307,8 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
                         style: GoogleFonts.dmSans(fontSize: 12, color: _kSub)),
                   )
                 : Column(
-                    children: props.asMap().entries.map((entry) {
+                    children: [
+                      ...props.asMap().entries.map((entry) {
                       final i = entry.key;
                       final p = entry.value;
                       final lbl = (p['label'] as String?) ?? '';
@@ -325,7 +347,40 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
                           ],
                         ),
                       );
-                    }).toList(),
+                      }).toList(),
+                      ...stats.lastReading.entries
+                          .where((e) =>
+                              e.key.toString().contains('image_url') &&
+                              (e.value?.toString().trim().isNotEmpty ?? false))
+                          .map((e) => Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 14, vertical: 10),
+                                decoration: const BoxDecoration(
+                                  border: Border(top: BorderSide(color: _kBorder)),
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      width: MediaQuery.of(context).size.width * 0.28,
+                                      child: Text(
+                                        e.key,
+                                        style: GoogleFonts.dmSans(
+                                            fontSize: 12,
+                                            color: _kSub,
+                                            fontWeight: FontWeight.w500),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: _ImageThumb(
+                                        url: e.value.toString(),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              )),
+                    ],
                   ),
           ),
       ],

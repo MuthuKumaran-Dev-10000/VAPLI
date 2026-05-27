@@ -58,8 +58,17 @@ const _kDanger = Color(0xFFEF4444);
 // ─────────────────────────────────────────────────────────────────────────────
 class TankInputBrowser extends StatefulWidget {
   final UserModel? currentUser;
+  final String rootTitleOverride;
+  final String? rootFolderIdOverride;
+  final VoidCallback? onRootTap;
 
-  const TankInputBrowser({super.key, required this.currentUser});
+  const TankInputBrowser({
+    super.key,
+    required this.currentUser,
+    this.rootTitleOverride = 'Root',
+    this.rootFolderIdOverride,
+    this.onRootTap,
+  });
 
   @override
   State<TankInputBrowser> createState() => _TankInputBrowserState();
@@ -108,6 +117,19 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
         });
       }
     });
+    _initClientRootAndLoad();
+  }
+
+  Future<void> _initClientRootAndLoad() async {
+    if (widget.rootFolderIdOverride != null &&
+        widget.rootFolderIdOverride!.trim().isNotEmpty) {
+      final rootNode = await _treeRepo.fetchNode(widget.rootFolderIdOverride!);
+      if (rootNode != null && mounted) {
+        _pathStack
+          ..clear()
+          ..add(rootNode);
+      }
+    }
     _subscribeToCurrentFolder();
     _fetchAllNodes();
   }
@@ -167,6 +189,11 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
       debugPrint('[InputBrowser] Stream error: $e');
       if (mounted) setState(() => _loading = false);
     });
+  }
+
+  Future<void> _refreshAll() async {
+    await _fetchAllNodes();
+    _subscribeToCurrentFolder();
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -326,7 +353,7 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
           id: tankId!,
           type: 'leaf',
           name: tank.tankName,
-          zone: (tank.location?.isNotEmpty ?? false) ? tank.location : 'root',
+          zone: (tank.location?.isNotEmpty ?? false) ? tank.location : '',
           path: tank.tankName,
           order: 0,
           createdAt: '',
@@ -430,6 +457,8 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
           // ── Breadcrumb bar ───────────────────────────────────────────────
           _BreadcrumbBar(
             pathStack: _pathStack,
+            rootLabel: widget.rootTitleOverride,
+            onRootTap: widget.onRootTap,
             onNavigate: _navigateToBreadcrumb,
           ),
 
@@ -512,7 +541,9 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
 
           // ── Content area ─────────────────────────────────────────────────
           Expanded(
-            child: _loading
+            child: RefreshIndicator(
+              onRefresh: _refreshAll,
+              child: _loading
                 ? const Center(
                     child: CircularProgressIndicator(color: _kCopper))
                 : _selectedLeaf != null
@@ -521,6 +552,7 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                         leaf: _selectedLeaf!,
                         tank: _selectedTank,
                         currentUser: widget.currentUser,
+                        rootTitleOverride: widget.rootTitleOverride,
                         onBack: _clearLeafSelection,
                       )
                     : isSearching
@@ -579,6 +611,7 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                                 onFolderTap: _openFolder,
                                 onLeafTap: _selectLeaf,
                               ),
+            ),
           ),
         ],
       ),
@@ -893,12 +926,14 @@ class _LeafDetail extends StatelessWidget {
   final TankNode leaf;
   final TankModel? tank;
   final UserModel? currentUser;
+  final String rootTitleOverride;
   final VoidCallback onBack;
 
   const _LeafDetail({
     required this.leaf,
     required this.tank,
     required this.currentUser,
+    required this.rootTitleOverride,
     required this.onBack,
   });
 
@@ -962,7 +997,9 @@ class _LeafDetail extends StatelessWidget {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  path.isNotEmpty ? path.replaceAll('/', ' › ') : 'Root',
+                  path.isNotEmpty
+                      ? path.replaceAll('/', ' › ')
+                      : rootTitleOverride,
                   style: GoogleFonts.spaceGrotesk(
                       color: _kSubL, fontSize: 11, letterSpacing: 0.3),
                   overflow: TextOverflow.ellipsis,
@@ -1060,7 +1097,7 @@ class _LeafDetail extends StatelessWidget {
                           label: 'Path',
                           value: path.isNotEmpty
                               ? path.replaceAll('/', ' › ')
-                              : 'Root'),
+                              : rootTitleOverride),
                       if (tank != null) ...[
                         const SizedBox(height: 8),
                         _InfoRow(
@@ -1241,8 +1278,15 @@ class _InfoRow extends StatelessWidget {
 
 class _BreadcrumbBar extends StatelessWidget {
   final List<TankNode?> pathStack;
+  final String rootLabel;
+  final VoidCallback? onRootTap;
   final void Function(int) onNavigate;
-  const _BreadcrumbBar({required this.pathStack, required this.onNavigate});
+  const _BreadcrumbBar({
+    required this.pathStack,
+    required this.rootLabel,
+    this.onRootTap,
+    required this.onNavigate,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1254,12 +1298,13 @@ class _BreadcrumbBar extends StatelessWidget {
         child: Row(
           children: [
             GestureDetector(
-              onTap: pathStack.length > 1 ? () => onNavigate(0) : null,
+              onTap: onRootTap ??
+                  (pathStack.length > 1 ? () => onNavigate(0) : null),
               child: Row(children: [
                 Icon(Icons.storage_outlined,
                     size: 12, color: pathStack.length > 1 ? _kCopper : _kText),
                 const SizedBox(width: 4),
-                Text('Tanks',
+                Text(rootLabel,
                     style: GoogleFonts.dmSans(
                         color: pathStack.length > 1 ? _kCopper : _kText,
                         fontSize: 12,
@@ -1439,3 +1484,4 @@ class _QrScanScreenState extends State<_QrScanScreen> {
     );
   }
 }
+

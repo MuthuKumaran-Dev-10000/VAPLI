@@ -22,13 +22,21 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:firebase_database/firebase_database.dart';
+import 'package:excel/excel.dart' as xl;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:share_plus/share_plus.dart';
 
 import 'package:lubrication_indicator/features/dashboard/data/models/dashboard_stats_model.dart';
 import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';

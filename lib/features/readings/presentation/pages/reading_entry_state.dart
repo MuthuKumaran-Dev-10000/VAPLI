@@ -2,7 +2,7 @@ part of 'reading_entry_screen.dart';
 
 class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   final _picker = ImagePicker();
-  final _db = FirebaseDatabase.instance.ref();
+  DatabaseReference _ref(String path) => DatabaseModeService.ref(path);
 
   // ── Audio ──────────────────────────────────────────────────────────────
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -185,15 +185,58 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         .toSet();
   }
 
+  bool _isLastTokenId(String id) => id.endsWith('__last');
+
+  String _tankPrevKey() =>
+      widget.tank.tankName.trim().replaceAll('/', '_').replaceAll('\\', '_');
+
+  String _previousCapturePath({
+    required String baseParamId,
+    required String baseParamLabel,
+  }) {
+    return 'Previouscapture/${_tankPrevKey()}/$baseParamId/$baseParamLabel';
+  }
+
   // ── Autofill: get the value of a dependency token ─────────────────────
   // Token format from expression: ${paramId} / ${paramId:left} / ${paramId:right}
-  double? _resolveToken(String token) {
+  Future<double?> _resolveToken(String token) async {
     final parts = token.split(':');
-    final pid = parts.first.trim();
+    var pid = parts.first.trim();
     final side = parts.length > 1 ? parts[1].trim().toLowerCase() : '';
+    final isLast = _isLastTokenId(pid);
+    if (isLast) {
+      pid = pid.substring(0, pid.length - '__last'.length);
+    }
+
     final p = _props.firstWhere((e) => e['id'] == pid, orElse: () => {});
     if (p.isEmpty) return null;
     final type = p['type'] as String? ?? 'text';
+
+    if (isLast) {
+      // "__last" must come only from persisted previous-capture values.
+      // If this parameter is not configured to track previous capture,
+      // treat previous as zero.
+      if (p['keep_previous_capture'] != true) return 0.0;
+      final label = p['label']?.toString() ?? pid;
+      final path = _previousCapturePath(baseParamId: pid, baseParamLabel: label);
+      try {
+        final snap = await _ref(path).get();
+        if (!snap.exists || snap.value == null) return 0.0;
+        final stored = snap.value;
+        if (type == 'dual_text') {
+          if (stored is Map) {
+            final m = Map<dynamic, dynamic>.from(stored as Map);
+            final sideValue = side == 'right' ? m['right'] : m['left'];
+            return double.tryParse(sideValue?.toString() ?? '') ?? 0.0;
+          }
+          return 0.0;
+        }
+        return double.tryParse(stored.toString()) ?? 0.0;
+      } catch (_) {
+        return 0.0;
+      }
+    }
+
     if (type == 'dual_text') {
       if (side == 'right') {
         return double.tryParse(_dualRight[pid]?.text.trim() ?? '');
@@ -205,12 +248,52 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     return null;
   }
 
-  // ── Autofill: evaluate the expression ────────────────────────────────
-  _AutofillResult _evaluateExpression(String expression) {
+  Future<bool> _hasPreviousCaptureForToken(String token) async {
+    final parts = token.split(':');
+    var pid = parts.first.trim();
+    final side = parts.length > 1 ? parts[1].trim().toLowerCase() : '';
+    if (!_isLastTokenId(pid)) return true;
+
+    pid = pid.substring(0, pid.length - '__last'.length);
+    final p = _props.firstWhere((e) => e['id'] == pid, orElse: () => {});
+    if (p.isEmpty) return false;
+    if (p['keep_previous_capture'] != true) return false;
+
+    final type = p['type'] as String? ?? 'text';
+    final label = p['label']?.toString() ?? pid;
+    final path = _previousCapturePath(baseParamId: pid, baseParamLabel: label);
+
     try {
+      final snap = await _ref(path).get();
+      if (!snap.exists || snap.value == null) return false;
+      if (type == 'dual_text') {
+        if (snap.value is! Map) return false;
+        final m = Map<dynamic, dynamic>.from(snap.value as Map);
+        final sideValue = side == 'right' ? m['right'] : m['left'];
+        return sideValue != null && sideValue.toString().trim().isNotEmpty;
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // ── Autofill: evaluate the expression ────────────────────────────────
+  Future<_AutofillResult> _evaluateExpression(String expression) async {
+    try {
+      final tokens = ExpressionEngine.extractIds(expression);
+
+      // If any "__last" dependency has no previous-capture object,
+      // force autofill to 0 and skip formula evaluation entirely.
+      for (final token in tokens) {
+        if (!_isLastTokenId(token.split(':').first.trim())) continue;
+        final hasPrev = await _hasPreviousCaptureForToken(token);
+        if (!hasPrev) return _AutofillResult.value(0.0);
+      }
+
       final vars = <String, double>{};
-      for (final token in ExpressionEngine.extractIds(expression)) {
-        final val = _resolveToken(token);
+      for (final token in tokens) {
+        final val = await _resolveToken(token);
         if (val == null) {
           return const _AutofillResult.error(
             'Some required values are not filled in yet.',
@@ -344,6 +427,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     for (final depId in deps) {
       final p = _props.firstWhere((pp) => pp['id'] == depId,
           orElse: () => <String, dynamic>{});
+      if (_isLastTokenId(depId)) {
+        status[depId] = true;
+        continue;
+      }
       if (p.isEmpty) {
         status[depId] = false;
         continue;
@@ -378,7 +465,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   }
 
   // ── Re-evaluate autofill params that depend on a changed param ─────────
-  void _reevaluateAutofillDependents(String changedParamId) {
+  Future<void> _reevaluateAutofillDependents(String changedParamId) async {
     for (final entry in _autofillDeps.entries) {
       final autofillId = entry.key;
       final deps = entry.value;
@@ -396,7 +483,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       final allFilled = depsStatus.values.every((v) => v);
 
       if (allFilled) {
-        final result = _evaluateExpression(expression);
+        final result = await _evaluateExpression(expression);
         setState(() {
           _autofillResult[autofillId] = result;
           if (!result.hasError && result.value != null) {
@@ -614,12 +701,12 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
     try {
       if (v.showDashboardAlert) {
-        await _db.child('alerts/$alertId').set(record);
+        await _ref('alerts/$alertId').set(record);
       }
       if (v.storeHistory) {
-        await _db.child('violations/$alertId').set(record);
+        await _ref('violations/$alertId').set(record);
       }
-      await _db.child('alerts_full/$alertId').set({
+      await _ref('alerts_full/$alertId').set({
         ...record,
         'all_values_snapshot': _collectValues(),
         'resolved': false,
@@ -639,9 +726,9 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     _liveAlertIds[paramId]!.remove(constraintId);
 
     try {
-      await _db.child('alerts/$alertId').remove();
-      await _db.child('violations/$alertId').remove();
-      await _db.child('alerts_full/$alertId').remove();
+      await _ref('alerts/$alertId').remove();
+      await _ref('violations/$alertId').remove();
+      await _ref('alerts_full/$alertId').remove();
     } catch (e) {
       debugPrint('[LiveAlert] Delete failed: $e');
     }
@@ -748,7 +835,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Called on every value change ───────────────────────────────────────
 
-  void _onValueChanged(String id) {
+  Future<void> _onValueChanged(String id) async {
     final p = _props.firstWhere((e) => e['id'] == id,
         orElse: () => <String, dynamic>{});
     if (p.isEmpty) return;
@@ -789,7 +876,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
 
     // Re-evaluate any autofill params that depend on this param
-    _reevaluateAutofillDependents(id);
+    await _reevaluateAutofillDependents(id);
   }
 
   // ── Handle first fire of a constraint ─────────────────────────────────
@@ -821,8 +908,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         'timestamp': DateTime.now().toIso8601String(),
         'all_values_snapshot': _collectValues(),
       };
-      await _db.child('alerts/$alertId').update(update);
-      await _db.child('alerts_full/$alertId').update(update);
+      await _ref('alerts/$alertId').update(update);
+      await _ref('alerts_full/$alertId').update(update);
     } catch (e) {
       debugPrint('[LiveAlert] Update failed: $e');
     }
@@ -1030,14 +1117,28 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         tank: widget.tank,
       );
 
+      for (final p in _props) {
+        if (p['keep_previous_capture'] != true) continue;
+        final id = p['id'] as String;
+        final type = p['type'] as String? ?? 'text';
+        final label = p['label'] as String? ?? id;
+        final val = _currentValue(id, type, p);
+        try {
+          await _ref(_previousCapturePath(
+            baseParamId: id,
+            baseParamLabel: label,
+          )).set(val);
+        } catch (_) {}
+      }
+
       for (final paramMap in _liveAlertIds.values) {
         for (final alertId in paramMap.values) {
           try {
-            await _db.child('alerts/$alertId').update({
+            await _ref('alerts/$alertId').update({
               'live': false,
               'reading_id': reading.id ?? '',
             });
-            await _db.child('alerts_full/$alertId').update({
+            await _ref('alerts_full/$alertId').update({
               'live': false,
               'reading_id': reading.id ?? '',
             });
@@ -1525,16 +1626,16 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             const SizedBox(height: 8),
             _AutofillToggleRow(
               isAutofillEnabled: _autofillEnabled[id] ?? true,
-              onToggle: (enabled) {
-                setState(() {
-                  _autofillEnabled[id] = enabled;
-                  if (enabled) {
-                    // Re-evaluate when switching back to autofill
-                    final expr = p['autofill_expression'] as String? ?? '';
-                    final depsStatus = _getDepsFillStatus(id);
-                    final allFilled = depsStatus.values.every((v) => v);
-                    if (allFilled && expr.isNotEmpty) {
-                      final result = _evaluateExpression(expr);
+              onToggle: (enabled) async {
+                setState(() => _autofillEnabled[id] = enabled);
+                if (enabled) {
+                  final expr = p['autofill_expression'] as String? ?? '';
+                  final depsStatus = _getDepsFillStatus(id);
+                  final allFilled = depsStatus.values.every((v) => v);
+                  if (allFilled && expr.isNotEmpty) {
+                    final result = await _evaluateExpression(expr);
+                    if (!mounted) return;
+                    setState(() {
                       _autofillResult[id] = result;
                       if (!result.hasError && result.value != null) {
                         final formatted =
@@ -1543,15 +1644,16 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                                 : result.value!.toStringAsFixed(4);
                         _textCtrl[id]?.text = formatted;
                       }
-                    } else {
+                    });
+                  } else {
+                    setState(() {
                       _autofillResult[id] = null;
                       _textCtrl[id]?.text = '';
-                    }
-                  } else {
-                    // Manual mode — clear autofill result, let user type
-                    _autofillResult[id] = null;
+                    });
                   }
-                });
+                } else {
+                  setState(() => _autofillResult[id] = null);
+                }
               },
             ),
           ],

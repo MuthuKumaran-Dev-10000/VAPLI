@@ -15,6 +15,7 @@ class SessionParamStore {
           scope_id    TEXT NOT NULL,
           label       TEXT NOT NULL,
           type        TEXT NOT NULL,
+          track_previous_capture INTEGER NOT NULL DEFAULT 0,
           left_label  TEXT,
           right_label TEXT
         )
@@ -34,6 +35,7 @@ class SessionParamStore {
         scope_id    TEXT NOT NULL,
         label       TEXT NOT NULL,
         type        TEXT NOT NULL,
+        track_previous_capture INTEGER NOT NULL DEFAULT 0,
         left_label  TEXT,
         right_label TEXT,
         UNIQUE(id, scope_id)
@@ -47,6 +49,10 @@ class SessionParamStore {
       FROM session_params
       ''',
     );
+    try {
+      await _db!.execute(
+          'ALTER TABLE session_params_v2 ADD COLUMN track_previous_capture INTEGER NOT NULL DEFAULT 0');
+    } catch (_) {}
     return _db!;
   }
 
@@ -59,6 +65,8 @@ class SessionParamStore {
         'scope_id': scopeId,
         'label': param['label']?.toString() ?? '',
         'type': param['type']?.toString() ?? '',
+        'track_previous_capture':
+            param['keep_previous_capture'] == true ? 1 : 0,
         'left_label': param['left_label']?.toString(),
         'right_label': param['right_label']?.toString(),
       },
@@ -80,6 +88,8 @@ class SessionParamStore {
           'scope_id': scopeId,
           'label': param['label']?.toString() ?? '',
           'type': param['type']?.toString() ?? '',
+          'track_previous_capture':
+              param['keep_previous_capture'] == true ? 1 : 0,
           'left_label': param['left_label']?.toString(),
           'right_label': param['right_label']?.toString(),
         },

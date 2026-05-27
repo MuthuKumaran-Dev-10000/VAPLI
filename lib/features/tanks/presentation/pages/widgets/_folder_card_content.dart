@@ -14,6 +14,9 @@ class _FolderCardContent extends StatelessWidget {
   final VoidCallback onDelete;
   final VoidCallback onMove;
   final VoidCallback onDuplicate;
+  final bool canModify;
+  final bool canDelete;
+  final bool canDuplicate;
 
   const _FolderCardContent({
     required this.node,
@@ -25,6 +28,9 @@ class _FolderCardContent extends StatelessWidget {
     required this.onDelete,
     required this.onMove,
     required this.onDuplicate,
+    this.canModify = true,
+    this.canDelete = true,
+    this.canDuplicate = true,
   });
 
   @override
@@ -147,29 +153,33 @@ class _FolderCardContent extends StatelessWidget {
                 Text('hold to drag',
                     style: GoogleFonts.raleway(fontSize: 9, color: _kSubL)),
                 const Spacer(),
-                _ActionChip(
-                    icon: Icons.copy_outlined,
-                    label: 'Clone',
-                    color: _kAmber,
-                    onTap: onDuplicate),
+                if (canDuplicate)
+                  _ActionChip(
+                      icon: Icons.copy_outlined,
+                      label: 'Clone',
+                      color: _kAmber,
+                      onTap: onDuplicate),
                 const SizedBox(width: 6),
-                _ActionChip(
-                    icon: Icons.drive_file_move_outline,
-                    label: 'Move',
-                    color: _kPurple,
-                    onTap: onMove),
+                if (canModify)
+                  _ActionChip(
+                      icon: Icons.drive_file_move_outline,
+                      label: 'Move',
+                      color: _kPurple,
+                      onTap: onMove),
                 const SizedBox(width: 6),
-                _ActionChip(
-                    icon: Icons.edit_outlined,
-                    label: 'Edit',
-                    color: _kTeal,
-                    onTap: onRename),
+                if (canModify)
+                  _ActionChip(
+                      icon: Icons.edit_outlined,
+                      label: 'Edit',
+                      color: _kTeal,
+                      onTap: onRename),
                 const SizedBox(width: 6),
-                _ActionChip(
-                    icon: Icons.delete_outline_rounded,
-                    label: 'Del',
-                    color: _kDanger,
-                    onTap: onDelete),
+                if (canDelete)
+                  _ActionChip(
+                      icon: Icons.delete_outline_rounded,
+                      label: 'Del',
+                      color: _kDanger,
+                      onTap: onDelete),
               ]),
             ),
         ]),

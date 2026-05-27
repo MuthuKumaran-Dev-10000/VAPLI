@@ -18,7 +18,7 @@ import '../models/tank_model.dart';
 import 'tank_tree_repository.dart';
 
 class TankRepository {
-  final _db = DatabaseModeService.ref();
+  DatabaseReference _ref(String path) => DatabaseModeService.ref(path);
 
   Map<String, dynamic>? _safeMap(dynamic value) {
     if (value is! Map) return null;
@@ -32,8 +32,7 @@ class TankRepository {
   }
 
   Stream<List<TankModel>> watchTanks() {
-    return _db
-        .child(
+    return _ref(
           AppConstants.tanksPath,
         )
         .onValue
@@ -63,8 +62,7 @@ class TankRepository {
   }
 
   Future<List<TankModel>> getAllTanks() async {
-    final snap = await _db
-        .child(
+    final snap = await _ref(
           AppConstants.tanksPath,
         )
         .get();
@@ -93,8 +91,7 @@ class TankRepository {
   Future<TankModel?> getTankById(
     String id,
   ) async {
-    final snap = await _db
-        .child(
+    final snap = await _ref(
           "${AppConstants.tanksPath}/$id",
         )
         .get();
@@ -160,13 +157,11 @@ class TankRepository {
       updatedAt: now,
     );
 
-    await _db
-        .child(
-          "${AppConstants.tanksPath}/$id",
-        )
-        .set(
-          tank.toMap(),
-        );
+    await _ref(
+      "${AppConstants.tanksPath}/$id",
+    ).set(
+      tank.toMap(),
+    );
 
     return tank;
   }
@@ -288,16 +283,14 @@ class TankRepository {
       updateMap["qr_image_url"] = qrImageUrl;
     }
 
-    await _db
-        .child(
-          "${AppConstants.tanksPath}/$id",
-        )
-        .update(
-          updateMap,
-        );
+    await _ref(
+      "${AppConstants.tanksPath}/$id",
+    ).update(
+      updateMap,
+    );
 
     try {
-      final treeSnap = await _db.child("tank_tree").get();
+      final treeSnap = await _ref("tank_tree").get();
       if (treeSnap.exists && treeSnap.value != null) {
         final raw = _safeMap(treeSnap.value);
         if (raw == null) return;
@@ -317,7 +310,10 @@ class TankRepository {
                   : '${oldPath.substring(0, lastSlash)}/$tankName';
             }
             updates['$nodeId/name'] = tankName;
-            updates['${e.key}/zone'] = location;
+            // updates['${e.key}/zone'] = location;
+            if (location.trim().isNotEmpty) {
+                updates['${e.key}/zone'] = location;
+            }
             if (newPath.isNotEmpty && newPath != oldPath) {
               updates['$nodeId/path'] = newPath;
 
@@ -335,7 +331,7 @@ class TankRepository {
           }
         }
         if (updates.isNotEmpty) {
-          await _db.child("tank_tree").update(updates);
+          await _ref("tank_tree").update(updates);
         }
       }
     } catch (_) {}
@@ -344,7 +340,7 @@ class TankRepository {
   Future<void> deleteTankFromTree(
     String tankId,
   ) async {
-    final snap = await _db.child("tank_tree").get();
+    final snap = await _ref("tank_tree").get();
 
     if (!snap.exists || snap.value == null) return;
     final root = _safeMap(snap.value);
@@ -389,7 +385,7 @@ class TankRepository {
               "[DELETE] Removing tree node: $path",
             );
 
-            await _db.child(path).remove();
+            await _ref(path).remove();
 
             continue;
           }
@@ -431,7 +427,7 @@ class TankRepository {
     // DELETE DASHBOARD STATS
     // ─────────────────────────────────────────────
     try {
-      await _db.child("dashboard_stats/$id").remove();
+      await _ref("dashboard_stats/$id").remove();
     } catch (_) {}
 
     // ─────────────────────────────────────────────
@@ -472,7 +468,7 @@ class TankRepository {
     // ─────────────────────────────────────────────
     // FINALLY DELETE TANK
     // ─────────────────────────────────────────────
-    await _db.child("${AppConstants.tanksPath}/$id").remove();
+    await _ref("${AppConstants.tanksPath}/$id").remove();
   }
 
   // Future<void> _deleteCollectionByTankId({
@@ -502,7 +498,7 @@ class TankRepository {
   required String tankId,
 }) async {
   try {
-    final snap = await _db.child(path).get();
+    final snap = await _ref(path).get();
 
     if (!snap.exists || snap.value == null) {
       debugPrint(
@@ -538,8 +534,9 @@ class TankRepository {
             "[DELETE] Removing $path/${e.key}",
           );
 
-          await _db
-              .child("$path/${e.key}")
+          await _ref(
+                "$path/${e.key}",
+              )
               .remove();
         }
       } catch (e, s) {
@@ -570,9 +567,23 @@ class TankRepository {
       'qr_image_url': tank.qrImageUrl,
       'qr_json': tank.qrJson,
       'inspection_properties': tank.inspectionProperties,
+      'inspection_frequency_type': tank.inspectionFrequencyType,
+      'inspection_frequency_days': tank.inspectionFrequencyDays,
       'created_at': DateTime.now().toIso8601String(),
     });
 
     return newId;
+  }
+
+  Future<void> updateInspectionFrequency({
+    required String tankId,
+    required String type,
+    required int days,
+  }) async {
+    await _ref('tanks/$tankId').update({
+      'inspection_frequency_type': type,
+      'inspection_frequency_days': days < 1 ? 1 : days,
+      'updated_at': DateTime.now().toIso8601String(),
+    });
   }
 }

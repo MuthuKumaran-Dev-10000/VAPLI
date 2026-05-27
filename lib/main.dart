@@ -36,13 +36,24 @@ Future<void> createTestAdmin() async {
     'last_login_at': '2026-05-22T14:28:27.636841',
     'password_hash':
         '7d20f317b9e34c36747cf8275645ab8fe145e29b70f3722a6fcd7d0cff2cd0c8',
-    'role': 'admin',
+    'role': 'super admin',
     'username': 'admin',
+    'privileges': {
+      'create_client': true,
+      'create_users': true,
+      'grant_users': true,
+      'create_tanks': true,
+      'delete_tanks': true,
+      'modify_tanks': true,
+      'allocate_users_to_clients': true,
+      'open_admin_page': true,
+    },
+    'client_ids': <String>[],
   };
 
   await db.child('testDB/users/$userId').set(userData);
 
-  print('✅ Admin user copied to testDB/users');
+  print('✅ Super admin user copied to testDB/users');
 }
 
 class LubeMonitorApp extends StatelessWidget {
@@ -95,7 +106,17 @@ class _AppEntryState extends State<AppEntry> {
             ),
           );
         }
-        if (snap.data == true) return const HomeScreen();
+        if (snap.data == true) {
+          return FutureBuilder(
+            future: SessionManager.getCurrentUser(),
+            builder: (context, userSnap) {
+              if (!userSnap.hasData) {
+                return const LoginScreen();
+              }
+              return const HomeScreen();
+            },
+          );
+        }
         return const LoginScreen();
       },
     );

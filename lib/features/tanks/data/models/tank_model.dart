@@ -26,6 +26,8 @@ class TankModel {
   final String createdAt;
 
   final String updatedAt;
+  final String inspectionFrequencyType; // daily|weekly_once|weekly_thrice|custom_days
+  final int inspectionFrequencyDays;
 
   TankModel({
     required this.id,
@@ -42,6 +44,8 @@ class TankModel {
     required this.createdBy,
     required this.createdAt,
     required this.updatedAt,
+    this.inspectionFrequencyType = 'daily',
+    this.inspectionFrequencyDays = 1,
   });
 
   String get uniqueKey => "${tankCode}_${tankName}_${location ?? "nozone"}"
@@ -66,6 +70,8 @@ class TankModel {
         "created_by": createdBy,
         "created_at": createdAt,
         "updated_at": updatedAt,
+        "inspection_frequency_type": inspectionFrequencyType,
+        "inspection_frequency_days": inspectionFrequencyDays,
       };
 
   factory TankModel.fromMap(
@@ -111,6 +117,15 @@ class TankModel {
       createdBy: m["created_by"] ?? "",
       createdAt: m["created_at"] ?? DateTime.now().toIso8601String(),
       updatedAt: m["updated_at"] ?? DateTime.now().toIso8601String(),
+      inspectionFrequencyType:
+          (m["inspection_frequency_type"] ?? 'daily').toString(),
+      inspectionFrequencyDays: (m["inspection_frequency_days"] as num?)?.toInt() ??
+          (((m["inspection_frequency_type"] ?? 'daily').toString() == 'weekly_once')
+              ? 7
+              : ((m["inspection_frequency_type"] ?? 'daily').toString() ==
+                      'weekly_thrice')
+                  ? 2
+                  : 1),
     );
   }
 }

@@ -17,9 +17,8 @@ import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart
 
 class DashboardStatsRepository {
   static const _path = 'dashboard_stats';
-  final _db = DatabaseModeService.ref();
-
-  DatabaseReference _ref(String tankId) => _db.child('$_path/$tankId');
+  DatabaseReference _ref(String tankId) =>
+      DatabaseModeService.ref('$_path/$tankId');
 
   // ── Read ──────────────────────────────────────────────────────────────────
 
