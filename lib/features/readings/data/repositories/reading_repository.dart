@@ -21,6 +21,7 @@ class ReadingRepository {
     required double level,
     required String capturedBy,
     required String capturedByName,
+    String? capturedAtStart,
 
     /// Dynamic property values collected from the inspection form.
     /// Key   = property label  (e.g. "Oil Temperature")
@@ -43,6 +44,7 @@ class ReadingRepository {
       source: "manual",
       capturedBy: capturedBy,
       capturedByName: capturedByName,
+      capturedAtStart: capturedAtStart,
       capturedAt: DateTime.now().toIso8601String(),
     );
 

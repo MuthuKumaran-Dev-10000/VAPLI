@@ -260,6 +260,9 @@ class TankAdminCardState extends State<TankAdminCard> {
   @override
   Widget build(BuildContext context) {
     final t = widget.tank;
+    final paramCount = t.inspectionProperties
+        .where((p) => (p['type']?.toString() ?? '') != 'group')
+        .length;
 
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -317,10 +320,10 @@ class TankAdminCardState extends State<TankAdminCard> {
                               fontSize: 11, color: Colors.grey.shade500)),
                     ]),
                   ],
-                  if ((t.inspectionProperties ?? []).isNotEmpty) ...[
+                  if (paramCount > 0) ...[
                     const SizedBox(height: 4),
                     Text(
-                      '${t.inspectionProperties!.length} param${t.inspectionProperties!.length == 1 ? '' : 's'}',
+                      '$paramCount param${paramCount == 1 ? '' : 's'}',
                       style:
                           TextStyle(fontSize: 11, color: Colors.blue.shade400),
                     ),

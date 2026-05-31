@@ -32,7 +32,27 @@ class _DropdownStatBlock extends StatelessWidget {
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: entries.asMap().entries.map((e) {
+      children: [
+        if (stat.lastValue != null) ...[
+          Row(
+            children: [
+              Text('Latest Value: ',
+                  style: GoogleFonts.dmSans(
+                      fontSize: 12,
+                      color: _kSub,
+                      fontWeight: FontWeight.w500)),
+              Text(
+                '${stat.lastValue}',
+                style: GoogleFonts.spaceGrotesk(
+                    fontSize: 13,
+                    color: _kTeal,
+                    fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+        ],
+        ...entries.asMap().entries.map((e) {
         final idx = e.key;
         final opt = e.value.key;
         final count = e.value.value;
@@ -90,6 +110,7 @@ class _DropdownStatBlock extends StatelessWidget {
           ),
         );
       }).toList(),
-    );
+    ],
+  );
   }
 }

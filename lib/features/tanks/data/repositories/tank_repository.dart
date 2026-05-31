@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:firebase_database/firebase_database.dart';
 
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
+import 'package:lubrication_indicator/core/services/client_context_service.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/services/env_config.dart';
 
@@ -29,6 +30,13 @@ class TankRepository {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<String> _clientNameOrFallback(String fallback) async {
+    final resolved = await ClientContextService.resolveClientName(
+      fallback: fallback,
+    );
+    return resolved?.trim() ?? fallback.trim();
   }
 
   Stream<List<TankModel>> watchTanks() {
@@ -115,13 +123,14 @@ class TankRepository {
     required String createdBy,
     required List<Map<String, dynamic>> properties,
   }) async {
+    final resolvedLocation = await _clientNameOrFallback(location);
     final existing = await getAllTanks();
 
     final duplicate = existing.any(
       (t) =>
           t.tankCode == tankCode &&
           t.tankName.toLowerCase() == tankName.toLowerCase() &&
-          (t.location ?? "").toLowerCase() == location.toLowerCase(),
+          (t.location ?? "").toLowerCase() == resolvedLocation.toLowerCase(),
     );
 
     if (duplicate) {
@@ -136,16 +145,33 @@ class TankRepository {
       "tank_id": id,
       "tank_code": tankCode,
       "tank_name": tankName,
-      "location": location,
+      "location": resolvedLocation,
     });
 
     final now = DateTime.now().toIso8601String();
+
+    final groupsMap = <String, dynamic>{};
+    for (final entry in properties.asMap().entries) {
+      final index = entry.key;
+      final prop = entry.value;
+      if (prop['type'] == 'group') {
+        final gId = prop['id'] as String;
+        groupsMap[gId] = {
+          'id': gId,
+          'name': prop['label'] ?? '',
+          'order': index,
+          'rows': prop['rows'] ?? 1,
+          'cols': prop['cols'] ?? 1,
+          'grid_params': prop['grid_params'] ?? [],
+        };
+      }
+    }
 
     final tank = TankModel(
       id: id,
       tankCode: tankCode,
       tankName: tankName,
-      location: location,
+      location: resolvedLocation,
       qrJson: qrPayload,
       qrImageUrl: qrImageUrl,
       inspectionProperties: properties,
@@ -155,6 +181,7 @@ class TankRepository {
       createdBy: createdBy,
       createdAt: now,
       updatedAt: now,
+      groups: groupsMap,
     );
 
     await _ref(
@@ -243,6 +270,7 @@ class TankRepository {
     String? qrImageUrl,
     required List<Map<String, dynamic>> properties,
   }) async {
+    final resolvedLocation = await _clientNameOrFallback(location);
     final existing = await getAllTanks();
 
     final duplicate = existing.any(
@@ -250,7 +278,7 @@ class TankRepository {
           t.id != id &&
           t.tankCode == tankCode &&
           t.tankName.toLowerCase() == tankName.toLowerCase() &&
-          (t.location ?? "").toLowerCase() == location.toLowerCase(),
+          (t.location ?? "").toLowerCase() == resolvedLocation.toLowerCase(),
     );
 
     if (duplicate) {
@@ -263,18 +291,36 @@ class TankRepository {
       "tank_id": id,
       "tank_code": tankCode,
       "tank_name": tankName,
-      "location": location,
+      "location": resolvedLocation,
     });
+
+    final groupsMap = <String, dynamic>{};
+    for (final entry in properties.asMap().entries) {
+      final index = entry.key;
+      final prop = entry.value;
+      if (prop['type'] == 'group') {
+        final gId = prop['id'] as String;
+        groupsMap[gId] = {
+          'id': gId,
+          'name': prop['label'] ?? '',
+          'order': index,
+          'rows': prop['rows'] ?? 1,
+          'cols': prop['cols'] ?? 1,
+          'grid_params': prop['grid_params'] ?? [],
+        };
+      }
+    }
 
     final updateMap = {
       "tank_code": tankCode,
       "tank_name": tankName,
-      "location": location,
+      "location": resolvedLocation,
       "qr_json": qrPayload,
       "inspection_properties": properties,
       "scale_max": scaleMax,
       "scale_side": scaleSide,
       "updated_at": DateTime.now().toIso8601String(),
+      "Groups": groupsMap,
     };
 
     // only overwrite if create_tank_screen
@@ -310,9 +356,9 @@ class TankRepository {
                   : '${oldPath.substring(0, lastSlash)}/$tankName';
             }
             updates['$nodeId/name'] = tankName;
-            // updates['${e.key}/zone'] = location;
-            if (location.trim().isNotEmpty) {
-                updates['${e.key}/zone'] = location;
+            // updates['${e.key}/zone'] = resolvedLocation;
+            if (resolvedLocation.trim().isNotEmpty) {
+                updates['${e.key}/zone'] = resolvedLocation;
             }
             if (newPath.isNotEmpty && newPath != oldPath) {
               updates['$nodeId/path'] = newPath;
@@ -556,16 +602,39 @@ class TankRepository {
     final newRef = DatabaseModeService.ref('tanks').push();
 
     final newId = newRef.key!;
+    final resolvedLocation = await _clientNameOrFallback(tank.location ?? '');
+    String? updatedQrJson;
+    if (tank.qrJson != null && tank.qrJson!.trim().isNotEmpty) {
+      try {
+        final qrMap = Map<String, dynamic>.from(jsonDecode(tank.qrJson!) as Map);
+        qrMap['location'] = resolvedLocation;
+        updatedQrJson = jsonEncode(qrMap);
+      } catch (_) {
+        updatedQrJson = jsonEncode({
+          'tank_id': newId,
+          'tank_code': tank.tankCode,
+          'tank_name': '${tank.tankName} (Copy)',
+          'location': resolvedLocation,
+        });
+      }
+    } else {
+      updatedQrJson = jsonEncode({
+        'tank_id': newId,
+        'tank_code': tank.tankCode,
+        'tank_name': '${tank.tankName} (Copy)',
+        'location': resolvedLocation,
+      });
+    }
 
     await newRef.set({
       'id': newId,
       'tank_code': tank.tankCode,
       'tank_name': '${tank.tankName} (Copy)',
-      'location': tank.location,
+      'location': resolvedLocation,
       'scale_max': tank.scaleMax,
       'scale_side': tank.scaleSide,
       'qr_image_url': tank.qrImageUrl,
-      'qr_json': tank.qrJson,
+      'qr_json': updatedQrJson,
       'inspection_properties': tank.inspectionProperties,
       'inspection_frequency_type': tank.inspectionFrequencyType,
       'inspection_frequency_days': tank.inspectionFrequencyDays,

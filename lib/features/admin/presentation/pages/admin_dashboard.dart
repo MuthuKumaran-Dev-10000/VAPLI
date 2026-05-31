@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
+import 'package:lubrication_indicator/core/services/audit_log_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -16,6 +17,7 @@ import 'package:lubrication_indicator/core/services/client_repository.dart';
 import 'package:lubrication_indicator/core/utils/hash_util.dart';
 import 'package:lubrication_indicator/features/auth/data/repositories/auth_repository.dart';
 import 'package:lubrication_indicator/features/admin/presentation/pages/admin_settings_page.dart';
+import 'package:lubrication_indicator/features/admin/presentation/pages/admin_audit_logs_page.dart';
 import 'package:lubrication_indicator/features/auth/data/models/user_model.dart';
 
 import 'package:lubrication_indicator/features/tanks/presentation/pages/tank_browser_screen.dart';
@@ -23,6 +25,16 @@ import 'package:lubrication_indicator/features/tanks/presentation/pages/tank_bro
 // ─────────────────────────────────────────────────────────────────────────────
 // AdminDashboard
 // ─────────────────────────────────────────────────────────────────────────────
+class _DashboardTabSpec {
+  final String key;
+  final String label;
+
+  const _DashboardTabSpec({
+    required this.key,
+    required this.label,
+  });
+}
+
 class AdminDashboard extends StatefulWidget {
   final String adminName;
   final UserModel currentUser;
@@ -57,7 +69,27 @@ class _AdminDashboardState extends State<AdminDashboard>
       AccessControlService.roleSuperAdmin;
   bool get _canViewSettings => _can(AccessControlService.pViewSettings);
   bool get _canChangeSettings => _can(AccessControlService.pChangeSettings);
-  int get _tabCount => _isSuperAdmin ? 4 : (_canViewSettings ? 3 : 2);
+  bool _canViewTab(String privilege) => _isSuperAdmin || _can(privilege);
+
+  List<_DashboardTabSpec> get _dashboardTabs {
+    final tabs = <_DashboardTabSpec>[
+      const _DashboardTabSpec(key: 'tanks', label: 'Tanks'),
+      if (_canViewTab(AccessControlService.pViewAdminClients))
+        const _DashboardTabSpec(key: 'clients', label: 'Clients'),
+      if (_canViewTab(AccessControlService.pViewAdminUsers))
+        const _DashboardTabSpec(key: 'users', label: 'Users'),
+      if (_canViewSettings)
+        const _DashboardTabSpec(key: 'settings', label: 'Settings'),
+      if (_canViewTab(AccessControlService.pViewAuditLogs))
+        const _DashboardTabSpec(key: 'audit_logs', label: 'Audit Logs'),
+    ];
+    if (tabs.isEmpty) {
+      tabs.add(const _DashboardTabSpec(key: 'empty', label: 'Dashboard'));
+    }
+    return tabs;
+  }
+
+  int get _tabCount => _dashboardTabs.length;
 
   bool _canManageMap(Map user) {
     final target = UserModel.fromMap(Map<String, dynamic>.from(user));
@@ -72,18 +104,25 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   String _tabNameByIndex(int idx) {
-    if (_isSuperAdmin) {
-      const names = ['tanks', 'clients', 'users', 'settings'];
-      if (idx >= 0 && idx < names.length) return names[idx];
-      return 'unknown';
-    }
-    const names = ['tanks', 'users'];
-    if (idx >= 0 && idx < names.length) return names[idx];
+    final tabs = _dashboardTabs;
+    if (idx >= 0 && idx < tabs.length) return tabs[idx].key;
     return 'unknown';
   }
 
   String _prettyPrivilegeLabel(String key) {
     switch (key) {
+      case AccessControlService.pOpenAdminPage:
+        return 'Can access admin module';
+      case AccessControlService.pViewAdminTanks:
+        return 'Can view Tanks tab';
+      case AccessControlService.pViewAdminClients:
+        return 'Can view Clients tab';
+      case AccessControlService.pViewAdminUsers:
+        return 'Can view Users tab';
+      case AccessControlService.pViewSettings:
+        return 'Can view Settings tab';
+      case AccessControlService.pViewAuditLogs:
+        return 'Can view Audit Logs tab';
       case AccessControlService.pCreateClient:
         return 'Can create clients';
       case AccessControlService.pCreateUsers:
@@ -98,10 +137,6 @@ class _AdminDashboardState extends State<AdminDashboard>
         return 'Can modify tank structure';
       case AccessControlService.pAllocateUsersToClients:
         return 'Can assign users to clients';
-      case AccessControlService.pOpenAdminPage:
-        return 'Can access admin module';
-      case AccessControlService.pViewSettings:
-        return 'Can view settings';
       case AccessControlService.pChangeSettings:
         return 'Can change settings';
       default:
@@ -136,6 +171,7 @@ class _AdminDashboardState extends State<AdminDashboard>
     String? clientIdOverride,
     String? clientDbKeyOverride,
     String? clientNameOverride,
+    String? cascadeId,
   }) async {
     try {
       final selectedId = clientIdOverride ?? _selectedClientId;
@@ -151,32 +187,23 @@ class _AdminDashboardState extends State<AdminDashboard>
         }
       }
 
-      final ts = DateTime.now().toIso8601String();
-      final entry = <String, dynamic>{
-        'timestamp': ts,
-        'operation': operation,
-        'entity_type': entityType,
-        'entity_id': entityId ?? '',
-        'entity_name': entityName ?? '',
-        'outcome': outcome,
-        'actor_id': widget.currentUser.id,
-        'actor_username': widget.currentUser.username,
-        'actor_name': widget.currentUser.fullName,
-        'actor_role': widget.currentUser.role,
-        'tab': _tabNameByIndex(_tabController.index),
-        'client_id': selectedId ?? '',
-        'client_db_key': selectedDbKey ?? '',
-        'client_name': selectedName ?? '',
-        'details': details ?? <String, dynamic>{},
-      };
-
-      final scopedRef = DatabaseModeService.ref('admin_audit_logs').push();
-      await scopedRef.set(entry);
-
-      final rootPrefix = DatabaseModeService.isDevelopment.value ? 'testDB/' : '';
-      final rootRef =
-          FirebaseDatabase.instance.ref('${rootPrefix}admin_audit_logs_master').push();
-      await rootRef.set(entry);
+      await AuditLogService.record(
+        operation: operation,
+        entityType: entityType,
+        entityId: entityId,
+        entityName: entityName,
+        actorId: widget.currentUser.id,
+        actorUsername: widget.currentUser.username,
+        actorName: widget.currentUser.fullName,
+        actorRole: widget.currentUser.role,
+        tab: _tabNameByIndex(_tabController.index),
+        clientId: selectedId,
+        clientDbKey: selectedDbKey,
+        clientName: selectedName,
+        details: details,
+        outcome: outcome,
+        cascadeId: cascadeId,
+      );
     } catch (_) {}
   }
 
@@ -514,9 +541,11 @@ class _AdminDashboardState extends State<AdminDashboard>
     final passCtrl = TextEditingController();
     String role = (user['role']?.toString() ?? 'user').toLowerCase();
     final selectedPriv = <String, bool>{
-      ...AccessControlService.defaultPrivilegesForRole(role),
-      ...((user['privileges'] as Map?) ?? const {})
-          .map((k, v) => MapEntry(k.toString(), v == true)),
+      ...AccessControlService.sanitizePrivilegesForRole(
+        role,
+        ((user['privileges'] as Map?) ?? const {})
+            .map((k, v) => MapEntry(k.toString(), v == true)),
+      ),
     };
     final allowedRoles = <String>['user', 'admin'];
     if (widget.currentUser.role.toLowerCase() == AccessControlService.roleSuperAdmin) {
@@ -566,9 +595,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                             onTap: () => setD(() {
                               role = r;
                               customRole = false;
+                              final next = AccessControlService.sanitizePrivilegesForRole(
+                                r,
+                                Map<String, bool>.from(selectedPriv),
+                              );
                               selectedPriv
                                 ..clear()
-                                ..addAll(AccessControlService.defaultPrivilegesForRole(r));
+                                ..addAll(next);
                             }),
                             child: Container(
                               width: 194,
@@ -663,6 +696,20 @@ class _AdminDashboardState extends State<AdminDashboard>
                     ),
                     if (showAdvanced) ...[
                       const SizedBox(height: 6),
+                      if (role == AccessControlService.roleUser)
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: EdgeInsets.only(bottom: 6),
+                            child: Text(
+                              'User accounts can only receive view permissions here.',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF94A3B8),
+                              ),
+                            ),
+                          ),
+                        ),
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(10),
@@ -673,13 +720,21 @@ class _AdminDashboardState extends State<AdminDashboard>
                         ),
                         child: Column(
                           children: AccessControlService.allPrivileges.map((p) {
+                            final isUserRole = role == AccessControlService.roleUser;
+                            final canEdit = !isUserRole ||
+                                AccessControlService.isViewPrivilege(p);
                             return CheckboxListTile(
                               dense: true,
                               contentPadding: EdgeInsets.zero,
-                              value: selectedPriv[p] == true,
-                              onChanged: (v) => setD(() => selectedPriv[p] = v == true),
+                              value: isUserRole && !AccessControlService.isViewPrivilege(p)
+                                  ? false
+                                  : selectedPriv[p] == true,
+                              onChanged: canEdit
+                                  ? (v) => setD(() => selectedPriv[p] = v == true)
+                                  : null,
                               title: Text(_prettyPrivilegeLabel(p), style: const TextStyle(fontSize: 13)),
                               controlAffinity: ListTileControlAffinity.leading,
+                              activeColor: Colors.cyanAccent,
                             );
                           }).toList(),
                         ),
@@ -733,10 +788,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                   'full_name': nameCtrl.text.trim(),
                   'username': userCtrl.text.trim(),
                   'role': role,
-                  'privileges': widget.currentUser.role.toLowerCase() ==
-                          AccessControlService.roleSuperAdmin
-                      ? selectedPriv
-                      : AccessControlService.defaultPrivilegesForRole(role),
+                  'privileges': AccessControlService.sanitizePrivilegesForRole(
+                    role,
+                    selectedPriv,
+                  ),
                 };
                 await DatabaseModeService.ref('users/$id').update({
                   ...map,
@@ -766,6 +821,180 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   // Client re-assignment and access toggle removed from UI by requirement.
+
+  Widget _buildTabBody(String key) {
+    switch (key) {
+      case 'tanks':
+        return RefreshIndicator(
+          onRefresh: _reloadAll,
+          child: TankBrowserScreen(
+            key: ValueKey(
+              'tank-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}',
+            ),
+            rootLabel: (() {
+              for (final c in _clients) {
+                if (c.id == _selectedClientId) return c.name;
+              }
+              return widget.activeClient?.name ?? 'Client';
+            })(),
+            rootFolderId: (() {
+              for (final c in _clients) {
+                if (c.id == _selectedClientId) return c.rootFolderId;
+              }
+              return widget.activeClient?.rootFolderId;
+            })(),
+            canCreate: _can(AccessControlService.pCreateTanks),
+            canModify: _can(AccessControlService.pModifyTanks),
+            canDelete: _can(AccessControlService.pDeleteTanks),
+            onAudit: _auditTankAction,
+          ),
+        );
+      case 'clients':
+        return RefreshIndicator(
+          key: ValueKey(
+            'clients-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}',
+          ),
+          onRefresh: _reloadAll,
+          child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: _clients.length,
+            itemBuilder: (_, i) {
+              final c = _clients[i];
+              return ListTile(
+                leading: const Icon(Icons.apartment_outlined),
+                title: Text(c.name),
+                subtitle: Text(c.description),
+                trailing: _can(AccessControlService.pCreateClient)
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Update',
+                            onPressed: () => _updateClient(c),
+                            icon: const Icon(Icons.edit_outlined),
+                          ),
+                          IconButton(
+                            tooltip: 'Delete',
+                            onPressed: () => _deleteClient(c),
+                            icon: const Icon(
+                              Icons.delete_outline,
+                              color: Colors.red,
+                            ),
+                          ),
+                        ],
+                      )
+                    : null,
+              );
+            },
+          ),
+        );
+      case 'users':
+        return RefreshIndicator(
+          key: ValueKey(
+            'users-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}',
+          ),
+          onRefresh: _reloadAll,
+          child: ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            itemCount: _scopedUsers.length + 1,
+            itemBuilder: (_, i) {
+              if (i == 0) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  child: Wrap(
+                    spacing: 8,
+                    children: ['super admin', 'admin', 'user'].map((role) {
+                      final selected = _userRoleFilters.contains(role);
+                      return FilterChip(
+                        label: Text(role),
+                        selected: selected,
+                        onSelected: (v) {
+                          setState(() {
+                            if (v) {
+                              _userRoleFilters.add(role);
+                            } else {
+                              _userRoleFilters.remove(role);
+                            }
+                          });
+                        },
+                      );
+                    }).toList(),
+                  ),
+                );
+              }
+
+              final user = _scopedUsers[i - 1];
+
+              final isRoot = user['username'] == 'admin' &&
+                  user['full_name'] == 'System Administrator';
+
+              return ListTile(
+                leading: const Icon(
+                  Icons.person,
+                ),
+                title: Text(
+                  user['full_name'],
+                ),
+                subtitle: Text(
+                  '${user['username']} • ${user['role']}',
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!isRoot &&
+                        _canManageMap(user) &&
+                        _can(AccessControlService.pGrantUsers))
+                      IconButton(
+                        tooltip: 'Update',
+                        onPressed: () => _updateUser(user),
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
+                    if (!isRoot &&
+                        _canManageMap(user) &&
+                        _can(AccessControlService.pGrantUsers))
+                      IconButton(
+                        tooltip: 'Delete',
+                        onPressed: () => _deleteUser(user['id']),
+                        icon: const Icon(
+                          Icons.delete,
+                          color: Colors.red,
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      case 'settings':
+        return AdminSettingsPage(
+          key: ValueKey(
+            'settings-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}',
+          ),
+          canEdit: _canChangeSettings,
+          onSettingsSaved: _auditSettingsChange,
+        );
+      case 'audit_logs':
+        return AdminAuditLogsPage(
+          key: ValueKey(
+            'audit-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}',
+          ),
+          currentUser: widget.currentUser,
+          clients: _clients,
+          selectedClientId: _selectedClientId,
+          onClientSelected: _switchClient,
+        );
+      case 'empty':
+        return const Center(
+          child: Text('No dashboard sections are enabled for this account'),
+        );
+      default:
+        return const Center(child: Text('Unavailable'));
+    }
+  }
 
   Future<void> _importStructureDialog() async {
     String? pickedPath;
@@ -834,12 +1063,83 @@ class _AdminDashboardState extends State<AdminDashboard>
                   if (raw.trim().isEmpty) throw Exception('JSON is empty');
                   final decoded = jsonDecode(raw);
                   if (decoded is! Map) throw Exception('Invalid JSON root');
+                  final clientName = await ClientContextService.resolveClientName(
+                    fallback: widget.activeClient?.name,
+                  );
+                  if (clientName == null || clientName.trim().isEmpty) {
+                    throw Exception('Select an active client before importing');
+                  }
                   final tanks = decoded['tanks'] is Map
                       ? Map<String, dynamic>.from(decoded['tanks'] as Map)
                       : <String, dynamic>{};
                   final tree = decoded['tank_tree'] is Map
                       ? Map<String, dynamic>.from(decoded['tank_tree'] as Map)
                       : <String, dynamic>{};
+                  final cascadeId = HashUtil.generateId();
+                  final importedTankNames = <String>[];
+                  var importedParamCount = 0;
+                  for (final entry in tanks.entries.toList()) {
+                    final value = entry.value;
+                    if (value is! Map) continue;
+                    final tank = Map<String, dynamic>.from(value);
+                    final tankName = tank['tank_name']?.toString() ?? '';
+                    if (tankName.isNotEmpty) importedTankNames.add(tankName);
+                    final params = tank['inspection_properties'] is List
+                        ? (tank['inspection_properties'] as List)
+                            .whereType<Map>()
+                            .toList()
+                        : const <Map>[];
+                    importedParamCount += params
+                        .where((p) => p['type']?.toString() != 'group')
+                        .length;
+                    tank['location'] = clientName;
+                    final qrJson = tank['qr_json'];
+                    if (qrJson is String && qrJson.trim().isNotEmpty) {
+                      try {
+                        final qrMap = Map<String, dynamic>.from(jsonDecode(qrJson) as Map);
+                        qrMap['location'] = clientName;
+                        tank['qr_json'] = jsonEncode(qrMap);
+                      } catch (_) {
+                        tank['qr_json'] = jsonEncode({
+                          'tank_id': tank['id']?.toString() ?? entry.key.toString(),
+                          'tank_code': tank['tank_code']?.toString() ?? '',
+                          'tank_name': tank['tank_name']?.toString() ?? '',
+                          'location': clientName,
+                        });
+                      }
+                    } else {
+                      tank['qr_json'] = jsonEncode({
+                        'tank_id': tank['id']?.toString() ?? entry.key.toString(),
+                        'tank_code': tank['tank_code']?.toString() ?? '',
+                        'tank_name': tank['tank_name']?.toString() ?? '',
+                        'location': clientName,
+                      });
+                    }
+                    tanks[entry.key] = tank;
+                  }
+
+                  dynamic rewriteTreeZones(dynamic value) {
+                    if (value is Map) {
+                      final node = <String, dynamic>{};
+                      for (final entry in value.entries) {
+                        final key = entry.key.toString();
+                        final child = entry.value;
+                        node[key] = rewriteTreeZones(child);
+                      }
+                      if (node.containsKey('zone')) {
+                        node['zone'] = clientName;
+                      }
+                      return node;
+                    }
+                    if (value is List) {
+                      return value.map(rewriteTreeZones).toList();
+                    }
+                    return value;
+                  }
+
+                  for (final entry in tree.entries.toList()) {
+                    tree[entry.key] = rewriteTreeZones(entry.value);
+                  }
                   final tanksRef = DatabaseModeService.ref('tanks');
                   final treeRef = DatabaseModeService.ref('tank_tree');
                   if (replace) {
@@ -857,7 +1157,14 @@ class _AdminDashboardState extends State<AdminDashboard>
                   await _audit(
                     operation: 'import_structure',
                     entityType: 'tank_structure',
-                    details: {'replace_mode': replace},
+                    details: {
+                      'replace_mode': replace,
+                      'cascade_id': cascadeId,
+                      'imported_tank_count': tanks.length,
+                      'imported_parameter_count': importedParamCount,
+                      'imported_tanks': importedTankNames,
+                    },
+                    cascadeId: cascadeId,
                   );
                 } catch (e) {
                   if (!mounted) return;
@@ -867,7 +1174,10 @@ class _AdminDashboardState extends State<AdminDashboard>
                   await _audit(
                     operation: 'import_structure',
                     entityType: 'tank_structure',
-                    details: {'replace_mode': replace, 'error': e.toString()},
+                    details: {
+                      'replace_mode': replace,
+                      'error': e.toString(),
+                    },
                     outcome: 'failure',
                   );
                 }
@@ -1121,20 +1431,110 @@ class _AdminDashboardState extends State<AdminDashboard>
         ),
       );
     }
+    final tabs = _dashboardTabs;
+    final currentIndex = _tabController.index.clamp(0, tabs.length - 1).toInt();
+    final currentTabKey = tabs[currentIndex].key;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Admin Dashboard'),
         centerTitle: true,
         actions: [
-          if (_isSuperAdmin &&
-              _tabController.index == 1 &&
+          if (currentTabKey == 'clients' &&
               _can(AccessControlService.pCreateClient))
             IconButton(
               tooltip: 'Create Client',
               onPressed: _createClient,
               icon: const Icon(Icons.apartment_outlined),
             ),
-          if (_tabController.index == 0) ...[
+          if (currentTabKey == 'tanks') ...[
+            IconButton(
+              tooltip: 'Export Structure',
+              onPressed: _exportStructure,
+              icon: const Icon(Icons.download_rounded),
+            ),
+            IconButton(
+              tooltip: 'Import Structure',
+              onPressed: _importStructureDialog,
+              icon: const Icon(Icons.upload_rounded),
+            ),
+          ],
+        ],
+        bottom: PreferredSize(
+          preferredSize: Size.fromHeight(_isSuperAdmin ? 94 : 48),
+          child: Column(
+            children: [
+              if (_isSuperAdmin)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: DropdownButtonFormField<String>(
+                        value: _selectedClientId,
+                        isExpanded: true,
+                        menuMaxHeight: 360,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          labelText: 'Switch Client',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _clients
+                            .map(
+                              (c) => DropdownMenuItem<String>(
+                                value: c.id,
+                                child: Text(
+                                  c.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _switchClient,
+                      ),
+                    ),
+                  ),
+                ),
+              TabBar(
+                controller: _tabController,
+                onTap: (_) {
+                  if (mounted) setState(() {});
+                },
+                tabs: tabs.map((tab) => Tab(text: tab.label)).toList(),
+              ),
+            ],
+          ),
+        ),
+      ),
+      floatingActionButton: currentTabKey == 'clients' &&
+              _can(AccessControlService.pCreateClient)
+          ? FloatingActionButton(
+              onPressed: _createClient,
+              child: const Icon(Icons.apartment_outlined),
+            )
+          : currentTabKey == 'users' && _can(AccessControlService.pCreateUsers)
+              ? FloatingActionButton(
+                  onPressed: _createUser,
+                  child: const Icon(Icons.person_add_alt_1),
+                )
+              : null,
+      body: TabBarView(
+        controller: _tabController,
+        children: tabs.map((tab) => _buildTabBody(tab.key)).toList(),
+      ),
+    );
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Admin Dashboard'),
+        centerTitle: true,
+        actions: [
+          if (currentTabKey == 'clients' &&
+              _can(AccessControlService.pCreateClient))
+            IconButton(
+              tooltip: 'Create Client',
+              onPressed: _createClient,
+              icon: const Icon(Icons.apartment_outlined),
+            ),
+          if (currentTabKey == 'tanks') ...[
             IconButton(
               tooltip: 'Export Structure',
               onPressed: _exportStructure,
@@ -1184,12 +1584,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                 onTap: (_) {
                   if (mounted) setState(() {});
                 },
-                tabs: [
-                  const Tab(text: 'Tanks'),
-                  if (_isSuperAdmin) const Tab(text: 'Clients'),
-                  const Tab(text: 'Users'),
-                  if (_isSuperAdmin || _canViewSettings) const Tab(text: 'Settings'),
-                ],
+                tabs: tabs.map((tab) => Tab(text: tab.label)).toList(),
               ),
             ],
           ),
@@ -1366,6 +1761,14 @@ class _AdminDashboardState extends State<AdminDashboard>
               key: ValueKey('settings-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}'),
               canEdit: _canChangeSettings,
               onSettingsSaved: _auditSettingsChange,
+            ),
+          if (_isSuperAdmin)
+            AdminAuditLogsPage(
+              key: ValueKey('audit-tab-$_tabRefreshTick-${_selectedClientId ?? 'none'}'),
+              currentUser: widget.currentUser,
+              clients: _clients,
+              selectedClientId: _selectedClientId,
+              onClientSelected: _switchClient,
             ),
         ],
       ),

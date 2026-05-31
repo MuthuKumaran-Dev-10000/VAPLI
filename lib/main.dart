@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/theme/app_theme.dart';
+import 'core/services/access_control_service.dart';
 import 'core/services/database_mode_service.dart';
 import 'core/services/firebase_env_options.dart';
 import 'core/utils/session_manager.dart';
@@ -38,16 +39,9 @@ Future<void> createTestAdmin() async {
         '7d20f317b9e34c36747cf8275645ab8fe145e29b70f3722a6fcd7d0cff2cd0c8',
     'role': 'super admin',
     'username': 'admin',
-    'privileges': {
-      'create_client': true,
-      'create_users': true,
-      'grant_users': true,
-      'create_tanks': true,
-      'delete_tanks': true,
-      'modify_tanks': true,
-      'allocate_users_to_clients': true,
-      'open_admin_page': true,
-    },
+    'privileges': AccessControlService.defaultPrivilegesForRole(
+      AccessControlService.roleSuperAdmin,
+    ),
     'client_ids': <String>[],
   };
 

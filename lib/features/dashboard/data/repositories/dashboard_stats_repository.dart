@@ -61,6 +61,7 @@ class DashboardStatsRepository {
       if (label.isEmpty) continue;
 
       final type = (prop['type'] as String?) ?? 'text';
+      if (type == 'group') continue;
       final rawValue = reading.inspectionValues[label];
 
       final existing = updatedStats[label] ?? ParamStat(type: type);

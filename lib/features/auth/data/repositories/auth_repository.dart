@@ -137,8 +137,10 @@ class AuthRepository {
       fullName: fullName,
       passwordHash: HashUtil.hashPassword(password),
       role: role,
-      privileges: privileges ??
-          AccessControlService.defaultPrivilegesForRole(role),
+      privileges: AccessControlService.sanitizePrivilegesForRole(
+        role,
+        privileges ?? AccessControlService.defaultPrivilegesForRole(role),
+      ),
       clientIds: clientIds,
       phone: phone,
       email: email,

@@ -131,6 +131,7 @@ class ParamStat {
       m['max'] = max ?? 0.0;
     } else if (isDropdown) {
       m['option_counts'] = optionCounts;
+      m['last_value'] = lastValue;
     } else if (type == 'dual_text') {
       m['last_value'] = lastValue;
 
@@ -160,7 +161,11 @@ class ParamStat {
           counts[e.key.toString()] = (e.value as num).toInt();
         }
       }
-      return ParamStat(type: type, optionCounts: counts);
+      return ParamStat(
+        type: type,
+        optionCounts: counts,
+        lastValue: m['last_value'],
+      );
     } else if (type == 'dual_text') {
       return ParamStat(
         type: type,
@@ -201,7 +206,7 @@ class ParamStat {
   ParamStat withNewOption(String option) {
     final updated = Map<String, int>.from(optionCounts);
     updated[option] = (updated[option] ?? 0) + 1;
-    return ParamStat(type: type, optionCounts: updated);
+    return ParamStat(type: type, optionCounts: updated, lastValue: option);
   }
 
   /// Returns a ParamStat with updated last text value.

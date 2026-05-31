@@ -33,6 +33,8 @@ import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:lubrication_indicator/core/services/audit_log_service.dart';
+import 'package:lubrication_indicator/core/utils/session_manager.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/widgets.dart' as pw;

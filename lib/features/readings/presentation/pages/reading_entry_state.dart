@@ -52,21 +52,28 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   // ── Manual captures ───────────────────────────────────────────────────
   final List<_ManualCaptureEntry> _manualCaptures = [];
 
+  // ── Track grouped parameters to skip flat rendering ──────────────────
+  final Set<String> _groupedParamIds = {};
+
   // ── Deep copy of inspection properties ────────────────────────────────
   late final List<Map<String, dynamic>> _props;
+  late final String _capturedAtStart;
 
   // ── Which autofill params depend on which param ids ───────────────────
   // autofillParamId → Set<dependencyParamId>
   final Map<String, Set<String>> _autofillDeps = {};
 
   String get _nowLabel =>
-      DateFormat('dd MMM yyyy, HH:mm:ss').format(DateTime.now());
+      DateFormat('dd MMM yyyy, HH:mm:ss').format(
+        DateTime.parse(_capturedAtStart),
+      );
 
   // ── lifecycle ──────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
+    _capturedAtStart = DateTime.now().toIso8601String();
 
     _props = widget.tank.inspectionProperties.map((p) {
       return Map<String, dynamic>.from(p.map((k, v) {
@@ -75,6 +82,20 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         return MapEntry(k, v);
       }));
     }).toList();
+
+    // Identify all parameter IDs that belong to any group
+    for (final p in _props) {
+      if (p['type'] == 'group') {
+        final grid = p['grid_params'] as List?;
+        if (grid != null) {
+          for (final cell in grid) {
+            if (cell != null && cell.toString().isNotEmpty) {
+              _groupedParamIds.add(cell.toString());
+            }
+          }
+        }
+      }
+    }
 
     for (final p in _props) {
       final id = p['id'] as String;
@@ -245,6 +266,16 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
     if (type == 'number') return double.tryParse(_textCtrl[pid]?.text.trim() ?? '');
     if (type == 'slider') return _sliderVal[pid];
+    if (type == 'dropdown') {
+      final raw = _dropdownVal[pid]?.trim() ?? '';
+      if (raw.isEmpty) return null;
+      final numeric = double.tryParse(raw);
+      if (numeric != null) return numeric;
+      throw _MathException(
+        'Expected a numerical value but got string. Please enter it manually.',
+        'DropdownValueTypeException',
+      );
+    }
     return null;
   }
 
@@ -485,6 +516,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       if (allFilled) {
         final result = await _evaluateExpression(expression);
         setState(() {
+          if (result.hasError &&
+              result.exceptionName == 'DropdownValueTypeException') {
+            _autofillEnabled[autofillId] = false;
+          }
           _autofillResult[autofillId] = result;
           if (!result.hasError && result.value != null) {
             // Update the text controller with the computed value
@@ -921,6 +956,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     for (final p in _props) {
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
+      if (type == 'group') continue;
       final label = p['label'] as String? ?? 'Parameter';
       final isReq = p['required'] == true;
       final hasCam = p['capture_image'] == true;
@@ -960,6 +996,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   bool get _hasMissingViolationPhoto {
     for (final p in _props) {
+      if (p['type'] == 'group') continue;
       final id = p['id'] as String;
       final vList = _violations[id] ?? [];
       for (final v in vList) {
@@ -986,6 +1023,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     if (_hasMissingViolationPhoto) return false;
     if (_hasUploadInProgress) return false;
     for (final p in _props) {
+      if (p['type'] == 'group') continue;
       if (p['capture_image'] == true) {
         if (_paramPhoto[p['id'] as String] == null) return false;
       }
@@ -1000,6 +1038,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     for (final p in _props) {
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
+      if (type == 'group') continue;
       final label = p['label'] as String? ?? id;
 
       switch (type) {
@@ -1108,6 +1147,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         level: 0,
         capturedBy: widget.currentUser.id,
         capturedByName: widget.currentUser.fullName,
+        capturedAtStart: _capturedAtStart,
         imageUrl: primaryImageUrl,
         inspectionValues: inspVals,
       );
@@ -1116,6 +1156,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         reading: reading,
         tank: widget.tank,
       );
+
+      await _auditReadingSave(reading, inspVals);
 
       for (final p in _props) {
         if (p['keep_previous_capture'] != true) continue;
@@ -1160,6 +1202,34 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         _uploadError = e.toString().replaceAll('Exception: ', '');
       });
     }
+  }
+
+  Future<void> _auditReadingSave(
+    dynamic reading,
+    Map<String, dynamic> values,
+  ) async {
+    try {
+      await AuditLogService.record(
+        operation: 'save_reading',
+        entityType: 'reading',
+        entityId: reading.id?.toString(),
+        entityName: widget.tank.tankName,
+        actorId: widget.currentUser.id,
+        actorUsername: widget.currentUser.username,
+        actorName: widget.currentUser.fullName,
+        actorRole: widget.currentUser.role,
+        tab: 'readings',
+        clientName: widget.tank.location,
+        details: {
+          'tank_id': widget.tank.id,
+          'tank_code': widget.tank.tankCode,
+          'tank_name': widget.tank.tankName,
+          'inspection_value_count': values.length,
+          'summary': 'Saved reading for ${widget.tank.tankName}',
+        },
+        summary: 'Saved reading for ${widget.tank.tankName}',
+      );
+    } catch (_) {}
   }
 
   void _snack(String msg, Color bg) {
@@ -1243,7 +1313,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               Text('Fields marked * are required',
                   style: GoogleFonts.dmSans(fontSize: 11, color: _kSub)),
               const SizedBox(height: 16),
-              ..._props.map(_buildPropField),
+              ..._props.map((p) => _buildPropField(p, isNested: false)),
             ],
 
             if (_showManualCaptures) ...[
@@ -1569,9 +1639,161 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Property field builder ─────────────────────────────────────────────
 
-  Widget _buildPropField(Map<String, dynamic> p) {
+  Map<String, dynamic>? _getPropById(String id) {
+    if (id.isEmpty) return null;
+    try {
+      return _props.firstWhere((p) => p['id'] == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Widget _buildPropField(Map<String, dynamic> p, {bool isNested = false}) {
     final id = p['id'] as String;
     final type = p['type'] as String? ?? 'text';
+
+    if (!isNested && _groupedParamIds.contains(id)) {
+      return const SizedBox.shrink();
+    }
+
+    if (type == 'group') {
+      final label = p['label'] as String? ?? 'Group';
+      final hint = p['hint'] as String? ?? '';
+        final int rows = p['rows'] is int
+          ? p['rows'] as int
+          : int.tryParse(p['rows']?.toString() ?? '1') ?? 1;
+      final int cols = p['cols'] is int
+          ? p['cols'] as int
+          : int.tryParse(p['cols']?.toString() ?? '1') ?? 1;
+      final int displayCols = cols > 2 ? 2 : cols;
+      final rawGrid = List<String>.from(p['grid_params'] ?? const []);
+      final totalCells = rows * cols;
+      final gridParams = rawGrid.length < totalCells
+          ? [
+              ...rawGrid,
+              ...List.generate(totalCells - rawGrid.length, (_) => ''),
+            ]
+          : rawGrid.take(totalCells).toList();
+
+      Widget buildGridCell(int index) {
+        final cellParamId = gridParams[index];
+        final cellParam = _getPropById(cellParamId);
+        final isEmpty = cellParamId.trim().isEmpty;
+        final isMissing = !isEmpty && cellParam == null;
+
+        if (cellParam == null) {
+          return Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _kSurface.withOpacity(0.55),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: isMissing ? _kWarn : _kBorder),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'Slot ${index + 1}',
+                  style: GoogleFonts.dmSans(
+                    color: _kSub,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Icon(
+                  isMissing
+                      ? Icons.error_outline_rounded
+                      : Icons.grid_view_rounded,
+                  size: 18,
+                  color: isMissing ? _kWarn : _kSub,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  isMissing ? 'Missing param: $cellParamId' : 'Empty slot',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.dmSans(
+                    color: isMissing ? _kWarn : _kSub,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: _kCard,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildPropField(cellParam, isNested: true),
+            ],
+          ),
+        );
+      }
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 24),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: _kCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: _kBorder, width: 1.5),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label.toUpperCase(),
+              style: GoogleFonts.dmSans(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: _kTeal,
+                letterSpacing: 1.2,
+              ),
+            ),
+            if (hint.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                hint,
+                style: GoogleFonts.dmSans(
+                  fontSize: 11,
+                  color: _kSub,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Column(
+              children: List.generate(rows, (r) {
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12.0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: List.generate(displayCols, (c) {
+                      return Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6.0),
+                          child: buildGridCell(r * cols + c),
+                        ),
+                      );
+                    }),
+                  ),
+                );
+              }),
+            ),
+          ],
+        ),
+      );
+    }
+
     final label = p['label'] as String? ?? 'Parameter';
     final hint = p['hint'] as String? ?? '';
     final isReq = p['required'] == true;
@@ -1592,7 +1814,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
 
     return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
+      padding: EdgeInsets.only(bottom: isNested ? 0 : 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1636,6 +1858,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                     final result = await _evaluateExpression(expr);
                     if (!mounted) return;
                     setState(() {
+                      if (result.hasError &&
+                          result.exceptionName ==
+                              'DropdownValueTypeException') {
+                        _autofillEnabled[id] = false;
+                      }
                       _autofillResult[id] = result;
                       if (!result.hasError && result.value != null) {
                         final formatted =

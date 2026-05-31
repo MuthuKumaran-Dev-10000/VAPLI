@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:lubrication_indicator/core/services/client_context_service.dart';
+import 'package:lubrication_indicator/core/services/audit_log_service.dart';
 import 'package:lubrication_indicator/core/services/expression_engine.dart';
 import 'package:lubrication_indicator/core/utils/session_manager.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
@@ -60,6 +62,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
   final _codeCtrl = TextEditingController();
   final _nameCtrl = TextEditingController();
   final _locCtrl = TextEditingController();
+  String _clientName = '';
 
   final List<Map<String, dynamic>> _properties = [];
   bool _saving = false;
@@ -85,8 +88,6 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
       _nameCtrl.text = widget.isDuplicate
           ? '${t['tank_name']} (copy)'
           : (t['tank_name'] ?? '');
-      _locCtrl.text = t['location'] ?? '';
-      if (_locCtrl.text.trim().isEmpty) _locCtrl.text = '';
       if (t['inspection_properties'] != null) {
         _properties.addAll(
           (t['inspection_properties'] as List)
@@ -95,10 +96,21 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
       }
       debugPrint(
           '[CreateTankScreen] Loaded existing tank: code=${_codeCtrl.text} '
-          'name=${_nameCtrl.text} props=${_properties.length}');
+          'name=${_nameCtrl.text} props=${_properties.where((p) => p['type'] != 'group').length}');
     }
-    if (_locCtrl.text.trim().isEmpty) _locCtrl.text = '';
+    _syncClientName();
     _syncScopeParams();
+  }
+
+  Future<void> _syncClientName() async {
+    final resolved = await ClientContextService.resolveClientName(
+      fallback: widget.existingTank?['location']?.toString(),
+    );
+    if (!mounted) return;
+    setState(() {
+      _clientName = resolved ?? '';
+      _locCtrl.text = _clientName;
+    });
   }
 
   @override
@@ -130,12 +142,17 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
       }
       debugPrint('[Save] Session OK — userId=${user.id}');
 
+      await _syncClientName();
+
       final tankCode = _codeCtrl.text.trim();
       final tankName = _nameCtrl.text.trim();
       final location = _locCtrl.text.trim();
+      if (location.isEmpty) {
+        throw Exception('Select an active client before saving the tank');
+      }
       const scaleMax = 100.0;
       debugPrint('[Save] Fields: code=$tankCode name=$tankName loc=$location '
-          'scaleMax=$scaleMax scaleSide=left props=${_properties.length}');
+          'scaleMax=$scaleMax scaleSide=left props=${_properties.where((p) => p['type'] != 'group').length}');
 
       if (_isEdit) {
         debugPrint('[Save] Mode = EDIT/UPDATE');
@@ -165,6 +182,15 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
           qrImageUrl: newQrUrl,
         );
         debugPrint('[Save] updateTank SUCCESS');
+        await _auditTankSave(
+          user: user,
+          operation: 'update_tank',
+          tankId: existing['id']?.toString(),
+          tankCode: tankCode,
+          tankName: tankName,
+          location: location,
+          previousTank: existing,
+        );
       } else {
         debugPrint('[Save] Mode = CREATE (or DUPLICATE)');
         debugPrint('[Save] Generating QR for new tank…');
@@ -185,6 +211,13 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
           properties: _properties,
         );
         debugPrint('[Save] createTank SUCCESS');
+        await _auditTankSave(
+          user: user,
+          operation: 'create_tank',
+          tankCode: tankCode,
+          tankName: tankName,
+          location: location,
+        );
       }
 
       if (mounted) {
@@ -207,9 +240,126 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
 
   // ── property builder navigation ────────────────────────────────────────────
 
+  Future<void> _auditTankSave({
+    required dynamic user,
+    required String operation,
+    String? tankId,
+    required String tankCode,
+    required String tankName,
+    required String location,
+    Map<String, dynamic>? previousTank,
+  }) async {
+    try {
+      final previousProperties = previousTank == null
+          ? <Map<String, dynamic>>[]
+          : List<Map<String, dynamic>>.from(
+              (previousTank['inspection_properties'] as List? ?? const [])
+                  .map((e) => deepCast(e) as Map<String, dynamic>),
+            );
+      final currentProperties = List<Map<String, dynamic>>.from(_properties);
+
+      final previousIds = previousProperties
+          .map((p) => p['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+      final currentIds = currentProperties
+          .map((p) => p['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toSet();
+
+      final coreChanges = <String>[];
+      if (previousTank != null) {
+        if (previousTank['tank_code']?.toString() != tankCode) {
+          coreChanges.add('tank_code');
+        }
+        if (previousTank['tank_name']?.toString() != tankName) {
+          coreChanges.add('tank_name');
+        }
+        if (previousTank['location']?.toString() != location) {
+          coreChanges.add('location');
+        }
+      }
+
+      final added = currentProperties
+          .where((p) => !previousIds.contains(p['id']?.toString() ?? ''))
+          .map((p) => p['label']?.toString() ?? p['id']?.toString() ?? '')
+          .where((v) => v.isNotEmpty)
+          .toList();
+      final removed = previousProperties
+          .where((p) => !currentIds.contains(p['id']?.toString() ?? ''))
+          .map((p) => p['label']?.toString() ?? p['id']?.toString() ?? '')
+          .where((v) => v.isNotEmpty)
+          .toList();
+
+      final updated = <String>[];
+      for (final now in currentProperties) {
+        final id = now['id']?.toString() ?? '';
+        if (id.isEmpty || !previousIds.contains(id)) continue;
+        final before = previousProperties.firstWhere((p) => p['id']?.toString() == id);
+        if (_paramDigest(before) != _paramDigest(now)) {
+          updated.add(now['label']?.toString() ?? id);
+        }
+      }
+
+      final groupCount = currentProperties
+          .where((p) => (p['type']?.toString() ?? '') == 'group')
+          .length;
+      final nonGroupCount = currentProperties.length - groupCount;
+      final summary = operation == 'create_tank'
+          ? 'Created tank $tankName with $nonGroupCount inspection parameters'
+          : coreChanges.isEmpty && added.isEmpty && removed.isEmpty && updated.isEmpty
+              ? 'Updated tank $tankName'
+              : 'Updated tank $tankName (${[
+                  ...coreChanges.map((v) => 'core:$v'),
+                  ...added.map((v) => '+$v'),
+                  ...updated.map((v) => '~$v'),
+                  ...removed.map((v) => '-$v'),
+                ].join(', ')})';
+
+      await AuditLogService.record(
+        operation: operation,
+        entityType: 'tank',
+        entityId: tankId,
+        entityName: tankName,
+        actorId: user.id,
+        actorUsername: user.username,
+        actorName: user.fullName,
+        actorRole: user.role,
+        tab: 'tanks',
+        clientName: location,
+        details: {
+          'tank_code': tankCode,
+          'tank_name': tankName,
+          'location': location,
+          'inspection_parameter_count': nonGroupCount,
+          'group_count': groupCount,
+          'core_changes': coreChanges,
+          'added_parameters': added,
+          'updated_parameters': updated,
+          'removed_parameters': removed,
+          'summary': summary,
+        }..removeWhere((key, value) => value == null),
+        summary: summary,
+      );
+    } catch (_) {}
+  }
+
+  String _paramDigest(Map<String, dynamic> param) {
+    final clone = Map<String, dynamic>.from(param)..remove('id');
+    final keys = clone.keys.toList()..sort();
+    final ordered = <String, dynamic>{};
+    for (final key in keys) {
+      ordered[key] = clone[key];
+    }
+    return jsonEncode(ordered);
+  }
+
   Future<void> _openPropertyBuilder({Map<String, dynamic>? existing}) async {
     debugPrint(
         '[Props] Opening property builder — existing=${existing?['id']}');
+    await _syncClientName();
+    await _syncScopeParams();
+    if (!mounted) return;
     await Navigator.push<void>(
       context,
       MaterialPageRoute(
@@ -222,8 +372,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
               final idx = _properties.indexWhere((e) => e['id'] == prop['id']);
               if (idx == -1) {
                 _properties.add(prop);
-                debugPrint(
-                    '[Props] Added new property. Total=${_properties.length}');
+                debugPrint('[Props] Added new property. Total=${_properties.where((e) => e['type'] != 'group').length}');
               } else {
                 _properties[idx] = prop;
                 debugPrint('[Props] Updated existing property at index=$idx');
@@ -241,7 +390,10 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
     await SessionParamStore.clearScope(_paramScopeId);
     await SessionParamStore.upsertMany(
       _paramScopeId,
-      _properties.map((e) => Map<String, dynamic>.from(e)).toList(),
+      _properties
+          .where((e) => e['type'] != 'group')
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList(),
     );
   }
 
@@ -490,7 +642,6 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: opts
-              .take(4)
               .map((o) => Padding(
                     padding: const EdgeInsets.only(top: 3),
                     child: Row(children: [
@@ -533,6 +684,66 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
       case 'multiline':
         return _darkBox(hint.isNotEmpty ? hint : 'Multiline comment…',
             height: 52);
+
+      case 'group':
+        final int rows = p['rows'] is int ? p['rows'] as int : int.tryParse(p['rows']?.toString() ?? '1') ?? 1;
+        final int cols = p['cols'] is int ? p['cols'] as int : int.tryParse(p['cols']?.toString() ?? '1') ?? 1;
+        final gridParams = List<String>.from(p['grid_params'] ?? []);
+
+        return Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: kSurface,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: kBorder),
+          ),
+          child: Column(
+            children: List.generate(rows, (r) {
+              return Row(
+                children: List.generate(cols, (c) {
+                  final int gridIndex = r * cols + c;
+                  final cellParamId = gridIndex < gridParams.length ? gridParams[gridIndex] : "";
+                  
+                  String cellLabel = "Empty";
+                  if (cellParamId.isNotEmpty) {
+                    try {
+                      final matched = _properties.firstWhere((element) => element['id'] == cellParamId);
+                      cellLabel = matched['label'] as String? ?? cellParamId;
+                    } catch (_) {
+                      cellLabel = cellParamId;
+                    }
+                  }
+
+                  return Expanded(
+                    child: Container(
+                      margin: const EdgeInsets.all(2),
+                      padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                      decoration: BoxDecoration(
+                        color: cellParamId.isNotEmpty ? kCard : Colors.transparent,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(
+                          color: cellParamId.isNotEmpty ? kBorder : kBorder.withOpacity(0.5),
+                          style: BorderStyle.solid,
+                        ),
+                      ),
+                      child: Text(
+                        cellLabel,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: cellParamId.isNotEmpty ? kText : kSub,
+                          fontWeight: cellParamId.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              );
+            }),
+          ),
+        );
 
       default:
         return _darkBox(hint.isNotEmpty ? hint : type);
@@ -578,6 +789,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
     'dual_text': kWarn,
     'slider': Color(0xFF03DAC6),
     'multiline': Color(0xFF7986CB),
+    'group': Color(0xFFF06292),
   };
   static const _typeLabelMap = {
     'number': 'Number',
@@ -586,6 +798,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
     'dual_text': 'Dual Input',
     'slider': 'Slider',
     'multiline': 'Multiline',
+    'group': 'Group',
   };
 
   // ── build ──────────────────────────────────────────────────────────────────
@@ -683,14 +896,52 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
                 ),
                 const SizedBox(height: 12),
                 // ── Location ───────────────────────────────────────────
-                TextFormField(
-                  controller: _locCtrl,
-                  readOnly: true,
-                  style: const TextStyle(color: kText),
-                  decoration: darkDeco(
-                      label: 'Client',
-                      icon: Icons.business_outlined,
-                      hint: 'Root'),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1F2329),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF343A44)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.business_outlined, size: 18, color: Color(0xFF9AA0AA)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Client (from active session)',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                color: Color(0xFF9AA0AA),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _clientName.isEmpty ? 'Loading…' : _clientName,
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                color: const Color(0xFFC7CBD3),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            const Text(
+                              'Locked and filled automatically',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: Color(0xFF8A909A),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 28),
                 // ── Inspection Parameters ──────────────────────────────
@@ -710,7 +961,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
                       ),
                     ),
                     Text(
-                      '${_properties.length} field${_properties.length == 1 ? '' : 's'}',
+                      '${_properties.where((p) => p['type'] != 'group').length} field${_properties.where((p) => p['type'] != 'group').length == 1 ? '' : 's'}',
                       style: const TextStyle(fontSize: 12, color: kSub),
                     ),
                   ],

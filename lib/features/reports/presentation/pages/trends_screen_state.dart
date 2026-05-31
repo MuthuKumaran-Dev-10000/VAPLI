@@ -506,6 +506,12 @@ class _TrendsScreenState extends State<TrendsScreen> {
     setState(() => _exporting = true);
     try {
       final excel = xl.Excel.createExcel();
+      String _fmtNullableTs(String? iso) {
+        if (iso == null || iso.trim().isEmpty) return '';
+        final dt = DateTime.tryParse(iso)?.toLocal();
+        if (dt == null) return '';
+        return DateFormat('dd-MM-yyyy HH:mm:ss').format(dt);
+      }
 
       final from = _rangeFrom;
       final to = _rangeTo;
@@ -521,6 +527,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
       summarySheet.appendRow([
         xl.TextCellValue('Tank ID'),
         xl.TextCellValue('Tank Name'),
+        xl.TextCellValue('Captured At Start'),
+        xl.TextCellValue('Captured At'),
         xl.TextCellValue('Inspection Date'),
         xl.TextCellValue('Inspection Time'),
         xl.TextCellValue('Captured By'),
@@ -560,6 +568,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
           summarySheet.appendRow([
             xl.TextCellValue(tank.tankCode),
             xl.TextCellValue(tank.tankName),
+            xl.TextCellValue(_fmtNullableTs(r.capturedAtStart)),
+            xl.TextCellValue(_fmtNullableTs(r.capturedAt)),
             xl.TextCellValue(
                 dt != null ? DateFormat('dd-MM-yyyy').format(dt) : '—'),
             xl.TextCellValue(
@@ -576,6 +586,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
         // Descriptor: { 'label': String, 'id': String, 'hasImage': bool }
         final colDescs = <Map<String, dynamic>>[];
         for (final p in tank.inspectionProperties) {
+          final type = p['type'] as String? ?? 'text';
+          if (type == 'group') continue;
           final label = p['label'] as String? ?? '';
           final id = p['id'] as String? ?? '';
           final hasImage = p['capture_image'] == true;
@@ -587,6 +599,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
         final headerCells = <xl.CellValue>[
           xl.TextCellValue('Tank ID'),
           xl.TextCellValue('Tank Name'),
+          xl.TextCellValue('Captured At Start'),
           xl.TextCellValue('Captured At'),
           xl.TextCellValue('Captured By'),
         ];
@@ -624,8 +637,8 @@ for (final r in readings) {
           final dataCells = <xl.CellValue>[
             xl.TextCellValue(tank.tankCode),
             xl.TextCellValue(tank.tankName),
-            xl.TextCellValue(
-                _fmt(r.capturedAt, pattern: 'dd-MM-yyyy HH:mm:ss')),
+            xl.TextCellValue(_fmtNullableTs(r.capturedAtStart)),
+            xl.TextCellValue(_fmtNullableTs(r.capturedAt)),
             xl.TextCellValue(r.capturedByName),
           ];
 

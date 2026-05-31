@@ -50,6 +50,12 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   bool _autoFillExpanded = false;
   bool _rawExprVisible = false; // toggle to show raw token expression
 
+  int _rows = 1;
+  int _cols = 1;
+  final _rowsCtrl = TextEditingController(text: '1');
+  List<String> _gridParams = [""];
+  String? _gridPickerSelection;
+
   static const _types = [
     TypeMeta('number', 'Number', Icons.pin_outlined),
     TypeMeta('text', 'Text', Icons.text_fields),
@@ -57,6 +63,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     TypeMeta('dual_text', 'Dual Input', Icons.view_column_outlined),
     TypeMeta('slider', 'Slider', Icons.linear_scale),
     TypeMeta('multiline', 'Multiline', Icons.notes),
+    TypeMeta('group', 'Group', Icons.grid_view),
   ];
 
   bool get _supportsAutoFill =>
@@ -103,6 +110,31 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       _rightExpMinCtrl.text = ep['right_expected_min']?.toString() ?? '';
       _rightExpAvgCtrl.text = ep['right_expected_avg']?.toString() ?? '';
       _rightExpMaxCtrl.text = ep['right_expected_max']?.toString() ?? '';
+
+      if (_type == 'group') {
+        _rows = ep['rows'] is int ? ep['rows'] : int.tryParse(ep['rows']?.toString() ?? '1') ?? 1;
+        _cols = ep['cols'] is int ? ep['cols'] : int.tryParse(ep['cols']?.toString() ?? '1') ?? 1;
+        final rawGrid = ep['grid_params'] as List?;
+        final cellCount = rawGrid?.length ?? (_rows * _cols);
+        if (_cols > 2) {
+          _cols = 2;
+          _rows = ((cellCount / _cols).ceil()).clamp(1, 9999).toInt();
+        }
+        _rowsCtrl.text = _rows.toString();
+        if (rawGrid != null) {
+          _gridParams = List<String>.from(rawGrid.map((e) => e?.toString() ?? ""));
+        } else {
+          _gridParams = List.generate(_rows * _cols, (_) => "");
+        }
+        if (_gridParams.length != _rows * _cols) {
+          if (_gridParams.length < _rows * _cols) {
+            _gridParams.addAll(List.generate(_rows * _cols - _gridParams.length, (_) => ""));
+          } else {
+            _gridParams = _gridParams.sublist(0, _rows * _cols);
+          }
+        }
+      }
+
 
       // AutoFill — restore both expressions
       _autoFillEnabled = ep['autofill'] == true;
@@ -155,6 +187,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     final rows = await SessionParamStore.getAll(widget.scopeId, myId);
     final expanded = <Map<String, dynamic>>[];
     for (final row in rows) {
+      if (row['type'] == 'group') continue;
       final base = Map<String, dynamic>.from(row);
       base['token'] = base['id'];
       expanded.add(base);
@@ -180,6 +213,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     for (final c in _allControllers) {
       c.dispose();
     }
+    _rowsCtrl.dispose();
     _exprCtrl.dispose();
     _displayExprCtrl.dispose();
     _exprFocus.dispose();
@@ -266,7 +300,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     _insertRaw(rawToken);
     _displayExprCtrl.text = _displayFromRaw(_exprCtrl.text);
     setState(() => _exprDirty = true);
-    _exprFocus.requestFocus();
+    _focusExpressionAtCursor();
   }
 
   /// Insert a plain string (operator / number) into BOTH controllers.
@@ -274,7 +308,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     _insertRaw(text);
     _displayExprCtrl.text = _displayFromRaw(_exprCtrl.text);
     setState(() => _exprDirty = true);
-    _exprFocus.requestFocus();
+    _focusExpressionAtCursor();
   }
 
   void _insertRaw(String text) {
@@ -344,7 +378,21 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
     _displayExprCtrl.text = _displayFromRaw(next);
 
     setState(() => _exprDirty = true);
-    _exprFocus.requestFocus();
+    _focusExpressionAtCursor();
+  }
+
+  void _focusExpressionAtCursor() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _exprFocus.requestFocus();
+      final controller = _exprCtrl;
+      final offset = controller.selection.end < 0
+          ? controller.text.length
+          : controller.selection.end.clamp(0, controller.text.length);
+      controller.value = controller.value.copyWith(
+        selection: TextSelection.collapsed(offset: offset),
+      );
+    });
   }
 
   // ── Save expression — commits expression and sets autofill: true ──────────
@@ -952,6 +1000,11 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       'capture_image': _captureImage,
       'keep_previous_capture': _keepPreviousCapture,
       'options': List<String>.from(_options),
+      if (_type == 'group') ...{
+        'rows': _rows,
+        'cols': _cols,
+        'grid_params': _gridParams,
+      },
       if (_type == 'dual_text') ...{
         'left_label': _leftLabelCtrl.text.trim().isEmpty
             ? 'Before'
@@ -998,9 +1051,72 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
       'constraints': List<Map<String, dynamic>>.from(_constraints),
     };
 
-    SessionParamStore.upsert(widget.scopeId, prop);
+    if (_type != 'group') {
+      SessionParamStore.upsert(widget.scopeId, prop);
+    }
+    unawaited(_recordAudit(prop));
     widget.onSave(prop);
     Navigator.pop(context);
+  }
+
+  Future<void> _recordAudit(Map<String, dynamic> prop) async {
+    try {
+      final user = await SessionManager.getCurrentUser();
+      final isUpdate = widget.existing != null;
+      final changed = isUpdate ? _paramDiff(widget.existing!, prop) : <String>[];
+      final summary = isUpdate
+          ? (changed.isEmpty
+              ? 'Updated parameter ${prop['label']}'
+              : 'Updated parameter ${prop['label']} (${changed.join(', ')})')
+          : 'Created parameter ${prop['label']}';
+
+      await AuditLogService.record(
+        operation: isUpdate ? 'update_tank_parameter' : 'create_tank_parameter',
+        entityType: 'inspection_parameter',
+        entityId: prop['id']?.toString(),
+        entityName: prop['label']?.toString(),
+        actorId: user?.id,
+        actorUsername: user?.username,
+        actorName: user?.fullName,
+        actorRole: user?.role,
+        tab: 'tanks',
+        details: {
+          'scope_id': widget.scopeId,
+          'parameter_type': prop['type'],
+          'group_layout': prop['type'] == 'group'
+              ? {
+                  'rows': prop['rows'],
+                  'cols': prop['cols'],
+                  'grid_params': prop['grid_params'],
+                }
+              : null,
+          'summary': summary,
+          'changed_fields': changed,
+          'autofill_enabled': prop['autofill'] == true,
+          'option_count': (prop['options'] as List?)?.length ?? 0,
+          'constraint_count': (prop['constraints'] as List?)?.length ?? 0,
+        }..removeWhere((key, value) => value == null),
+        summary: summary,
+      );
+    } catch (_) {}
+  }
+
+  List<String> _paramDiff(
+    Map<String, dynamic> before,
+    Map<String, dynamic> after,
+  ) {
+    final ignore = {'id'};
+    final beforeMap = Map<String, dynamic>.from(before)
+      ..removeWhere((key, _) => ignore.contains(key));
+    final afterMap = Map<String, dynamic>.from(after)
+      ..removeWhere((key, _) => ignore.contains(key));
+    final changed = <String>{};
+    for (final key in {...beforeMap.keys, ...afterMap.keys}) {
+      if (beforeMap[key] != afterMap[key]) {
+        changed.add(key);
+      }
+    }
+    return changed.toList()..sort();
   }
 
   // ── BUILD ──────────────────────────────────────────────────────────────────
@@ -1046,14 +1162,16 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                 _buildTypePicker(),
 
                 const SizedBox(height: 20),
-                _sl('Label *'),
+                _sl(_type == 'group' ? 'Group Name *' : 'Label *'),
                 const SizedBox(height: 8),
                 TextFormField(
                   controller: _labelCtrl,
                   style: const TextStyle(color: _kText),
                   cursorColor: _kAccent,
                   decoration: compactDeco(
-                      hint: 'e.g. Oil Temperature',
+                      hint: _type == 'group'
+                          ? 'e.g. Main Bearing Block'
+                          : 'e.g. Oil Temperature',
                       icon: Icons.label_outline),
                   validator: (v) =>
                       v!.trim().isEmpty ? 'Label is required' : null,
@@ -1073,138 +1191,146 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
                 const SizedBox(height: 16),
 
-                // Required toggle
-                Container(
-                  decoration: BoxDecoration(
-                      color: _kSurface,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _kBorder)),
-                  child: SwitchListTile(
-                    title: Text('Required field',
-                        style: GoogleFonts.inter(
-                            fontWeight: FontWeight.w500,
-                            fontSize: 14,
-                            color: _kText)),
-                    subtitle: Text(
-                      _required
-                          ? 'Inspector must fill this in'
-                          : 'Optional – can be skipped',
-                      style: const TextStyle(fontSize: 12, color: _kSub),
-                    ),
-                    activeColor: _kAccent,
-                    value: _required,
-                    onChanged: _captureImage
-                        ? null
-                        : (v) => setState(() => _required = v),
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-
-                // Capture image toggle
-                Container(
-                  decoration: BoxDecoration(
-                      color: _kSurface,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _kBorder)),
-                  child: SwitchListTile(
-                    value: _captureImage,
-                    activeColor: _kAccent,
-                    title: Text('Capture Image',
-                        style: GoogleFonts.inter(
-                            fontWeight: FontWeight.w500,
-                            fontSize: 14,
-                            color: _kText)),
-                    subtitle: Text(
-                      _captureImage
-                          ? 'Inspector must capture image for this parameter'
-                          : 'No image required',
-                      style: const TextStyle(color: _kSub, fontSize: 12),
-                    ),
-                    onChanged: (v) => setState(() {
-                      _captureImage = v;
-                      if (v) _required = true;
-                    }),
-                  ),
-                ),
-
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  decoration: BoxDecoration(
-                      color: _kSurface,
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: _kBorder)),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Keep track of previous captured value',
+                if (_type != 'group') ...[
+                  // Required toggle
+                  Container(
+                    decoration: BoxDecoration(
+                        color: _kSurface,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: _kBorder)),
+                    child: SwitchListTile(
+                      title: Text('Required field',
                           style: GoogleFonts.inter(
                               fontWeight: FontWeight.w500,
                               fontSize: 14,
                               color: _kText)),
-                      const SizedBox(height: 4),
-                      Text(
-                        _keepPreviousCapture
-                            ? 'Enabled - this parameter can be used as "(last)" in autofill'
-                            : 'Disabled',
+                      subtitle: Text(
+                        _required
+                            ? 'Inspector must fill this in'
+                            : 'Optional – can be skipped',
+                        style: const TextStyle(fontSize: 12, color: _kSub),
+                      ),
+                      activeColor: _kAccent,
+                      value: _required,
+                      onChanged: _captureImage
+                          ? null
+                          : (v) => setState(() => _required = v),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Capture image toggle
+                  Container(
+                    decoration: BoxDecoration(
+                        color: _kSurface,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: _kBorder)),
+                    child: SwitchListTile(
+                      value: _captureImage,
+                      activeColor: _kAccent,
+                      title: Text('Capture Image',
+                          style: GoogleFonts.inter(
+                              fontWeight: FontWeight.w500,
+                              fontSize: 14,
+                              color: _kText)),
+                      subtitle: Text(
+                        _captureImage
+                            ? 'Inspector must capture image for this parameter'
+                            : 'No image required',
                         style: const TextStyle(color: _kSub, fontSize: 12),
                       ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: RadioListTile<bool>(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Enable',
-                                  style: TextStyle(color: _kText, fontSize: 13)),
-                              value: true,
-                              activeColor: _kAccent,
-                              groupValue: _keepPreviousCapture,
-                              onChanged: (v) =>
-                                  setState(() => _keepPreviousCapture = v == true),
-                            ),
-                          ),
-                          Expanded(
-                            child: RadioListTile<bool>(
-                              dense: true,
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('Disable',
-                                  style: TextStyle(color: _kText, fontSize: 13)),
-                              value: false,
-                              activeColor: _kAccent,
-                              groupValue: _keepPreviousCapture,
-                              onChanged: (v) => setState(
-                                  () => _keepPreviousCapture = v == true),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                      onChanged: (v) => setState(() {
+                        _captureImage = v;
+                        if (v) _required = true;
+                      }),
+                    ),
                   ),
-                ),
 
-                const SizedBox(height: 20),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                    decoration: BoxDecoration(
+                        color: _kSurface,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: _kBorder)),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Keep track of previous captured value',
+                            style: GoogleFonts.inter(
+                                fontWeight: FontWeight.w500,
+                                fontSize: 14,
+                                color: _kText)),
+                        const SizedBox(height: 4),
+                        Text(
+                          _keepPreviousCapture
+                              ? 'Enabled - this parameter can be used as "(last)" in autofill'
+                              : 'Disabled',
+                          style: const TextStyle(color: _kSub, fontSize: 12),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: RadioListTile<bool>(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Enable',
+                                    style: TextStyle(color: _kText, fontSize: 13)),
+                                value: true,
+                                activeColor: _kAccent,
+                                groupValue: _keepPreviousCapture,
+                                onChanged: (v) =>
+                                    setState(() => _keepPreviousCapture = v == true),
+                              ),
+                            ),
+                            Expanded(
+                              child: RadioListTile<bool>(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Disable',
+                                    style: TextStyle(color: _kText, fontSize: 13)),
+                                value: false,
+                                activeColor: _kAccent,
+                                groupValue: _keepPreviousCapture,
+                                onChanged: (v) => setState(
+                                    () => _keepPreviousCapture = v == true),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+                ],
+
                 _buildTypeConfig(),
 
-                if (_isNumerical || _isDualText) ...[
+                if (_type != 'group' && (_isNumerical || _isDualText)) ...[
                   const SizedBox(height: 20),
                   _buildExpectedRange(),
                 ],
 
-                if (_supportsAutoFill) ...[
+                if (_type != 'group' && _supportsAutoFill) ...[
                   const SizedBox(height: 20),
                   _buildAutoFillSection(),
                 ],
 
-                const SizedBox(height: 24),
-                _buildConstraintsSection(),
+                if (_type != 'group') ...[
+                  const SizedBox(height: 24),
+                  _buildConstraintsSection(),
+                ],
 
-                const SizedBox(height: 28),
-                _sl('Live Preview  (updates as you type)'),
-                const SizedBox(height: 10),
-                _buildLivePreview(),
+                if (_type != 'group') ...[
+                  const SizedBox(height: 28),
+                  _sl('Live Preview  (updates as you type)'),
+                  const SizedBox(height: 10),
+                  _buildLivePreview(),
+                ],
+
                 const SizedBox(height: 36),
 
                 SizedBox(
@@ -1284,6 +1410,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         return _dualTextConfig();
       case 'slider':
         return _sliderConfig();
+      case 'group':
+        return _groupConfig();
       default:
         return const SizedBox.shrink();
     }
@@ -2272,10 +2400,398 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         'dual_text': _kWarn,
         'slider': Color(0xFF03DAC6),
         'multiline': Color(0xFF7986CB),
+        'group': Color(0xFFF06292),
       }[t] ??
       _kSub;
-}
 
+  void _resizeGrid(int newRows, int newCols) {
+    if (newRows < 1) newRows = 1;
+    if (newCols < 1) newCols = 1;
+    if (newCols > 2) newCols = 2;
+    final newList = List.generate(newRows * newCols, (_) => "");
+    for (int r = 0; r < _rows; r++) {
+      for (int c = 0; c < _cols; c++) {
+        if (r < newRows && c < newCols) {
+          newList[r * newCols + c] = _gridParams[r * _cols + c];
+        }
+      }
+    }
+    setState(() {
+      _rows = newRows;
+      _cols = newCols;
+      _gridParams = newList;
+      _rowsCtrl.text = _rows.toString();
+    });
+  }
+
+  void _swapCells(int sourceIndex, int targetIndex) {
+    setState(() {
+      final temp = _gridParams[sourceIndex];
+      _gridParams[sourceIndex] = _gridParams[targetIndex];
+      _gridParams[targetIndex] = temp;
+    });
+  }
+
+  Map<String, dynamic>? _getParamById(String id) {
+    if (id.isEmpty) return null;
+    try {
+      return _sessionParams.firstWhere((p) => p['id'] == id && p['is_previous_value'] != true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  List<Map<String, dynamic>> get _availableParamsForGrouping {
+    return _sessionParams.where((p) {
+      if (p['is_previous_value'] == true) return false;
+      if (p['type'] == 'group') return false;
+      final pid = p['id']?.toString() ?? '';
+      return !_gridParams.contains(pid);
+    }).toList();
+  }
+
+  Widget _groupConfig() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sl('Rows'),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    controller: _rowsCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: compactDeco(
+                      icon: Icons.table_rows,
+                      hint: 'Any positive number',
+                    ),
+                    onChanged: (value) {
+                      final rows = int.tryParse(value.trim());
+                      if (rows != null && rows > 0 && rows != _rows) {
+                        _resizeGrid(rows, _cols);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sl('Columns'),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<int>(
+                    value: _cols,
+                    decoration: compactDeco(icon: Icons.view_column, hint: ''),
+                    dropdownColor: _kSurface,
+                    items: const [1, 2]
+                        .map((c) => DropdownMenuItem(
+                              value: c,
+                              child: Text('$c',
+                                  style: const TextStyle(color: _kText)),
+                            ))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        _resizeGrid(_rows, val);
+                      }
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _sl('Grid Layout Builder (Drag & Swap)'),
+        const SizedBox(height: 8),
+        const Text('Drag a filled cell onto another to swap positions.',
+            style: TextStyle(fontSize: 11, color: _kSub)),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _kSurface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: _kBorder),
+          ),
+          child: _buildGridVisualizer(),
+        ),
+        const SizedBox(height: 16),
+        _sl('Add Parameter to Grid'),
+        const SizedBox(height: 8),
+        _buildAvailableParamsDropdown(),
+      ],
+    );
+  }
+
+  Widget _buildGridVisualizer() {
+    return Column(
+      children: List.generate(_rows, (r) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 8.0),
+          child: Row(
+            children: List.generate(_cols, (c) {
+              final index = r * _cols + c;
+              final paramId = index < _gridParams.length ? _gridParams[index] : '';
+              final param = _getParamById(paramId);
+
+              return Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                  child: _buildGridCell(index, paramId, param),
+                ),
+              );
+            }),
+          ),
+        );
+      }),
+    );
+  }
+
+  Widget _buildGridCell(
+      int index, String paramId, Map<String, dynamic>? param) {
+    final isEmpty = paramId.trim().isEmpty;
+    if (param == null) {
+      final message = isEmpty
+          ? 'Drop parameter here'
+          : 'Missing param: $paramId';
+      return DragTarget<int>(
+        onWillAccept: (data) => data != null && data != index,
+        onAccept: (sourceIdx) => _swapCells(sourceIdx, index),
+        builder: (context, candidateData, rejectedData) {
+          final isHovered = candidateData.isNotEmpty;
+          return Container(
+            height: 84,
+            decoration: BoxDecoration(
+              color: isHovered
+                  ? _kAccent.withOpacity(0.10)
+                  : _kSurface.withOpacity(0.7),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isHovered ? _kAccent : _kBorder,
+                style: BorderStyle.solid,
+                width: 1.4,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'Slot ${index + 1}',
+                  style: const TextStyle(
+                    color: _kSub,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Icon(
+                  Icons.add_circle_outline_rounded,
+                  color: isHovered ? _kAccent : _kSub,
+                  size: 18,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  message,
+                  style: TextStyle(
+                    color: isEmpty ? _kSub : _kWarn,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          );
+        },
+      );
+    }
+
+    final displayLabel = (param['label'] ?? paramId).toString();
+    final displayType = (param['type'] ?? '').toString().toUpperCase();
+
+    final cellWidget = Container(
+      height: 84,
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: _kCard,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.drag_indicator, size: 18, color: _kSub),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        displayLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: _kText,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _kAccent.withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        displayType.isEmpty ? 'PARAM' : displayType,
+                        style: const TextStyle(
+                          color: _kAccent,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                icon: const Icon(Icons.close, size: 16, color: _kDanger),
+                tooltip: 'Remove from grid',
+                onPressed: () {
+                  setState(() {
+                    _gridParams[index] = '';
+                  });
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              isEmpty ? 'Missing parameter id' : paramId,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: _kSub,
+                fontSize: 10,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return DragTarget<int>(
+      onWillAccept: (data) => data != null && data != index,
+      onAccept: (sourceIdx) => _swapCells(sourceIdx, index),
+      builder: (context, candidateData, rejectedData) {
+        final isHovered = candidateData.isNotEmpty;
+        return Draggable<int>(
+          data: index,
+          rootOverlay: true,
+          dragAnchorStrategy: pointerDragAnchorStrategy,
+          ignoringFeedbackPointer: true,
+          feedback: Material(
+            color: Colors.transparent,
+            child: SizedBox(
+              width: 120,
+              height: 84,
+              child: cellWidget,
+            ),
+          ),
+          childWhenDragging: Opacity(
+            opacity: 0.4,
+            child: cellWidget,
+          ),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: isHovered ? _kAccent : Colors.transparent,
+                width: 1.5,
+              ),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: cellWidget,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAvailableParamsDropdown() {
+    final available = _availableParamsForGrouping;
+    if (available.isEmpty) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+        decoration: BoxDecoration(
+          color: _kSurface,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: _kBorder),
+        ),
+        child: const Text(
+          'No available parameters to add to grid.',
+          style: TextStyle(color: _kSub, fontSize: 13),
+        ),
+      );
+    }
+
+    return DropdownButtonFormField<String>(
+      value: _gridPickerSelection,
+      menuMaxHeight: 360,
+      isExpanded: true,
+      decoration: compactDeco(
+        hint: 'Select parameter...',
+        icon: Icons.add_circle_outline,
+      ),
+      dropdownColor: _kSurface,
+      items: available.map((p) {
+        return DropdownMenuItem<String>(
+          value: p['id']?.toString() ?? '',
+          child: Text(
+            p['label']?.toString() ?? '',
+            style: const TextStyle(color: _kText, fontSize: 13),
+          ),
+        );
+      }).toList(),
+      onChanged: (val) {
+        if (val != null && val.isNotEmpty) {
+          final firstEmptyIdx = _gridParams.indexOf("");
+          if (firstEmptyIdx != -1) {
+            setState(() {
+              _gridParams[firstEmptyIdx] = val;
+              _gridPickerSelection = null;
+            });
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Grid is full. Increase row/col or remove a parameter first.',
+                  style: TextStyle(color: _kText)),
+              backgroundColor: _kWarn,
+              behavior: SnackBarBehavior.floating,
+            ));
+          }
+        }
+      },
+    );
+  }
+
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // _ParamDropdown
 // ─────────────────────────────────────────────────────────────────────────────

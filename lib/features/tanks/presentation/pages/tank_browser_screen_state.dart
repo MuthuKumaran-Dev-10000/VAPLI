@@ -235,12 +235,15 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     TankModel? sourceTank = _tankCache[sourceTankId];
     sourceTank ??= await _tankRepo.getTankById(sourceTankId);
     if (sourceTank == null) return;
+    final clientName = await ClientContextService.resolveClientName(
+      fallback: sourceNode.zone ?? sourceTank.location ?? '',
+    );
     final newName = _uniqueName(sourceTank.tankName, siblingNames);
     final newTankId = await _tankRepo.duplicateTank(sourceTank);
     await _treeRepo.createLeaf(
       name: newName,
       tankId: newTankId,
-      zone: sourceNode.zone ?? sourceTank.location,
+      zone: clientName ?? sourceNode.zone ?? sourceTank.location,
       parentId: destParentId,
     );
   }
@@ -387,10 +390,13 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
     if (allTanks.isEmpty) return;
     allTanks.sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final newTank = allTanks.first;
+    final clientName = await ClientContextService.resolveClientName(
+      fallback: widget.rootLabel,
+    );
     await _treeRepo.createLeaf(
       name: newTank.tankName,
       tankId: newTank.id,
-      zone: widget.rootLabel,
+      zone: clientName ?? widget.rootLabel,
       parentId: _currentFolder?.id,
     );
     await widget.onAudit?.call('create_tank_leaf', {

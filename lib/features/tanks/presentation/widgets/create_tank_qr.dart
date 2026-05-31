@@ -1,12 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
-import 'package:mime/mime.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:screenshot/screenshot.dart';
 import 'package:flutter/material.dart';
@@ -27,11 +24,6 @@ String _signature(String timestamp) {
 
 Future<String> _uploadQr(Uint8List bytes) async {
   debugPrint('[QR] Uploading QR image to Cloudinary…');
-  final dir = await getTemporaryDirectory();
-  final file =
-      File('${dir.path}/tank_qr_${DateTime.now().millisecondsSinceEpoch}.png');
-  await file.writeAsBytes(bytes);
-
   final ts = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
   final req = http.MultipartRequest(
     'POST',
@@ -43,10 +35,11 @@ Future<String> _uploadQr(Uint8List bytes) async {
   req.fields['timestamp'] = ts;
   req.fields['folder'] = _folder;
   req.fields['signature'] = _signature(ts);
-  req.files.add(await http.MultipartFile.fromPath(
+  req.files.add(http.MultipartFile.fromBytes(
     'file',
-    file.path,
-    contentType: MediaType.parse(lookupMimeType(file.path) ?? 'image/png'),
+    bytes,
+    filename: 'tank_qr_${DateTime.now().millisecondsSinceEpoch}.png',
+    contentType: MediaType('image', 'png'),
   ));
 
   final res = await http.Response.fromStream(await req.send());

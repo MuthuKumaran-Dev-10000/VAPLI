@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
 import 'package:lubrication_indicator/core/models/client_model.dart';
+import 'package:lubrication_indicator/core/services/access_control_service.dart';
 import 'package:lubrication_indicator/core/services/app_settings_service.dart';
 import 'package:lubrication_indicator/core/services/client_context_service.dart';
 import 'package:lubrication_indicator/core/services/client_repository.dart';
@@ -141,16 +142,9 @@ class _LoginScreenState extends State<LoginScreen>
           fullName: 'System Administrator',
           passwordHash: '',
           role: 'super admin',
-          privileges: const {
-            'create_client': true,
-            'create_users': true,
-            'grant_users': true,
-            'create_tanks': true,
-            'delete_tanks': true,
-            'modify_tanks': true,
-            'allocate_users_to_clients': true,
-            'open_admin_page': true,
-          },
+          privileges: AccessControlService.defaultPrivilegesForRole(
+            AccessControlService.roleSuperAdmin,
+          ),
           clientIds: const [],
           createdAt: DateTime.now().toIso8601String(),
         );

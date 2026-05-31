@@ -112,6 +112,11 @@ class _DashboardTabState extends State<DashboardTab> {
       await file.writeAsBytes(bytes, flush: true);
       _snack('Saved: ${file.path}');
       await Share.shareXFiles([XFile(file.path)], text: fileName);
+      await _auditExport('download_png', fileName, {
+        'file_name': fileName,
+        'bytes': bytes.length,
+        'path': file.path,
+      });
     } catch (e) {
       _snack('PNG export failed: $e', error: true);
     }
@@ -194,9 +199,43 @@ class _DashboardTabState extends State<DashboardTab> {
       await file.writeAsBytes(await doc.save(), flush: true);
       _snack('Saved: ${file.path}');
       await Share.shareXFiles([XFile(file.path)], text: 'Dashboard PDF');
+      await _auditExport('download_pdf', 'dashboard_report', {
+        'format': 'pdf',
+        'captured_sections': captures.length,
+        'path': file.path,
+      });
     } catch (e) {
       _snack('PDF export failed: $e', error: true);
     }
+  }
+
+  Future<void> _auditExport(
+    String operation,
+    String label,
+    Map<String, dynamic> details,
+  ) async {
+    try {
+      final user = await SessionManager.getCurrentUser();
+      await AuditLogService.record(
+        operation: operation,
+        entityType: 'dashboard_export',
+        entityName: label,
+        actorId: user?.id,
+        actorUsername: user?.username,
+        actorName: user?.fullName,
+        actorRole: user?.role,
+        tab: 'dashboard',
+        details: {
+          ...details,
+          'summary': operation == 'download_png'
+              ? 'Downloaded PNG export for $label'
+              : 'Downloaded PDF export for $label',
+        },
+        summary: operation == 'download_png'
+            ? 'Downloaded PNG export for $label'
+            : 'Downloaded PDF export for $label',
+      );
+    } catch (_) {}
   }
 
   DateTimeRange _abnormalityWindow() {

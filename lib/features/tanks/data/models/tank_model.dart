@@ -28,6 +28,7 @@ class TankModel {
   final String updatedAt;
   final String inspectionFrequencyType; // daily|weekly_once|weekly_thrice|custom_days
   final int inspectionFrequencyDays;
+  final Map<String, dynamic> groups;
 
   TankModel({
     required this.id,
@@ -46,6 +47,7 @@ class TankModel {
     required this.updatedAt,
     this.inspectionFrequencyType = 'daily',
     this.inspectionFrequencyDays = 1,
+    this.groups = const {},
   });
 
   String get uniqueKey => "${tankCode}_${tankName}_${location ?? "nozone"}"
@@ -72,6 +74,7 @@ class TankModel {
         "updated_at": updatedAt,
         "inspection_frequency_type": inspectionFrequencyType,
         "inspection_frequency_days": inspectionFrequencyDays,
+        "Groups": groups,
       };
 
   factory TankModel.fromMap(
@@ -102,6 +105,14 @@ class TankModel {
       }
     }
 
+    Map<String, dynamic> parsedGroups = {};
+    if (m["Groups"] != null) {
+      final rawGroups = m["Groups"];
+      if (rawGroups is Map) {
+        parsedGroups = Map<String, dynamic>.from(rawGroups);
+      }
+    }
+
     return TankModel(
       id: m["id"] ?? "",
       tankCode: m["tank_code"] ?? "",
@@ -126,6 +137,7 @@ class TankModel {
                       'weekly_thrice')
                   ? 2
                   : 1),
+      groups: parsedGroups,
     );
   }
 }

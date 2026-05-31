@@ -37,6 +37,7 @@ import 'package:intl/intl.dart';
 import 'package:mime/mime.dart';
 
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
+import 'package:lubrication_indicator/core/services/audit_log_service.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/services/expression_engine.dart';
 import 'package:lubrication_indicator/core/services/env_config.dart';

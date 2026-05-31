@@ -954,6 +954,11 @@ class _LeafDetail extends StatelessWidget {
     final code = tank?.tankCode ?? '—';
     final zone = leaf.zone ?? tank?.location ?? '';
     final path = leaf.path;
+    final paramCount = tank == null
+        ? 0
+        : tank?.inspectionProperties
+            .where((p) => (p['type']?.toString() ?? '') != 'group')
+            .length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 48),
@@ -1104,14 +1109,13 @@ class _LeafDetail extends StatelessWidget {
                             icon: Icons.straighten_outlined,
                             label: 'Scale Max',
                             value: tank!.scaleMax.toInt().toString()),
-                        if ((tank!.inspectionProperties).isNotEmpty) ...[
+                        if (paramCount! > 0) ...[
                           const SizedBox(height: 8),
                           _InfoRow(
                               icon: Icons.list_alt_outlined,
                               label: 'Parameters',
-                              value:
-                                  '${tank!.inspectionProperties.length} field'
-                                  '${tank!.inspectionProperties.length == 1 ? '' : 's'}'),
+                              value: '$paramCount field'
+                                  '${paramCount == 1 ? '' : 's'}'),
                         ],
                       ],
                     ],

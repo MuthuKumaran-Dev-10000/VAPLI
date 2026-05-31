@@ -37,4 +37,18 @@ class ClientContextService {
     if (raw == null || raw.trim().isEmpty) return null;
     return ClientModel.fromMap(Map<String, dynamic>.from(jsonDecode(raw) as Map));
   }
+
+  static Future<String?> resolveClientName({String? fallback}) async {
+    final active = await getActiveClient();
+    final activeName = active?.name.trim();
+    if (activeName != null && activeName.isNotEmpty) return activeName;
+
+    final lastUsed = await getLastUsedClient();
+    final lastName = lastUsed?.name.trim();
+    if (lastName != null && lastName.isNotEmpty) return lastName;
+
+    final fallbackName = fallback?.trim();
+    if (fallbackName != null && fallbackName.isNotEmpty) return fallbackName;
+    return null;
+  }
 }

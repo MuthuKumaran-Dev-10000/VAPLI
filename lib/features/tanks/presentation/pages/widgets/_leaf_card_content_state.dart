@@ -36,11 +36,14 @@ class _LeafCardContentState extends State<_LeafCardContent> {
   Future<void> _modify() => _run(() async {
         final t = widget.tank;
         if (t == null) return;
+        final clientName = await ClientContextService.resolveClientName(
+          fallback: widget.node.zone ?? t.location ?? '',
+        );
         final tankMap = {
           'id': t.id,
           'tank_code': t.tankCode,
           'tank_name': t.tankName,
-          'location': t.location ?? '',
+          'location': clientName ?? (t.location ?? ''),
           'scale_max': t.scaleMax,
           'scale_side': t.scaleSide,
           'qr_image_url': t.qrImageUrl,
@@ -66,11 +69,14 @@ class _LeafCardContentState extends State<_LeafCardContent> {
         if (t == null || tid == null) return;
         final base = t.tankName.replaceAll(RegExp(r'\s*\(\d+\)$'), '');
         final newName = '$base (1)';
+        final clientName = await ClientContextService.resolveClientName(
+          fallback: widget.node.zone ?? t.location ?? '',
+        );
         final newTankId = await widget.tankRepo.duplicateTank(t);
         await widget.treeRepo.createLeaf(
           name: newName,
           tankId: newTankId,
-          zone: widget.node.zone ?? t.location,
+          zone: clientName ?? widget.node.zone ?? t.location,
           parentId: widget.currentParentId,
         );
         if (mounted)
@@ -114,7 +120,11 @@ class _LeafCardContentState extends State<_LeafCardContent> {
     final name = t?.tankName ?? widget.node.name;
     final code = t?.tankCode ?? '—';
     final zone = widget.node.zone ?? t?.location ?? '';
-    final paramCount = t?.inspectionProperties.length ?? 0;
+    final paramCount = t == null
+        ? 0
+        : t.inspectionProperties
+            .where((p) => (p['type']?.toString() ?? '') != 'group')
+            .length;
 
     return Container(
       decoration: BoxDecoration(

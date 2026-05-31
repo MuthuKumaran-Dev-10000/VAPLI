@@ -58,7 +58,7 @@ class _MetaCard extends StatelessWidget {
           child: Column(children: [
             _MetaRow(label: 'Zone', value: tank.location ?? '—'),
             _MetaRow(label: 'Inspector', value: currentUser.fullName),
-            _MetaRow(label: 'Timestamp', value: nowLabel),
+            _MetaRow(label: 'Captured At Start', value: nowLabel),
           ]),
         ),
       ]),

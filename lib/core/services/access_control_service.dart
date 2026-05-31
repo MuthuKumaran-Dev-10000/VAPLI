@@ -5,6 +5,13 @@ class AccessControlService {
   static const String roleAdmin = 'admin';
   static const String roleUser = 'user';
 
+  static const String pOpenAdminPage = 'open_admin_page';
+  static const String pViewAdminTanks = 'view_admin_tanks';
+  static const String pViewAdminClients = 'view_admin_clients';
+  static const String pViewAdminUsers = 'view_admin_users';
+  static const String pViewSettings = 'view_settings';
+  static const String pViewAuditLogs = 'view_audit_logs';
+
   static const String pCreateClient = 'create_client';
   static const String pCreateUsers = 'create_users';
   static const String pGrantUsers = 'grant_users';
@@ -12,11 +19,18 @@ class AccessControlService {
   static const String pDeleteTanks = 'delete_tanks';
   static const String pModifyTanks = 'modify_tanks';
   static const String pAllocateUsersToClients = 'allocate_users_to_clients';
-  static const String pOpenAdminPage = 'open_admin_page';
-  static const String pViewSettings = 'view_settings';
   static const String pChangeSettings = 'change_settings';
 
-  static const List<String> allPrivileges = [
+  static const List<String> viewPrivileges = [
+    pOpenAdminPage,
+    pViewAdminTanks,
+    pViewAdminClients,
+    pViewAdminUsers,
+    pViewSettings,
+    pViewAuditLogs,
+  ];
+
+  static const List<String> actionPrivileges = [
     pCreateClient,
     pCreateUsers,
     pGrantUsers,
@@ -24,8 +38,23 @@ class AccessControlService {
     pDeleteTanks,
     pModifyTanks,
     pAllocateUsersToClients,
+    pChangeSettings,
+  ];
+
+  static const List<String> allPrivileges = [
     pOpenAdminPage,
+    pViewAdminTanks,
+    pViewAdminClients,
+    pViewAdminUsers,
     pViewSettings,
+    pViewAuditLogs,
+    pCreateClient,
+    pCreateUsers,
+    pGrantUsers,
+    pCreateTanks,
+    pDeleteTanks,
+    pModifyTanks,
+    pAllocateUsersToClients,
     pChangeSettings,
   ];
 
@@ -48,17 +77,59 @@ class AccessControlService {
     if (r == roleAdmin) {
       return {
         pOpenAdminPage: true,
+        pViewAdminTanks: true,
+        pViewAdminUsers: true,
+        pViewSettings: true,
         pCreateUsers: true,
         pGrantUsers: true,
         pCreateTanks: true,
         pDeleteTanks: true,
         pModifyTanks: true,
         pAllocateUsersToClients: true,
-        pViewSettings: true,
         pChangeSettings: true,
+        pViewAdminClients: false,
+        pViewAuditLogs: false,
+      };
+    }
+    if (r == roleUser) {
+      return {
+        pOpenAdminPage: false,
+        pViewAdminTanks: false,
+        pViewAdminClients: false,
+        pViewAdminUsers: false,
+        pViewSettings: false,
+        pViewAuditLogs: false,
+        pCreateClient: false,
+        pCreateUsers: false,
+        pGrantUsers: false,
+        pCreateTanks: false,
+        pDeleteTanks: false,
+        pModifyTanks: false,
+        pAllocateUsersToClients: false,
+        pChangeSettings: false,
       };
     }
     return const {};
+  }
+
+  static bool isViewPrivilege(String privilege) {
+    return viewPrivileges.contains(privilege);
+  }
+
+  static Map<String, bool> sanitizePrivilegesForRole(
+    String role,
+    Map<String, bool> privileges,
+  ) {
+    final normalized = <String, bool>{
+      ...defaultPrivilegesForRole(role),
+      ...privileges,
+    };
+    if (role.trim().toLowerCase() == roleUser) {
+      for (final privilege in actionPrivileges) {
+        normalized[privilege] = false;
+      }
+    }
+    return normalized;
   }
 
   static bool can(UserModel? user, String privilege) {
