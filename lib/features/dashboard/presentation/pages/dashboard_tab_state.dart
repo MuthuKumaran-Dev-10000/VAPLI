@@ -32,6 +32,23 @@ extension _DashboardReportTypeX on _DashboardReportType {
   }
 }
 
+enum _DashboardPdfRange { current, week, month, custom }
+
+extension _DashboardPdfRangeX on _DashboardPdfRange {
+  String get label {
+    switch (this) {
+      case _DashboardPdfRange.current:
+        return 'Current';
+      case _DashboardPdfRange.week:
+        return '1 week';
+      case _DashboardPdfRange.month:
+        return '1 month';
+      case _DashboardPdfRange.custom:
+        return 'Custom Time Range';
+    }
+  }
+}
+
 class _DashboardTabState extends State<DashboardTab> {
   static const String _allTanksFilterId = '__all_tanks__';
   List<TankModel> _tanks = [];
@@ -51,6 +68,8 @@ class _DashboardTabState extends State<DashboardTab> {
   _DashboardReportRange _abnormalityRange = _DashboardReportRange.day;
   _DashboardReportType _abnormalityType = _DashboardReportType.both;
   String _abnormalityTankId = _allTanksFilterId;
+  _DashboardPdfRange _pdfRange = _DashboardPdfRange.current;
+  DateTimeRange? _customPdfRange;
 
   DatabaseReference _ref(String path) => DatabaseModeService.ref(path);
   void _snack(String msg, {bool error = false}) {
@@ -132,80 +151,703 @@ class _DashboardTabState extends State<DashboardTab> {
     }
   }
 
-  Future<void> _downloadDashboardPdf() async {
-    try {
-      final doc = pw.Document();
-      final captures = <MapEntry<String, Uint8List>>[];
-      final alerts = await _capture(_alertsCaptureKey);
-      if (alerts != null) {
-        captures.add(MapEntry('Alerts', alerts));
-      }
-      for (final tank in _tanks) {
-        final key = _tankCaptureKeys[tank.id];
-        if (key == null) continue;
-        if (mounted) {
-          setState(() => _exportingTankId = tank.id);
-        }
-        await WidgetsBinding.instance.endOfFrame;
-        await Future.delayed(const Duration(milliseconds: 120));
-        final bytes = await _capture(key);
-        if (bytes != null) {
-          captures.add(MapEntry(tank.tankName, bytes));
-        }
-      }
-      if (mounted) {
-        setState(() => _exportingTankId = null);
-      }
-      if (captures.isEmpty) {
-        _snack('No dashboard images available to export.', error: true);
-        return;
-      }
-      for (final c in captures) {
-        final image = pw.MemoryImage(c.value);
-        doc.addPage(
-          pw.Page(
-            margin: const pw.EdgeInsets.all(24),
-            build: (_) => pw.Column(
-              crossAxisAlignment: pw.CrossAxisAlignment.start,
-              children: [
-                pw.Text(
-                  c.key,
-                  style: pw.TextStyle(
-                    fontSize: 16,
-                    fontWeight: pw.FontWeight.bold,
-                  ),
+  DateTimeRange _reportWindow() {
+    final now = DateTime.now();
+    switch (_pdfRange) {
+      case _DashboardPdfRange.current:
+        return DateTimeRange(
+          start: DateTime(now.year, now.month, now.day),
+          end: now,
+        );
+      case _DashboardPdfRange.week:
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 7)),
+          end: now,
+        );
+      case _DashboardPdfRange.month:
+        return DateTimeRange(
+          start: now.subtract(const Duration(days: 30)),
+          end: now,
+        );
+      case _DashboardPdfRange.custom:
+        return _customPdfRange ??
+            DateTimeRange(
+              start: now.subtract(const Duration(days: 7)),
+              end: now,
+            );
+    }
+  }
+
+  String _fmtPdfTs(String? iso) {
+    if (iso == null || iso.trim().isEmpty) return '—';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return iso;
+    return DateFormat('dd MMM yyyy, HH:mm').format(dt);
+  }
+
+  String _fmtPdfDateOnly(String? iso) {
+    if (iso == null || iso.trim().isEmpty) return '—';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return iso;
+    return DateFormat('dd MMM yyyy').format(dt);
+  }
+
+  String _fmtPdfNum(num? value) {
+    if (value == null) return '—';
+    final asDouble = value.toDouble();
+    return asDouble == asDouble.truncateToDouble()
+        ? asDouble.toInt().toString()
+        : asDouble.toStringAsFixed(2);
+  }
+
+  String _fmtPdfAny(dynamic value) {
+    if (value == null) return '—';
+    if (value is Map) {
+      return '${value['left'] ?? ''} / ${value['right'] ?? ''}';
+    }
+    if (value is num) return _fmtPdfNum(value);
+    final text = value.toString().trim();
+    return text.isEmpty ? '—' : text;
+  }
+
+  Future<void> _pickCustomPdfRange() async {
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+      initialDateRange: _customPdfRange ??
+          DateTimeRange(
+            start: DateTime.now().subtract(const Duration(days: 7)),
+            end: DateTime.now(),
+          ),
+      helpText: 'Select report range',
+    );
+    if (picked == null) return;
+    if (!mounted) return;
+    setState(() {
+      _customPdfRange = picked;
+      _pdfRange = _DashboardPdfRange.custom;
+    });
+  }
+
+  pw.Widget _pdfHeader(
+    String title,
+    String clientName,
+    String subtitle,
+  ) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(bottom: 8),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(
+          bottom: pw.BorderSide(width: 0.6, color: pdf.PdfColors.grey700),
+        ),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                title,
+                style: pw.TextStyle(
+                  fontSize: 15,
+                  fontWeight: pw.FontWeight.bold,
+                  color: pdf.PdfColors.black,
                 ),
-                pw.SizedBox(height: 12),
-                pw.Container(
-                  width: double.infinity,
-                  height: 700,
-                  alignment: pw.Alignment.center,
-                  decoration: pw.BoxDecoration(
-                    border: pw.Border.all(width: 0.5),
-                  ),
-                  child: pw.FittedBox(
-                    fit: pw.BoxFit.contain,
-                    child: pw.Image(image),
-                  ),
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text(
+                subtitle,
+                style: const pw.TextStyle(
+                  fontSize: 8.5,
+                  color: pdf.PdfColors.grey700,
                 ),
-              ],
+              ),
+            ],
+          ),
+          pw.Text(
+            clientName,
+            style: pw.TextStyle(
+              fontSize: 11,
+              fontWeight: pw.FontWeight.bold,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _pdfFooter(pw.Context context) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.only(top: 6),
+      decoration: const pw.BoxDecoration(
+        border: pw.Border(
+          top: pw.BorderSide(width: 0.6, color: pdf.PdfColors.grey700),
+        ),
+      ),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            DateFormat('dd MMM yyyy, HH:mm').format(DateTime.now()),
+            style: const pw.TextStyle(
+              fontSize: 8,
+              color: pdf.PdfColors.grey700,
+            ),
+          ),
+          pw.Text(
+            'Page ${context.pageNumber} of ${context.pagesCount}',
+            style: const pw.TextStyle(
+              fontSize: 8,
+              color: pdf.PdfColors.grey700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _pdfSectionTitle(String title, {String? subtitle}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(top: 10, bottom: 6),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            title,
+            style: pw.TextStyle(
+              fontSize: 11.5,
+              fontWeight: pw.FontWeight.bold,
+            ),
+          ),
+          if (subtitle != null && subtitle.trim().isNotEmpty)
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 2),
+              child: pw.Text(
+                subtitle,
+                style: const pw.TextStyle(
+                  fontSize: 8.5,
+                  color: pdf.PdfColors.grey700,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _pdfCell(
+    String text, {
+    bool header = false,
+    pdf.PdfColor? fill,
+    pw.Alignment alignment = pw.Alignment.centerLeft,
+    double fontSize = 8.4,
+    pw.FontWeight fontWeight = pw.FontWeight.normal,
+  }) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      color: fill,
+      alignment: alignment,
+      child: pw.Text(
+        text,
+        style: pw.TextStyle(
+          fontSize: fontSize,
+          fontWeight: header ? pw.FontWeight.bold : fontWeight,
+        ),
+      ),
+    );
+  }
+
+  List<pw.TableRow> _buildComplianceRows(
+    Map<String, DashboardStatsModel> statsByTank,
+    DateTimeRange window,
+  ) {
+    final rows = <pw.TableRow>[
+      pw.TableRow(
+        decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+        children: [
+          _pdfCell('Tank', header: true),
+          _pdfCell('Route', header: true),
+          _pdfCell('Freq', header: true),
+          _pdfCell('Last Inspection', header: true),
+          _pdfCell('Next Due', header: true),
+          _pdfCell('Status', header: true),
+        ],
+      ),
+    ];
+
+    for (final tank in _tanks) {
+      final stats = statsByTank[tank.id] ?? DashboardStatsModel.empty(tank.id);
+      final ok = _isCompliant(tank, stats.lastCapturedAt);
+      final baseColor = ok
+          ? pdf.PdfColor.fromInt(0xFFE8F5E9)
+          : pdf.PdfColor.fromInt(0xFFFFEBEE);
+      final last = stats.lastCapturedAt == null
+          ? 'Never'
+          : _fmtPdfTs(stats.lastCapturedAt);
+      final lastDt = DateTime.tryParse(stats.lastCapturedAt ?? '');
+      final nextDue = lastDt == null
+          ? '—'
+          : _fmtPdfDateOnly(lastDt.add(Duration(days: _freqDays(tank))).toIso8601String());
+      rows.add(
+        pw.TableRow(
+          children: [
+            _pdfCell('${tank.tankName} (${tank.tankCode})', fill: baseColor),
+            _pdfCell(_tankRoute(tank), fill: baseColor),
+            _pdfCell('${_freqDays(tank)} day(s)', fill: baseColor),
+            _pdfCell(last, fill: baseColor),
+            _pdfCell(nextDue, fill: baseColor),
+            _pdfCell(ok ? 'On time' : 'Late', fill: baseColor),
+          ],
+        ),
+      );
+    }
+    return rows;
+  }
+
+  List<pw.Widget> _buildTankStatsWidgets(Map<String, DashboardStatsModel> statsByTank) {
+    final widgets = <pw.Widget>[];
+    for (final tank in _tanks) {
+      final stats = statsByTank[tank.id] ?? DashboardStatsModel.empty(tank.id);
+      widgets.add(
+        _pdfSectionTitle(
+          'Tank: ${tank.tankName} (${tank.tankCode})',
+          subtitle: 'Last inspection: ${stats.lastCapturedAt == null ? 'Never' : _fmtPdfTs(stats.lastCapturedAt)}',
+        ),
+      );
+      final rows = <List<String>>[];
+      for (final prop in tank.inspectionProperties) {
+        final type = (prop['type'] as String?) ?? 'text';
+        if (type == 'group') continue;
+        final label = (prop['label'] as String?) ?? '';
+        if (label.isEmpty) continue;
+        final stat = stats.paramStats[label];
+        rows.add([
+          label,
+          type,
+          _fmtPdfAny(stat?.lastValue ?? stats.lastReading[label]),
+          _fmtPdfNum(stat?.avg),
+          _fmtPdfNum(stat?.min),
+          _fmtPdfNum(stat?.max),
+          _fmtPdfAny(prop['expected_avg']),
+          _fmtPdfAny(prop['expected_min']),
+          _fmtPdfAny(prop['expected_max']),
+        ]);
+      }
+
+      if (rows.isEmpty) {
+        widgets.add(
+          pw.Text(
+            'No parameter data available.',
+            style: const pw.TextStyle(fontSize: 8.5),
+          ),
+        );
+      } else {
+        widgets.add(
+          pw.Table.fromTextArray(
+            headers: const [
+              'Parameter',
+              'Type',
+              'Last Value',
+              'Avg',
+              'Min',
+              'Max',
+              'Expected Avg',
+              'Expected Min',
+              'Expected Max',
+            ],
+            data: rows,
+            headerStyle: pw.TextStyle(
+              fontWeight: pw.FontWeight.bold,
+              fontSize: 8.2,
+            ),
+            cellStyle: const pw.TextStyle(fontSize: 7.6),
+            headerDecoration: const pw.BoxDecoration(
+              color: pdf.PdfColors.grey300,
+            ),
+            rowDecoration: const pw.BoxDecoration(
+              border: pw.Border(
+                bottom: pw.BorderSide(width: 0.4, color: pdf.PdfColors.grey400),
+              ),
+            ),
+            cellAlignment: pw.Alignment.centerLeft,
+            columnWidths: {
+              0: const pw.FlexColumnWidth(2.6),
+              1: const pw.FlexColumnWidth(0.9),
+              2: const pw.FlexColumnWidth(1.3),
+              3: const pw.FlexColumnWidth(0.8),
+              4: const pw.FlexColumnWidth(0.8),
+              5: const pw.FlexColumnWidth(0.8),
+              6: const pw.FlexColumnWidth(0.9),
+              7: const pw.FlexColumnWidth(0.9),
+              8: const pw.FlexColumnWidth(0.9),
+            },
           ),
         );
       }
+      widgets.add(pw.SizedBox(height: 8));
+    }
+    return widgets;
+  }
+
+  List<pw.Widget> _buildAlertWidgets({
+    required List<_AlertModel> alerts,
+    required List<_CompletedTask> completed,
+    required bool includeCompleted,
+  }) {
+    final widgets = <pw.Widget>[];
+    widgets.add(_pdfSectionTitle('Alerts'));
+    if (alerts.isEmpty) {
+      widgets.add(pw.Text('No alerts in selected range.', style: pw.TextStyle(fontSize: 8.5)));
+    } else {
+      final rows = alerts.map((a) {
+        return [
+          _fmtPdfTs(a.timestamp),
+          '${a.tankName} (${a.tankCode})',
+          a.severity,
+          a.paramLabel,
+          a.paramValue,
+          a.capturedByName.isEmpty ? 'Dashboard' : a.capturedByName,
+          a.message,
+        ];
+      }).toList();
+      widgets.add(
+        pw.Table.fromTextArray(
+          headers: const [
+            'Time',
+            'Tank',
+            'Severity',
+            'Parameter',
+            'Value',
+            'By',
+            'Message',
+          ],
+          data: rows,
+          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.2),
+          cellStyle: const pw.TextStyle(fontSize: 7.5),
+          headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+          rowDecoration: const pw.BoxDecoration(
+            border: pw.Border(bottom: pw.BorderSide(width: 0.4, color: pdf.PdfColors.grey400)),
+          ),
+          cellAlignment: pw.Alignment.centerLeft,
+        ),
+      );
+    }
+
+    if (includeCompleted) {
+      widgets.add(_pdfSectionTitle('Completed Tasks'));
+      if (completed.isEmpty) {
+        widgets.add(pw.Text('No completed tasks in selected range.', style: pw.TextStyle(fontSize: 8.5)));
+      } else {
+        widgets.add(
+          pw.Table.fromTextArray(
+            headers: const ['Completed At', 'Tank', 'Severity', 'Parameter', 'Completed By', 'Message'],
+            data: completed.map((c) {
+              final a = c.alert;
+              return [
+                _fmtPdfTs(c.completedAt),
+                '${a.tankName} (${a.tankCode})',
+                a.severity,
+                a.paramLabel,
+                c.completedBy,
+                a.message,
+              ];
+            }).toList(),
+            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.2),
+            cellStyle: const pw.TextStyle(fontSize: 7.5),
+            headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+            rowDecoration: const pw.BoxDecoration(
+              border: pw.Border(bottom: pw.BorderSide(width: 0.4, color: pdf.PdfColors.grey400)),
+            ),
+            cellAlignment: pw.Alignment.centerLeft,
+          ),
+        );
+      }
+    }
+    return widgets;
+  }
+
+  List<pw.Widget> _buildInspectionReportWidgets(List<ReadingModel> readings) {
+    final widgets = <pw.Widget>[];
+    widgets.add(
+      _pdfSectionTitle(
+        'Inspection Compliance',
+        subtitle: 'Rows are highlighted green when the interval to the previous reading stays within the tank frequency, otherwise red.',
+      ),
+    );
+
+    if (readings.isEmpty) {
+      widgets.add(pw.Text('No readings in the selected range.', style: pw.TextStyle(fontSize: 8.5)));
+      return widgets;
+    }
+
+    final byTank = <String, List<ReadingModel>>{};
+    for (final reading in readings) {
+      byTank.putIfAbsent(reading.tankId, () => []).add(reading);
+    }
+
+    for (final tank in _tanks) {
+      final tankReadings = byTank[tank.id];
+      if (tankReadings == null || tankReadings.isEmpty) continue;
+      tankReadings.sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
+      widgets.add(
+        _pdfSectionTitle(
+          '${tank.tankName} (${tank.tankCode})',
+          subtitle: 'Frequency: every ${_freqDays(tank)} day(s)',
+        ),
+      );
+
+      final rows = <pw.TableRow>[
+        pw.TableRow(
+          decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+          children: [
+            _pdfCell('Captured At', header: true),
+            _pdfCell('Captured At Start', header: true),
+            _pdfCell('Gap From Previous', header: true),
+            _pdfCell('Allowed Gap', header: true),
+            _pdfCell('Inspector', header: true),
+            _pdfCell('Status', header: true),
+          ],
+        ),
+      ];
+
+      DateTime? previous;
+      for (final reading in tankReadings) {
+        final captured = DateTime.tryParse(reading.capturedAt)?.toLocal();
+        final gap = previous == null || captured == null
+            ? null
+            : captured.difference(previous);
+        final allowed = Duration(days: _freqDays(tank));
+        final ok = previous == null ? true : gap != null && gap <= allowed;
+        final rowColor = ok
+            ? pdf.PdfColor.fromInt(0xFFE8F5E9)
+            : pdf.PdfColor.fromInt(0xFFFFEBEE);
+        rows.add(
+          pw.TableRow(
+            children: [
+              _pdfCell(_fmtPdfTs(reading.capturedAt), fill: rowColor),
+              _pdfCell(_fmtPdfTs(reading.capturedAtStart), fill: rowColor),
+              _pdfCell(
+                gap == null ? 'Initial' : '${gap.inHours} hr ${gap.inMinutes.remainder(60)} m',
+                fill: rowColor,
+              ),
+              _pdfCell('${allowed.inDays} day(s)', fill: rowColor),
+              _pdfCell(reading.capturedByName.isEmpty ? '—' : reading.capturedByName, fill: rowColor),
+              _pdfCell(ok ? 'On time' : 'Late', fill: rowColor),
+            ],
+          ),
+        );
+        if (captured != null) previous = captured;
+      }
+
+      widgets.add(
+        pw.Table(
+          border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.3),
+            1: pw.FlexColumnWidth(1.3),
+            2: pw.FlexColumnWidth(1.0),
+            3: pw.FlexColumnWidth(0.9),
+            4: pw.FlexColumnWidth(1.0),
+            5: pw.FlexColumnWidth(0.8),
+          },
+          children: rows,
+        ),
+      );
+      widgets.add(pw.SizedBox(height: 8));
+    }
+    return widgets;
+  }
+
+  Future<void> _downloadDashboardPdf() async {
+    try {
+      final statsRepo = DashboardStatsRepository();
+      final statsByTank = <String, DashboardStatsModel>{};
+      for (final tank in _tanks) {
+        statsByTank[tank.id] = await statsRepo.getStats(tank.id);
+      }
+
+      final openAlerts = _allAlerts.where((a) => !a.acknowledged).toList()
+        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      final completed = List<_CompletedTask>.from(_completed);
+      final clientName = _tanks.isEmpty
+          ? 'All Tanks'
+          : (_tanks.first.location?.trim().isNotEmpty == true
+              ? _tanks.first.location!
+              : 'Dashboard');
+
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          pageTheme: pw.PageTheme(
+            pageFormat: pdf.PdfPageFormat.a4.landscape,
+            margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
+          ),
+          header: (_) => _pdfHeader(
+            'Dashboard Report',
+            clientName,
+            'Current dashboard snapshot with tank statistics, compliance, and alerts.',
+          ),
+          footer: _pdfFooter,
+          build: (_) => [
+            _pdfSectionTitle(
+              'Summary',
+              subtitle: 'High-level snapshot of the current dashboard state.',
+            ),
+            pw.Table.fromTextArray(
+              headers: const ['Metric', 'Value'],
+              data: [
+                ['Tanks', _tanks.length.toString()],
+                ['Total Readings', statsByTank.values.fold<int>(0, (sum, s) => sum + s.count).toString()],
+                ['Open Alerts', openAlerts.length.toString()],
+                ['Completed Tasks', completed.length.toString()],
+              ],
+              headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
+              cellStyle: const pw.TextStyle(fontSize: 8),
+              headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+              cellAlignment: pw.Alignment.centerLeft,
+              columnWidths: const {
+                0: pw.FlexColumnWidth(1.2),
+                1: pw.FlexColumnWidth(1.8),
+              },
+            ),
+            _pdfSectionTitle('Inspection Compliance'),
+            pw.Table(
+              border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
+              children: _buildComplianceRows(statsByTank, _reportWindow()),
+            ),
+            ..._buildTankStatsWidgets(statsByTank),
+            ..._buildAlertWidgets(
+              alerts: openAlerts,
+              completed: completed,
+              includeCompleted: true,
+            ),
+          ],
+        ),
+      );
+
       final dir = await _preferredExportDir();
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final file = File('${dir.path}/dashboard_export_$ts.pdf');
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final file = File('${dir.path}/dashboard_report_$ts.pdf');
       await file.writeAsBytes(await doc.save(), flush: true);
       _snack('Saved: ${file.path}');
-      await Share.shareXFiles([XFile(file.path)], text: 'Dashboard PDF');
+      await Share.shareXFiles([XFile(file.path)], text: 'Dashboard Report PDF');
       await _auditExport('download_pdf', 'dashboard_report', {
         'format': 'pdf',
-        'captured_sections': captures.length,
+        'report_type': 'dashboard_snapshot',
         'path': file.path,
       });
     } catch (e) {
       _snack('PDF export failed: $e', error: true);
+    }
+  }
+
+  Future<void> _downloadAlertsPdf() async {
+    try {
+      final window = _reportWindow();
+      final alerts = _allAlerts
+          .where((a) => _inRange(a.timestamp, window))
+          .where((a) => _tankMatch(a.tankId))
+          .toList()
+        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      final completed = _completed
+          .where((c) => _inRange(c.completedAt, window))
+          .where((c) => _tankMatch(c.alert.tankId))
+          .toList();
+
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          pageTheme: pw.PageTheme(
+            pageFormat: pdf.PdfPageFormat.a4.landscape,
+            margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
+          ),
+          header: (_) => _pdfHeader(
+            'Alerts Report',
+            'All Tanks',
+            'Tabular alert summary with completed task history.',
+          ),
+          footer: _pdfFooter,
+          build: (_) => [
+            _pdfSectionTitle(
+              'Report Window',
+              subtitle:
+                  '${_fmtPdfDateOnly(window.start.toIso8601String())} to ${_fmtPdfDateOnly(window.end.toIso8601String())}',
+            ),
+            ..._buildAlertWidgets(
+              alerts: alerts,
+              completed: completed,
+              includeCompleted: true,
+            ),
+          ],
+        ),
+      );
+
+      final dir = await _preferredExportDir();
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final file = File('${dir.path}/alerts_report_$ts.pdf');
+      await file.writeAsBytes(await doc.save(), flush: true);
+      _snack('Saved: ${file.path}');
+      await Share.shareXFiles([XFile(file.path)], text: 'Alerts Report PDF');
+      await _auditExport('download_pdf', 'alerts_report', {
+        'format': 'pdf',
+        'report_type': 'alerts',
+        'path': file.path,
+      });
+    } catch (e) {
+      _snack('Alerts PDF export failed: $e', error: true);
+    }
+  }
+
+  Future<void> _downloadInspectionReportPdf() async {
+    try {
+      final window = _reportWindow();
+      final readings = await ReadingRepository().getAllReadings();
+      final filtered = readings.where((r) {
+        final dt = DateTime.tryParse(r.capturedAt);
+        return dt != null && !dt.isBefore(window.start) && !dt.isAfter(window.end);
+      }).toList();
+
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          pageTheme: pw.PageTheme(
+            pageFormat: pdf.PdfPageFormat.a4.landscape,
+            margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
+          ),
+          header: (_) => _pdfHeader(
+            'Inspection Report',
+            'All Tanks',
+            'Chronological inspection table with compliance coloring.',
+          ),
+          footer: _pdfFooter,
+          build: (_) => [
+            _pdfSectionTitle(
+              'Range',
+              subtitle:
+                  '${_fmtPdfDateOnly(window.start.toIso8601String())} to ${_fmtPdfDateOnly(window.end.toIso8601String())}',
+            ),
+            ..._buildInspectionReportWidgets(filtered),
+          ],
+        ),
+      );
+
+      final dir = await _preferredExportDir();
+      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final file = File('${dir.path}/inspection_report_$ts.pdf');
+      await file.writeAsBytes(await doc.save(), flush: true);
+      _snack('Saved: ${file.path}');
+      await Share.shareXFiles([XFile(file.path)], text: 'Inspection Report PDF');
+      await _auditExport('download_pdf', 'inspection_report', {
+        'format': 'pdf',
+        'report_type': 'inspection',
+        'range': _pdfRange.label,
+        'path': file.path,
+      });
+    } catch (e) {
+      _snack('Inspection PDF export failed: $e', error: true);
     }
   }
 
@@ -821,7 +1463,7 @@ class _DashboardTabState extends State<DashboardTab> {
                         ElevatedButton.icon(
                           onPressed: _downloadDashboardPdf,
                           icon: const Icon(Icons.picture_as_pdf_outlined),
-                          label: const Text('Download Dashboard as PDF'),
+                          label: const Text('Download Dashboard Report (PDF)'),
                         ),
                         const SizedBox(height: 18),
                         Container(
@@ -930,6 +1572,71 @@ class _DashboardTabState extends State<DashboardTab> {
                                         ? 'Generating Excel...'
                                         : 'Download Abnormality Report (Excel)',
                                   ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: _kCard,
+                            border: Border.all(color: _kBorder),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Professional Reports',
+                                style: GoogleFonts.dmSans(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: _kText,
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              DropdownButtonFormField<_DashboardPdfRange>(
+                                value: _pdfRange,
+                                decoration: const InputDecoration(
+                                  labelText: 'Report Range',
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                ),
+                                items: _DashboardPdfRange.values
+                                    .map(
+                                      (v) => DropdownMenuItem<_DashboardPdfRange>(
+                                        value: v,
+                                        child: Text(v.label),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: (v) async {
+                                  if (v == null) return;
+                                  if (v == _DashboardPdfRange.custom) {
+                                    await _pickCustomPdfRange();
+                                  } else {
+                                    setState(() => _pdfRange = v);
+                                  }
+                                },
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: _downloadAlertsPdf,
+                                  icon: const Icon(Icons.notifications_outlined),
+                                  label: const Text('Download Alerts PDF'),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  onPressed: _downloadInspectionReportPdf,
+                                  icon: const Icon(Icons.fact_check_outlined),
+                                  label: const Text('Download Inspection Report'),
                                 ),
                               ),
                             ],

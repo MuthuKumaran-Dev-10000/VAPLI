@@ -37,6 +37,7 @@ import 'package:lubrication_indicator/core/services/audit_log_service.dart';
 import 'package:lubrication_indicator/core/utils/session_manager.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:pdf/pdf.dart' as pdf;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:share_plus/share_plus.dart';
 
@@ -44,6 +45,8 @@ import 'package:lubrication_indicator/features/dashboard/data/models/dashboard_s
 import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';
 import 'package:lubrication_indicator/features/dashboard/data/repositories/dashboard_stats_repository.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
+import 'package:lubrication_indicator/features/readings/data/models/reading_model.dart';
+import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
 part 'widgets/_alert_card.dart';
 part 'widgets/_alert_card_state.dart';
 part 'widgets/_completed_card.dart';
