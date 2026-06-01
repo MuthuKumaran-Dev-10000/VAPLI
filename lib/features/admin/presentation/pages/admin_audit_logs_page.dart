@@ -145,6 +145,66 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
     }
   }
 
+  Future<void> _openCompactFiltersSheet({
+    required List<ClientModel> clients,
+    required List<String> actions,
+    required List<String> actors,
+    required List<String> tanks,
+  }) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0F1114),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.86,
+            minChildSize: 0.6,
+            maxChildSize: 0.95,
+            builder: (_, controller) {
+              return SingleChildScrollView(
+                controller: controller,
+                padding: const EdgeInsets.all(12),
+                child: _FilterPanel(
+                  searchCtrl: _searchCtrl,
+                  roleFilters: _roleFilters,
+                  clientFilter: _clientFilter,
+                  operationFilter: _operationFilter,
+                  tankFilter: _tankFilter,
+                  actorFilter: _actorFilter,
+                  clients: clients,
+                  actions: actions,
+                  actors: actors,
+                  tanks: tanks,
+                  onChanged: () {
+                    if (mounted) setState(() {});
+                  },
+                  onClientChanged: (value) {
+                    if (mounted) setState(() => _clientFilter = value);
+                  },
+                  onOperationChanged: (value) {
+                    if (mounted) setState(() => _operationFilter = value);
+                  },
+                  onTankChanged: (value) {
+                    if (mounted) setState(() => _tankFilter = value);
+                  },
+                  onActorChanged: (value) {
+                    if (mounted) setState(() => _actorFilter = value);
+                  },
+                  compact: true,
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<DatabaseEvent>(
@@ -152,6 +212,7 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
       builder: (context, snapshot) {
         final allLogs = _logsFrom(snapshot.data?.snapshot.value);
         final visibleLogs = allLogs.where(_matches).toList();
+        final isCompact = MediaQuery.sizeOf(context).width < 700;
         final actions = <String>{'all'};
         final actors = <String>{'all'};
         final tanks = <String>{'all'};
@@ -165,47 +226,76 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
         }
 
         return Padding(
-          padding: const EdgeInsets.all(12),
+          padding: EdgeInsets.all(isCompact ? 8 : 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _HeaderStrip(count: visibleLogs.length, total: allLogs.length),
-              const SizedBox(height: 12),
-              _FilterPanel(
-                searchCtrl: _searchCtrl,
-                roleFilters: _roleFilters,
-                clientFilter: _clientFilter,
-                operationFilter: _operationFilter,
-                tankFilter: _tankFilter,
-                actorFilter: _actorFilter,
-                clients: widget.clients,
-                actions: actions.toList()..sort(),
-                actors: actors.toList()..sort(),
-                tanks: tanks.toList()..sort(),
-                onChanged: () => setState(() {}),
-                onClientChanged: (value) {
-                  setState(() => _clientFilter = value);
-                },
-                onOperationChanged: (value) {
-                  setState(() => _operationFilter = value);
-                },
-                onTankChanged: (value) {
-                  setState(() => _tankFilter = value);
-                },
-                onActorChanged: (value) {
-                  setState(() => _actorFilter = value);
-                },
-              ),
-              const SizedBox(height: 12),
+              SizedBox(height: isCompact ? 8 : 12),
+              if (isCompact)
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        onChanged: (_) => setState(() {}),
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          labelText: 'Search logs',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton.icon(
+                      onPressed: () => _openCompactFiltersSheet(
+                        clients: widget.clients,
+                        actions: actions.toList()..sort(),
+                        actors: actors.toList()..sort(),
+                        tanks: tanks.toList()..sort(),
+                      ),
+                      icon: const Icon(Icons.tune_rounded, size: 18),
+                      label: const Text('Filters'),
+                    ),
+                  ],
+                )
+              else
+                _FilterPanel(
+                  searchCtrl: _searchCtrl,
+                  roleFilters: _roleFilters,
+                  clientFilter: _clientFilter,
+                  operationFilter: _operationFilter,
+                  tankFilter: _tankFilter,
+                  actorFilter: _actorFilter,
+                  clients: widget.clients,
+                  actions: actions.toList()..sort(),
+                  actors: actors.toList()..sort(),
+                  tanks: tanks.toList()..sort(),
+                  onChanged: () => setState(() {}),
+                  onClientChanged: (value) {
+                    setState(() => _clientFilter = value);
+                  },
+                  onOperationChanged: (value) {
+                    setState(() => _operationFilter = value);
+                  },
+                  onTankChanged: (value) {
+                    setState(() => _tankFilter = value);
+                  },
+                  onActorChanged: (value) {
+                    setState(() => _actorFilter = value);
+                  },
+                  compact: isCompact,
+                ),
+              SizedBox(height: isCompact ? 8 : 12),
               Expanded(
                 child: visibleLogs.isEmpty
                     ? const Center(child: Text('No audit logs found.'))
                     : ListView.separated(
                         physics: const BouncingScrollPhysics(),
                         itemCount: visibleLogs.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        separatorBuilder: (_, __) => SizedBox(height: isCompact ? 8 : 10),
                         itemBuilder: (_, index) {
-        final log = visibleLogs[index];
+                          final log = visibleLogs[index];
                           return _AuditLogCard(
                             log: log,
                             severityColor: _severityColor(log['severity']?.toString()),
@@ -231,26 +321,26 @@ class _HeaderStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 700;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(compact ? 12 : 16),
       decoration: BoxDecoration(
         color: const Color(0xFF141618),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(compact ? 14 : 16),
         border: Border.all(color: const Color(0xFF252830)),
       ),
-      child: Row(
-        children: [
-          const Icon(Icons.manage_search_rounded, color: Color(0xFF1ABCBD)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
+      child: compact
+          ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Icon(Icons.manage_search_rounded, color: Color(0xFF1ABCBD)),
+                const SizedBox(height: 8),
                 Text(
                   'Audit Logs',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w700,
+                        fontSize: 16,
                       ),
                 ),
                 const SizedBox(height: 4),
@@ -259,10 +349,31 @@ class _HeaderStrip extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
+            )
+          : Row(
+              children: [
+                const Icon(Icons.manage_search_rounded, color: Color(0xFF1ABCBD)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Audit Logs',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$count visible / $total total entries',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -283,6 +394,7 @@ class _FilterPanel extends StatelessWidget {
   final ValueChanged<String> onOperationChanged;
   final ValueChanged<String> onTankChanged;
   final ValueChanged<String> onActorChanged;
+  final bool compact;
 
   const _FilterPanel({
     required this.searchCtrl,
@@ -300,6 +412,7 @@ class _FilterPanel extends StatelessWidget {
     required this.onOperationChanged,
     required this.onTankChanged,
     required this.onActorChanged,
+    required this.compact,
   });
 
   @override
@@ -313,27 +426,29 @@ class _FilterPanel extends StatelessWidget {
         );
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(compact ? 10 : 12),
       decoration: BoxDecoration(
         color: const Color(0xFF141618),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(compact ? 14 : 16),
         border: Border.all(color: const Color(0xFF252830)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
             children: [
-              Expanded(
+              SizedBox(
+                width: compact ? double.infinity : 320,
                 child: TextField(
                   controller: searchCtrl,
                   onChanged: (_) => onChanged(),
                   decoration: deco('Search summary, tank, user'),
                 ),
               ),
-              const SizedBox(width: 10),
               SizedBox(
-                width: 220,
+                width: compact ? double.infinity : 220,
                 child: DropdownButtonFormField<String>(
                   value: clientFilter,
                   decoration: deco('Client'),
@@ -352,9 +467,8 @@ class _FilterPanel extends StatelessWidget {
                   },
                 ),
               ),
-              const SizedBox(width: 10),
               SizedBox(
-                width: 220,
+                width: compact ? double.infinity : 220,
                 child: DropdownButtonFormField<String>(
                   value: operationFilter,
                   decoration: deco('Action'),
@@ -373,35 +487,8 @@ class _FilterPanel extends StatelessWidget {
                   },
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: ['super admin', 'admin', 'user', 'system'].map((role) {
-                    final selected = roleFilters.contains(role);
-                    return FilterChip(
-                      label: Text(role),
-                      selected: selected,
-                      onSelected: (value) {
-                        if (value) {
-                          roleFilters.add(role);
-                        } else {
-                          roleFilters.remove(role);
-                        }
-                        onChanged();
-                      },
-                    );
-                  }).toList(),
-                ),
-              ),
-              const SizedBox(width: 10),
               SizedBox(
-                width: 220,
+                width: compact ? double.infinity : 220,
                 child: DropdownButtonFormField<String>(
                   value: tankFilter,
                   decoration: deco('Tank'),
@@ -420,9 +507,8 @@ class _FilterPanel extends StatelessWidget {
                   },
                 ),
               ),
-              const SizedBox(width: 10),
               SizedBox(
-                width: 220,
+                width: compact ? double.infinity : 220,
                 child: DropdownButtonFormField<String>(
                   value: actorFilter,
                   decoration: deco('Actor'),
@@ -442,6 +528,27 @@ class _FilterPanel extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: ['super admin', 'admin', 'user', 'system'].map((role) {
+              final selected = roleFilters.contains(role);
+              return FilterChip(
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                label: Text(role),
+                selected: selected,
+                onSelected: (value) {
+                  if (value) {
+                    roleFilters.add(role);
+                  } else {
+                    roleFilters.remove(role);
+                  }
+                  onChanged();
+                },
+              );
+            }).toList(),
           ),
         ],
       ),
@@ -464,6 +571,7 @@ class _AuditLogCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 700;
     final details = log['details'] is Map
         ? Map<String, dynamic>.from(log['details'] as Map)
         : <String, dynamic>{};
@@ -474,8 +582,9 @@ class _AuditLogCard extends StatelessWidget {
         border: Border.all(color: const Color(0xFF252830)),
       ),
       child: ExpansionTile(
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        tilePadding: EdgeInsets.symmetric(horizontal: compact ? 12 : 16, vertical: compact ? 4 : 8),
+        childrenPadding: EdgeInsets.fromLTRB(compact ? 12 : 16, 0, compact ? 12 : 16, compact ? 12 : 16),
+        visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
         leading: CircleAvatar(
           backgroundColor: severityColor.withOpacity(0.15),
           child: Icon(
@@ -485,18 +594,21 @@ class _AuditLogCard extends StatelessWidget {
         ),
         title: Text(
           log['summary']?.toString() ?? log['operation']?.toString() ?? 'Audit event',
-          style: const TextStyle(fontWeight: FontWeight.w700),
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: compact ? 14 : 16),
         ),
         subtitle: Text(
           '$timeLabel • ${log['actor_name'] ?? log['actor_username'] ?? 'System'}',
+          style: TextStyle(fontSize: compact ? 12 : 13),
         ),
-        trailing: Wrap(
-          spacing: 8,
-          children: [
-            _Chip(text: pretty(log['operation']?.toString() ?? '')),
-            _Chip(text: (log['outcome']?.toString() ?? 'success').toUpperCase(), color: severityColor),
-          ],
-        ),
+        trailing: compact
+            ? null
+            : Wrap(
+                spacing: 8,
+                children: [
+                  _Chip(text: pretty(log['operation']?.toString() ?? '')),
+                  _Chip(text: (log['outcome']?.toString() ?? 'success').toUpperCase(), color: severityColor),
+                ],
+              ),
         children: [
           Wrap(
             spacing: 8,
@@ -513,7 +625,7 @@ class _AuditLogCard extends StatelessWidget {
           if (details.isNotEmpty)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: EdgeInsets.all(compact ? 10 : 12),
               decoration: BoxDecoration(
                 color: const Color(0xFF0F1114),
                 borderRadius: BorderRadius.circular(12),
@@ -521,7 +633,7 @@ class _AuditLogCard extends StatelessWidget {
               ),
               child: SelectableText(
                 JsonEncoder.withIndent('  ').convert(details),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+                style: TextStyle(fontFamily: 'monospace', fontSize: compact ? 10 : 12),
               ),
             ),
         ],
@@ -551,7 +663,10 @@ class _Chip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Chip(
       label: Text(text),
-      labelStyle: const TextStyle(fontSize: 12),
+      labelStyle: const TextStyle(fontSize: 11),
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
       backgroundColor: (color ?? const Color(0xFF252830)).withOpacity(0.18),
       side: BorderSide(color: color ?? const Color(0xFF252830)),
     );

@@ -179,21 +179,21 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   String _fmtPdfTs(String? iso) {
-    if (iso == null || iso.trim().isEmpty) return '—';
+    if (iso == null || iso.trim().isEmpty) return '-';
     final dt = DateTime.tryParse(iso)?.toLocal();
     if (dt == null) return iso;
     return DateFormat('dd MMM yyyy, HH:mm').format(dt);
   }
 
   String _fmtPdfDateOnly(String? iso) {
-    if (iso == null || iso.trim().isEmpty) return '—';
+    if (iso == null || iso.trim().isEmpty) return '-';
     final dt = DateTime.tryParse(iso)?.toLocal();
     if (dt == null) return iso;
     return DateFormat('dd MMM yyyy').format(dt);
   }
 
   String _fmtPdfNum(num? value) {
-    if (value == null) return '—';
+    if (value == null) return '-';
     final asDouble = value.toDouble();
     return asDouble == asDouble.truncateToDouble()
         ? asDouble.toInt().toString()
@@ -201,13 +201,24 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   String _fmtPdfAny(dynamic value) {
-    if (value == null) return '—';
+    if (value == null) return '-';
     if (value is Map) {
-      return '${value['left'] ?? ''} / ${value['right'] ?? ''}';
+      final left = value['left']?.toString().trim() ?? '';
+      final right = value['right']?.toString().trim() ?? '';
+      final combined = '$left / $right'.trim();
+      return combined == '/' ? '-' : combined;
     }
     if (value is num) return _fmtPdfNum(value);
     final text = value.toString().trim();
-    return text.isEmpty ? '—' : text;
+    return text.isEmpty ? '-' : text;
+  }
+
+  bool _isTextualParamType(String type) {
+    final normalized = type.trim().toLowerCase();
+    return normalized == 'text' ||
+        normalized == 'multiline' ||
+        normalized == 'dropdown' ||
+        normalized == 'label';
   }
 
   Future<void> _pickCustomPdfRange() async {
@@ -380,16 +391,17 @@ class _DashboardTabState extends State<DashboardTab> {
 
     for (final tank in _tanks) {
       final stats = statsByTank[tank.id] ?? DashboardStatsModel.empty(tank.id);
+      if (stats.lastCapturedAt == null) continue;
       final ok = _isCompliant(tank, stats.lastCapturedAt);
       final baseColor = ok
           ? pdf.PdfColor.fromInt(0xFFE8F5E9)
           : pdf.PdfColor.fromInt(0xFFFFEBEE);
       final last = stats.lastCapturedAt == null
-          ? 'Never'
+          ? '-'
           : _fmtPdfTs(stats.lastCapturedAt);
       final lastDt = DateTime.tryParse(stats.lastCapturedAt ?? '');
       final nextDue = lastDt == null
-          ? '—'
+          ? '-'
           : _fmtPdfDateOnly(lastDt.add(Duration(days: _freqDays(tank))).toIso8601String());
       rows.add(
         pw.TableRow(
@@ -409,12 +421,18 @@ class _DashboardTabState extends State<DashboardTab> {
 
   List<pw.Widget> _buildTankStatsWidgets(Map<String, DashboardStatsModel> statsByTank) {
     final widgets = <pw.Widget>[];
+    var addedTank = false;
     for (final tank in _tanks) {
       final stats = statsByTank[tank.id] ?? DashboardStatsModel.empty(tank.id);
+      if (stats.lastCapturedAt == null) continue;
+      if (addedTank) {
+        widgets.add(pw.NewPage());
+      }
+      addedTank = true;
       widgets.add(
         _pdfSectionTitle(
           'Tank: ${tank.tankName} (${tank.tankCode})',
-          subtitle: 'Last inspection: ${stats.lastCapturedAt == null ? 'Never' : _fmtPdfTs(stats.lastCapturedAt)}',
+          subtitle: 'Last inspection: ${_fmtPdfTs(stats.lastCapturedAt)}',
         ),
       );
       final rows = <List<String>>[];
@@ -424,16 +442,17 @@ class _DashboardTabState extends State<DashboardTab> {
         final label = (prop['label'] as String?) ?? '';
         if (label.isEmpty) continue;
         final stat = stats.paramStats[label];
+        final isTextual = _isTextualParamType(type);
         rows.add([
           label,
           type,
           _fmtPdfAny(stat?.lastValue ?? stats.lastReading[label]),
-          _fmtPdfNum(stat?.avg),
-          _fmtPdfNum(stat?.min),
-          _fmtPdfNum(stat?.max),
-          _fmtPdfAny(prop['expected_avg']),
-          _fmtPdfAny(prop['expected_min']),
-          _fmtPdfAny(prop['expected_max']),
+          isTextual ? '-' : _fmtPdfNum(stat?.avg),
+          isTextual ? '-' : _fmtPdfNum(stat?.min),
+          isTextual ? '-' : _fmtPdfNum(stat?.max),
+          isTextual ? '-' : _fmtPdfAny(prop['expected_avg']),
+          isTextual ? '-' : _fmtPdfAny(prop['expected_min']),
+          isTextual ? '-' : _fmtPdfAny(prop['expected_max']),
         ]);
       }
 
@@ -489,6 +508,14 @@ class _DashboardTabState extends State<DashboardTab> {
       }
       widgets.add(pw.SizedBox(height: 8));
     }
+    if (!addedTank) {
+      widgets.add(
+        pw.Text(
+          'No inspected tanks found in the selected range.',
+          style: const pw.TextStyle(fontSize: 8.5),
+        ),
+      );
+    }
     return widgets;
   }
 
@@ -498,7 +525,7 @@ class _DashboardTabState extends State<DashboardTab> {
     required bool includeCompleted,
   }) {
     final widgets = <pw.Widget>[];
-    widgets.add(_pdfSectionTitle('Alerts'));
+    widgets.add(_pdfSectionTitle('Active Alerts'));
     if (alerts.isEmpty) {
       widgets.add(pw.Text('No alerts in selected range.', style: pw.TextStyle(fontSize: 8.5)));
     } else {
@@ -508,9 +535,9 @@ class _DashboardTabState extends State<DashboardTab> {
           '${a.tankName} (${a.tankCode})',
           a.severity,
           a.paramLabel,
-          a.paramValue,
+          a.paramValue.isEmpty ? '-' : a.paramValue,
           a.capturedByName.isEmpty ? 'Dashboard' : a.capturedByName,
-          a.message,
+          a.message.isEmpty ? '-' : a.message,
         ];
       }).toList();
       widgets.add(
@@ -537,7 +564,7 @@ class _DashboardTabState extends State<DashboardTab> {
     }
 
     if (includeCompleted) {
-      widgets.add(_pdfSectionTitle('Completed Tasks'));
+      widgets.add(_pdfSectionTitle('Resolved Alerts'));
       if (completed.isEmpty) {
         widgets.add(pw.Text('No completed tasks in selected range.', style: pw.TextStyle(fontSize: 8.5)));
       } else {
@@ -552,7 +579,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 a.severity,
                 a.paramLabel,
                 c.completedBy,
-                a.message,
+                a.message.isEmpty ? '-' : a.message,
               ];
             }).toList(),
             headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.2),
@@ -573,7 +600,7 @@ class _DashboardTabState extends State<DashboardTab> {
     final widgets = <pw.Widget>[];
     widgets.add(
       _pdfSectionTitle(
-        'Inspection Compliance',
+        'Inspection Compliance Detail',
         subtitle: 'Rows are highlighted green when the interval to the previous reading stays within the tank frequency, otherwise red.',
       ),
     );
@@ -588,10 +615,15 @@ class _DashboardTabState extends State<DashboardTab> {
       byTank.putIfAbsent(reading.tankId, () => []).add(reading);
     }
 
+    var addedTank = false;
     for (final tank in _tanks) {
       final tankReadings = byTank[tank.id];
       if (tankReadings == null || tankReadings.isEmpty) continue;
       tankReadings.sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
+      if (addedTank) {
+        widgets.add(pw.NewPage());
+      }
+      addedTank = true;
       widgets.add(
         _pdfSectionTitle(
           '${tank.tankName} (${tank.tankCode})',
@@ -630,11 +662,11 @@ class _DashboardTabState extends State<DashboardTab> {
               _pdfCell(_fmtPdfTs(reading.capturedAt), fill: rowColor),
               _pdfCell(_fmtPdfTs(reading.capturedAtStart), fill: rowColor),
               _pdfCell(
-                gap == null ? 'Initial' : '${gap.inHours} hr ${gap.inMinutes.remainder(60)} m',
+                gap == null ? '-' : '${gap.inHours} hr ${gap.inMinutes.remainder(60)} m',
                 fill: rowColor,
               ),
               _pdfCell('${allowed.inDays} day(s)', fill: rowColor),
-              _pdfCell(reading.capturedByName.isEmpty ? '—' : reading.capturedByName, fill: rowColor),
+              _pdfCell(reading.capturedByName.isEmpty ? '-' : reading.capturedByName, fill: rowColor),
               _pdfCell(ok ? 'On time' : 'Late', fill: rowColor),
             ],
           ),
@@ -658,6 +690,14 @@ class _DashboardTabState extends State<DashboardTab> {
       );
       widgets.add(pw.SizedBox(height: 8));
     }
+    if (!addedTank) {
+      widgets.add(
+        pw.Text(
+          'No tank readings were found for the selected window.',
+          style: const pw.TextStyle(fontSize: 8.5),
+        ),
+      );
+    }
     return widgets;
   }
 
@@ -672,11 +712,13 @@ class _DashboardTabState extends State<DashboardTab> {
       final openAlerts = _allAlerts.where((a) => !a.acknowledged).toList()
         ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
       final completed = List<_CompletedTask>.from(_completed);
+      final generatedAt = _fmtPdfTs(DateTime.now().toIso8601String());
       final clientName = _tanks.isEmpty
           ? 'All Tanks'
           : (_tanks.first.location?.trim().isNotEmpty == true
               ? _tanks.first.location!
               : 'Dashboard');
+      final inspectedTanks = statsByTank.values.where((s) => s.lastCapturedAt != null).length;
 
       final doc = pw.Document();
       doc.addPage(
@@ -686,23 +728,24 @@ class _DashboardTabState extends State<DashboardTab> {
             margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
           ),
           header: (_) => _pdfHeader(
-            'Dashboard Report',
+            'Official Dashboard Report',
             clientName,
-            'Current dashboard snapshot with tank statistics, compliance, and alerts.',
+            'Generated: $generatedAt | Current dashboard summary and compliance snapshot.',
           ),
           footer: _pdfFooter,
           build: (_) => [
             _pdfSectionTitle(
-              'Summary',
-              subtitle: 'High-level snapshot of the current dashboard state.',
+              'Executive Summary',
+              subtitle: 'Generated: $generatedAt',
             ),
             pw.Table.fromTextArray(
               headers: const ['Metric', 'Value'],
               data: [
                 ['Tanks', _tanks.length.toString()],
+                ['Inspected Tanks', inspectedTanks.toString()],
                 ['Total Readings', statsByTank.values.fold<int>(0, (sum, s) => sum + s.count).toString()],
                 ['Open Alerts', openAlerts.length.toString()],
-                ['Completed Tasks', completed.length.toString()],
+                ['Resolved Alerts', completed.length.toString()],
               ],
               headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.5),
               cellStyle: const pw.TextStyle(fontSize: 8),
@@ -713,12 +756,19 @@ class _DashboardTabState extends State<DashboardTab> {
                 1: pw.FlexColumnWidth(1.8),
               },
             ),
-            _pdfSectionTitle('Inspection Compliance'),
-            pw.Table(
-              border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
-              children: _buildComplianceRows(statsByTank, _reportWindow()),
-            ),
+            pw.NewPage(),
+            if (inspectedTanks > 0) ...[
+              _pdfSectionTitle(
+                'Inspection Compliance',
+                subtitle: 'Tanks without a recorded inspection are omitted from the report.',
+              ),
+              pw.Table(
+                border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
+                children: _buildComplianceRows(statsByTank, _reportWindow()),
+              ),
+            ],
             ..._buildTankStatsWidgets(statsByTank),
+            if (openAlerts.isNotEmpty || completed.isNotEmpty) pw.NewPage(),
             ..._buildAlertWidgets(
               alerts: openAlerts,
               completed: completed,
@@ -756,6 +806,7 @@ class _DashboardTabState extends State<DashboardTab> {
           .where((c) => _inRange(c.completedAt, window))
           .where((c) => _tankMatch(c.alert.tankId))
           .toList();
+      final generatedAt = _fmtPdfTs(DateTime.now().toIso8601String());
 
       final doc = pw.Document();
       doc.addPage(
@@ -765,9 +816,9 @@ class _DashboardTabState extends State<DashboardTab> {
             margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
           ),
           header: (_) => _pdfHeader(
-            'Alerts Report',
+            'Official Alerts Report',
             'All Tanks',
-            'Tabular alert summary with completed task history.',
+            'Generated: $generatedAt | Tabular alert summary and resolved items.',
           ),
           footer: _pdfFooter,
           build: (_) => [
@@ -809,6 +860,7 @@ class _DashboardTabState extends State<DashboardTab> {
         final dt = DateTime.tryParse(r.capturedAt);
         return dt != null && !dt.isBefore(window.start) && !dt.isAfter(window.end);
       }).toList();
+      final generatedAt = _fmtPdfTs(DateTime.now().toIso8601String());
 
       final doc = pw.Document();
       doc.addPage(
@@ -818,9 +870,9 @@ class _DashboardTabState extends State<DashboardTab> {
             margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
           ),
           header: (_) => _pdfHeader(
-            'Inspection Report',
+            'Official Inspection Report',
             'All Tanks',
-            'Chronological inspection table with compliance coloring.',
+            'Generated: $generatedAt | Detailed inspection compliance table.',
           ),
           footer: _pdfFooter,
           build: (_) => [
@@ -829,6 +881,7 @@ class _DashboardTabState extends State<DashboardTab> {
               subtitle:
                   '${_fmtPdfDateOnly(window.start.toIso8601String())} to ${_fmtPdfDateOnly(window.end.toIso8601String())}',
             ),
+            pw.NewPage(),
             ..._buildInspectionReportWidgets(filtered),
           ],
         ),

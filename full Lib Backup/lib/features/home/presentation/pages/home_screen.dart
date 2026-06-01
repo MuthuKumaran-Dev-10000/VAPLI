@@ -352,44 +352,44 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               ),
             ),
-          ValueListenableBuilder<bool>(
-            valueListenable: DatabaseModeService.isDevelopment,
-            builder: (context, isDev, _) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: TextButton.icon(
-                  onPressed: () async {
-                    await DatabaseModeService.toggle();
-                    if (!context.mounted) return;
-                    setState(() {});
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          isDev
-                              ? 'Switched to Production DB'
-                              : 'Switched to Development testDB',
-                        ),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  },
-                  icon: Icon(
-                    isDev ? Icons.science_outlined : Icons.public_outlined,
-                    size: 16,
-                    color: isDev ? AppColors.warning : AppColors.textSecondary,
-                  ),
-                  label: Text(
-                    isDev ? 'DEV' : 'PROD',
-                    style: GoogleFonts.inter(
-                      color: isDev ? AppColors.warning : AppColors.textSecondary,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
+          // ValueListenableBuilder<bool>(
+          //   valueListenable: DatabaseModeService.isDevelopment,
+          //   builder: (context, isDev, _) {
+          //     return Padding(
+          //       padding: const EdgeInsets.symmetric(horizontal: 4),
+          //       child: TextButton.icon(
+          //         onPressed: () async {
+          //           await DatabaseModeService.toggle();
+          //           if (!context.mounted) return;
+          //           setState(() {});
+          //           ScaffoldMessenger.of(context).showSnackBar(
+          //             SnackBar(
+          //               content: Text(
+          //                 isDev
+          //                     ? 'Switched to Production DB'
+          //                     : 'Switched to Development testDB',
+          //               ),
+          //               behavior: SnackBarBehavior.floating,
+          //             ),
+          //           );
+          //         },
+          //         icon: Icon(
+          //           isDev ? Icons.science_outlined : Icons.public_outlined,
+          //           size: 16,
+          //           color: isDev ? AppColors.warning : AppColors.textSecondary,
+          //         ),
+          //         label: Text(
+          //           isDev ? 'DEV' : 'PROD',
+          //           style: GoogleFonts.inter(
+          //             color: isDev ? AppColors.warning : AppColors.textSecondary,
+          //             fontWeight: FontWeight.w700,
+          //             fontSize: 11,
+          //           ),
+          //         ),
+          //       ),
+          //     );
+          //   },
+          // ),
           if (_currentUser != null)
             Padding(
               padding: const EdgeInsets.only(

@@ -81,7 +81,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       if (_canViewSettings)
         const _DashboardTabSpec(key: 'settings', label: 'Settings'),
       if (_canViewTab(AccessControlService.pViewAuditLogs))
-        const _DashboardTabSpec(key: 'audit_logs', label: 'Audit Logs'),
+        const _DashboardTabSpec(key: 'audit_logs', label: 'Audit'),
     ];
     if (tabs.isEmpty) {
       tabs.add(const _DashboardTabSpec(key: 'empty', label: 'Dashboard'));
