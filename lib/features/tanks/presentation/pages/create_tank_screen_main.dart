@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:lubrication_indicator/core/services/client_context_service.dart';
 import 'package:lubrication_indicator/core/services/audit_log_service.dart';
+import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/services/expression_engine.dart';
 import 'package:lubrication_indicator/core/utils/session_manager.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
@@ -326,6 +327,7 @@ class _CreateTankScreenState extends State<CreateTankScreen> {
         actorName: user.fullName,
         actorRole: user.role,
         tab: 'tanks',
+        clientDbKey: DatabaseModeService.activeClientId.value,
         clientName: location,
         details: {
           'tank_code': tankCode,

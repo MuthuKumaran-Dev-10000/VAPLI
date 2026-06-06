@@ -26,6 +26,8 @@ class AuditLogService {
   }) async {
     final timestamp = DateTime.now().toIso8601String();
     final logId = HashUtil.generateId();
+    final resolvedClientDbKey = (clientDbKey ?? DatabaseModeService.activeClientId.value ?? '')
+        .trim();
     final payload = <String, dynamic>{
       'log_id': logId,
       'timestamp': timestamp,
@@ -51,7 +53,7 @@ class AuditLogService {
       'actor_role': actorRole ?? 'system',
       'tab': tab ?? '',
       'client_id': clientId ?? '',
-      'client_db_key': clientDbKey ?? '',
+      'client_db_key': resolvedClientDbKey,
       'client_name': clientName ?? '',
       'cascade_id': cascadeId ?? '',
       'parent_log_id': parentLogId ?? '',
@@ -59,7 +61,11 @@ class AuditLogService {
       'details': details ?? <String, dynamic>{},
     };
 
-    final scopedRef = DatabaseModeService.ref('admin_audit_logs').push();
+    final scopedRef = resolvedClientDbKey.isNotEmpty
+        ? FirebaseDatabase.instance
+            .ref('${DatabaseModeService.isDevelopment.value ? 'testDB/' : ''}$resolvedClientDbKey/admin_audit_logs')
+            .push()
+        : DatabaseModeService.ref('admin_audit_logs').push();
     final rootPrefix = DatabaseModeService.isDevelopment.value ? 'testDB/' : '';
     final masterRef =
         FirebaseDatabase.instance.ref('${rootPrefix}admin_audit_logs_master').push();

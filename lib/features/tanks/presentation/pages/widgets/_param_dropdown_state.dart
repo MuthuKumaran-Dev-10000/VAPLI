@@ -1,60 +1,60 @@
 part of '../property_builder_page.dart';
 
-
 class _ParamDropdownState extends State<_ParamDropdown> {
-  Map<String, dynamic>? _selected;
+  String? _selectedKey;
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () => _showPicker(context),
-      child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: _kBg,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: _kBorder),
+    final items = <MapEntry<String, Map<String, dynamic>>>[];
+    for (var index = 0; index < widget.params.length; index++) {
+      final param = widget.params[index];
+      if (param.isEmpty) continue;
+      final label = (param['label']?.toString().trim() ?? '');
+      if (label.isEmpty) continue;
+      final token = param['token']?.toString().trim();
+      final id = param['id']?.toString().trim();
+      final key = [
+        label,
+        if (token != null && token.isNotEmpty) token,
+        if (id != null && id.isNotEmpty) id,
+        index.toString(),
+      ].join('|');
+      items.add(MapEntry(key, param));
+    }
+
+    if (_selectedKey != null && !items.any((entry) => entry.key == _selectedKey)) {
+      _selectedKey = null;
+    }
+
+    return DropdownButtonHideUnderline(
+      child: DropdownButtonFormField<String>(
+        value: _selectedKey,
+        isExpanded: true,
+        decoration: const InputDecoration(
+          isDense: true,
+          border: OutlineInputBorder(),
         ),
-        child: Row(children: [
-          const Icon(Icons.data_object_rounded, size: 15, color: _kSub),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _selected == null
-                ? const Text('Select a parameter to insert…',
-                    style: TextStyle(color: _kSub, fontSize: 13))
-                : Row(children: [
-                    Text(
-                        _selected!['label']?.toString() ?? '',
-                        style: const TextStyle(
-                            color: _kText, fontSize: 13)),
-                    const SizedBox(width: 8),
-                    _TypeChip(
-                        type: _selected!['type']?.toString() ?? ''),
-                  ]),
-          ),
-          const Icon(Icons.arrow_drop_down, color: _kSub, size: 20),
-        ]),
+        hint: const Text('Select parameter'),
+        items: items
+            .map(
+              (entry) => DropdownMenuItem<String>(
+                value: entry.key,
+                child: Text(entry.key, overflow: TextOverflow.ellipsis),
+              ),
+            )
+            .toList(),
+        onChanged: (value) {
+          setState(() => _selectedKey = value);
+          Map<String, dynamic>? match;
+          for (final entry in items) {
+            if (entry.key == value) {
+              match = entry.value;
+              break;
+            }
+          }
+          widget.onSelected(match);
+        },
       ),
     );
-  }
-
-  Future<void> _showPicker(BuildContext context) async {
-    final picked = await showModalBottomSheet<Map<String, dynamic>?>(
-      context: context,
-      backgroundColor: _kCard,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) =>
-          _ParamPickerSheet(params: widget.params, current: _selected),
-    );
-    if (picked == null) return;
-    if (picked.isEmpty) {
-      setState(() => _selected = null);
-      return;
-    }
-    setState(() => _selected = picked);
-    await widget.onSelected(picked);
   }
 }

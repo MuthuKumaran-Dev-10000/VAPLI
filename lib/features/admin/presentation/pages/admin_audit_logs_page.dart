@@ -4,8 +4,8 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/models/client_model.dart';
+import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/features/auth/data/models/user_model.dart';
 
 class AdminAuditLogsPage extends StatefulWidget {
@@ -36,6 +36,11 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
 
   DatabaseReference get _ref {
     final rootPrefix = DatabaseModeService.isDevelopment.value ? 'testDB/' : '';
+    final client = _selectedClientModel();
+    if (client != null && client.dbKey.trim().isNotEmpty) {
+      return FirebaseDatabase.instance
+          .ref('${rootPrefix}${client.dbKey.trim()}/admin_audit_logs');
+    }
     return FirebaseDatabase.instance.ref('${rootPrefix}admin_audit_logs_master');
   }
 
@@ -52,10 +57,45 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
   }
 
   Map<String, dynamic> _mapOf(dynamic value) {
-    if (value is Map) {
-      return Map<String, dynamic>.from(value);
-    }
+    if (value is Map) return Map<String, dynamic>.from(value);
     return <String, dynamic>{};
+  }
+
+  ClientModel? _selectedClientModel() {
+    final selectedId = widget.selectedClientId;
+    if (selectedId == 'all') return null;
+    if (selectedId == null || selectedId.trim().isEmpty) return null;
+    for (final client in widget.clients) {
+      if (client.id == selectedId) return client;
+    }
+    return null;
+  }
+
+  bool _clientMatches(Map<String, dynamic> log) {
+    if (_clientFilter == 'all') return true;
+    final selected = _selectedClientModel();
+    final candidates = <String>{
+      log['client_id']?.toString() ?? '',
+      log['client_db_key']?.toString() ?? '',
+      log['client_name']?.toString() ?? '',
+    };
+    final details = log['details'] is Map
+        ? Map<String, dynamic>.from(log['details'] as Map)
+        : <String, dynamic>{};
+    candidates.add(details['client_id']?.toString() ?? '');
+    candidates.add(details['client_db_key']?.toString() ?? '');
+    candidates.add(details['scope_id']?.toString() ?? '');
+    candidates.add(details['client_name']?.toString() ?? '');
+    candidates.removeWhere((value) => value.trim().isEmpty);
+
+    final tokens = <String>{
+      _clientFilter,
+      selected?.dbKey ?? '',
+      selected?.name ?? '',
+      selected?.rootFolderId ?? '',
+    }..removeWhere((value) => value.trim().isEmpty);
+
+    return candidates.any(tokens.contains);
   }
 
   List<Map<String, dynamic>> _logsFrom(dynamic value) {
@@ -79,7 +119,7 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
   bool _matches(Map<String, dynamic> log) {
     final role = (log['actor_role']?.toString() ?? 'system').toLowerCase();
     if (!_roleFilters.contains(role)) return false;
-    if (_clientFilter != 'all' && log['client_id']?.toString() != _clientFilter) {
+    if (!_clientMatches(log)) {
       return false;
     }
     if (_operationFilter != 'all' && log['operation']?.toString() != _operationFilter) {
@@ -96,6 +136,10 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
 
     final q = _searchCtrl.text.trim().toLowerCase();
     if (q.isEmpty) return true;
+
+    final details = log['details'] is Map
+        ? Map<String, dynamic>.from(log['details'] as Map)
+        : <String, dynamic>{};
     final haystack = [
       log['summary'],
       log['operation'],
@@ -104,13 +148,32 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
       log['actor_name'],
       log['actor_username'],
       log['client_name'],
-      jsonEncode(log['details'] ?? const {}),
+      log['client_id'],
+      log['client_db_key'],
+      log['entity_path'],
+      details['tank_name'],
+      details['tank_code'],
+      details['old_name'],
+      details['new_name'],
+      details['client_id'],
+      details['client_db_key'],
+      details['scope_id'],
+      jsonEncode(details),
     ].whereType<String>().join(' ').toLowerCase();
     return haystack.contains(q);
   }
 
-  String _pretty(String value) {
-    return value.replaceAll('_', ' ').trim();
+  String _pretty(String value) => value.replaceAll('_', ' ').trim();
+
+  String _textOrDash(dynamic value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? '-' : text;
+  }
+
+  String _roleLabel(String? role) {
+    final text = (role ?? 'system').trim();
+    if (text.isEmpty) return 'System';
+    return text[0].toUpperCase() + text.substring(1);
   }
 
   String _tankLabel(Map<String, dynamic> log) {
@@ -142,6 +205,60 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
         return const Color(0xFFF59E0B);
       default:
         return const Color(0xFF60A5FA);
+    }
+  }
+
+  String _auditTitle(Map<String, dynamic> log) {
+    final summary = log['summary']?.toString().trim();
+    if (summary != null && summary.isNotEmpty) return summary;
+    final operation = _pretty(log['operation']?.toString() ?? 'audit event');
+    final entity = _pretty(log['entity_type']?.toString() ?? '');
+    if (entity.isEmpty) return operation;
+    return '$operation · $entity';
+  }
+
+  String _auditSummary(Map<String, dynamic> log) {
+    final details = log['details'] is Map
+        ? Map<String, dynamic>.from(log['details'] as Map)
+        : <String, dynamic>{};
+    final actorName = _textOrDash(log['actor_name'] ?? log['actor_username'] ?? 'System');
+    final actorRole = _roleLabel(log['actor_role']?.toString());
+    final clientName = _textOrDash(log['client_name']);
+    final entityName = _textOrDash(log['entity_name']);
+    final path = _textOrDash(details['path']);
+    final tankName = _textOrDash(details['tank_name'] ?? details['tank_code'] ?? entityName);
+    final oldName = _textOrDash(details['old_name']);
+    final newName = _textOrDash(details['new_name']);
+    final timestamp = _timeLabel(log['timestamp']?.toString());
+    final operation = (log['operation']?.toString() ?? '').toLowerCase();
+
+    switch (operation) {
+      case 'client_rename':
+        return 'The $actorRole $actorName renamed client $oldName to $newName at $timestamp.';
+      case 'client_create':
+        return 'The $actorRole $actorName created client $entityName at $timestamp.';
+      case 'client_delete':
+        return 'The $actorRole $actorName deleted client $entityName at $timestamp.';
+      case 'tank_create':
+        return 'The $actorRole $actorName created a new tank $tankName at $path for client $clientName at $timestamp.';
+      case 'tank_update':
+      case 'tank_modify':
+      case 'tank_edit':
+        return 'The $actorRole $actorName updated tank $tankName for client $clientName at $timestamp.';
+      case 'tank_delete':
+        return 'The $actorRole $actorName deleted tank $tankName for client $clientName at $timestamp.';
+      case 'user_create':
+        return 'The $actorRole $actorName created a new user account $entityName at $timestamp.';
+      case 'user_update':
+        return 'The $actorRole $actorName updated user account $entityName at $timestamp.';
+      case 'user_delete':
+        return 'The $actorRole $actorName deleted user account $entityName at $timestamp.';
+      case 'settings_update':
+      case 'update_settings':
+        return 'The $actorRole $actorName changed system settings at $timestamp.';
+      default:
+        final operationLabel = _pretty(operation);
+        return 'The $actorRole $actorName performed $operationLabel on $entityName for client $clientName at $timestamp.';
     }
   }
 
@@ -213,6 +330,7 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
         final allLogs = _logsFrom(snapshot.data?.snapshot.value);
         final visibleLogs = allLogs.where(_matches).toList();
         final isCompact = MediaQuery.sizeOf(context).width < 700;
+
         final actions = <String>{'all'};
         final actors = <String>{'all'};
         final tanks = <String>{'all'};
@@ -222,7 +340,7 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
           final tank = _tankLabel(log);
           if (op != null && op.isNotEmpty) actions.add(op);
           if (actor != null && actor.isNotEmpty) actors.add(actor);
-          if (tank != null && tank.isNotEmpty) tanks.add(tank);
+          if (tank.isNotEmpty) tanks.add(tank);
         }
 
         return Padding(
@@ -272,19 +390,11 @@ class _AdminAuditLogsPageState extends State<AdminAuditLogsPage> {
                   actors: actors.toList()..sort(),
                   tanks: tanks.toList()..sort(),
                   onChanged: () => setState(() {}),
-                  onClientChanged: (value) {
-                    setState(() => _clientFilter = value);
-                  },
-                  onOperationChanged: (value) {
-                    setState(() => _operationFilter = value);
-                  },
-                  onTankChanged: (value) {
-                    setState(() => _tankFilter = value);
-                  },
-                  onActorChanged: (value) {
-                    setState(() => _actorFilter = value);
-                  },
-                  compact: isCompact,
+                  onClientChanged: (value) => setState(() => _clientFilter = value),
+                  onOperationChanged: (value) => setState(() => _operationFilter = value),
+                  onTankChanged: (value) => setState(() => _tankFilter = value),
+                  onActorChanged: (value) => setState(() => _actorFilter = value),
+                  compact: false,
                 ),
               SizedBox(height: isCompact ? 8 : 12),
               Expanded(
@@ -556,6 +666,96 @@ class _FilterPanel extends StatelessWidget {
   }
 }
 
+String _auditTitle(Map<String, dynamic> log) {
+  final summary = log['summary']?.toString().trim();
+  if (summary != null && summary.isNotEmpty) return summary;
+  final operation = (log['operation']?.toString() ?? 'audit event').replaceAll('_', ' ').trim();
+  final entity = (log['entity_type']?.toString() ?? '').replaceAll('_', ' ').trim();
+  if (entity.isEmpty) return operation;
+  return '$operation · $entity';
+}
+
+String _auditSummary(Map<String, dynamic> log) {
+  final details = log['details'] is Map
+      ? Map<String, dynamic>.from(log['details'] as Map)
+      : <String, dynamic>{};
+  final actorName = (log['actor_name'] ?? log['actor_username'] ?? 'System').toString().trim();
+  final actorRole = (log['actor_role']?.toString() ?? 'system').trim();
+  final clientName = (log['client_name'] ?? '-').toString().trim();
+  final entityName = (log['entity_name'] ?? '-').toString().trim();
+  final path = (details['path'] ?? '-').toString().trim();
+  final tankName = (details['tank_name'] ?? details['tank_code'] ?? entityName).toString().trim();
+  final oldName = (details['old_name'] ?? '-').toString().trim();
+  final newName = (details['new_name'] ?? '-').toString().trim();
+  final timestamp = DateTime.tryParse(log['timestamp']?.toString() ?? '')?.toLocal();
+  final timeText = timestamp == null ? 'unknown time' : DateFormat('dd MMM yyyy, HH:mm').format(timestamp);
+  final roleText = actorRole.isEmpty ? 'System' : actorRole[0].toUpperCase() + actorRole.substring(1);
+  final actorText = actorName.isEmpty ? 'System' : actorName;
+  final op = (log['operation']?.toString() ?? '').toLowerCase();
+
+  if (op.contains('client') && op.contains('rename')) {
+    return 'The $roleText $actorText renamed client $oldName to $newName at $timeText.';
+  }
+  if (op.contains('client') && op.contains('create')) {
+    return 'The $roleText $actorText created client $entityName at $timeText.';
+  }
+  if (op.contains('client') && op.contains('delete')) {
+    return 'The $roleText $actorText deleted client $entityName at $timeText.';
+  }
+  if (op.contains('tank') && (op.contains('create') || op.contains('add'))) {
+    return 'The $roleText $actorText created a new tank $tankName at $path for client $clientName at $timeText.';
+  }
+  if (op.contains('tank') &&
+      (op.contains('update') || op.contains('modify') || op.contains('edit') || op.contains('save'))) {
+    return 'The $roleText $actorText updated tank $tankName for client $clientName at $timeText.';
+  }
+  if (op.contains('tank') && op.contains('delete')) {
+    return 'The $roleText $actorText deleted tank $tankName for client $clientName at $timeText.';
+  }
+  if (op.contains('user') && op.contains('create')) {
+    return 'The $roleText $actorText created a new user account $entityName at $timeText.';
+  }
+  if (op.contains('user') &&
+      (op.contains('update') || op.contains('modify') || op.contains('edit') || op.contains('save'))) {
+    return 'The $roleText $actorText updated user account $entityName at $timeText.';
+  }
+  if (op.contains('user') && op.contains('delete')) {
+    return 'The $roleText $actorText deleted user account $entityName at $timeText.';
+  }
+  if (op.contains('settings') || op.contains('permission')) {
+    return 'The $roleText $actorText changed system settings at $timeText.';
+  }
+
+  switch (op) {
+    case 'client_rename':
+      return 'The $roleText $actorText renamed client $oldName to $newName at $timeText.';
+    case 'client_create':
+      return 'The $roleText $actorText created client $entityName at $timeText.';
+    case 'client_delete':
+      return 'The $roleText $actorText deleted client $entityName at $timeText.';
+    case 'tank_create':
+      return 'The $roleText $actorText created a new tank $tankName at $path for client $clientName at $timeText.';
+    case 'tank_update':
+    case 'tank_modify':
+    case 'tank_edit':
+      return 'The $roleText $actorText updated tank $tankName for client $clientName at $timeText.';
+    case 'tank_delete':
+      return 'The $roleText $actorText deleted tank $tankName for client $clientName at $timeText.';
+    case 'user_create':
+      return 'The $roleText $actorText created a new user account $entityName at $timeText.';
+    case 'user_update':
+      return 'The $roleText $actorText updated user account $entityName at $timeText.';
+    case 'user_delete':
+      return 'The $roleText $actorText deleted user account $entityName at $timeText.';
+    case 'settings_update':
+    case 'update_settings':
+      return 'The $roleText $actorText changed system settings at $timeText.';
+    default:
+      final operationLabel = (op.isEmpty ? 'performed an action' : 'performed ${op.replaceAll('_', ' ')}');
+      return 'The $roleText $actorText $operationLabel on $entityName for client $clientName at $timeText.';
+  }
+}
+
 class _AuditLogCard extends StatelessWidget {
   final Map<String, dynamic> log;
   final Color severityColor;
@@ -593,12 +793,25 @@ class _AuditLogCard extends StatelessWidget {
           ),
         ),
         title: Text(
-          log['summary']?.toString() ?? log['operation']?.toString() ?? 'Audit event',
+          _auditTitle(log),
           style: TextStyle(fontWeight: FontWeight.w700, fontSize: compact ? 14 : 16),
         ),
-        subtitle: Text(
-          '$timeLabel • ${log['actor_name'] ?? log['actor_username'] ?? 'System'}',
-          style: TextStyle(fontSize: compact ? 12 : 13),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '$timeLabel • ${log['actor_name'] ?? log['actor_username'] ?? 'System'}',
+              style: TextStyle(fontSize: compact ? 12 : 13),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _auditSummary(log),
+              style: TextStyle(
+                fontSize: compact ? 11 : 12,
+                color: const Color(0xFFB7C0CC),
+              ),
+            ),
+          ],
         ),
         trailing: compact
             ? null

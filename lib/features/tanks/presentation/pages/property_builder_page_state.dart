@@ -1080,6 +1080,7 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
         actorName: user?.fullName,
         actorRole: user?.role,
         tab: 'tanks',
+        clientDbKey: DatabaseModeService.activeClientId.value,
         details: {
           'scope_id': widget.scopeId,
           'parameter_type': prop['type'],
