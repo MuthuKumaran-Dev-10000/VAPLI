@@ -130,4 +130,3 @@ class ReadingEntryScreen extends StatefulWidget {
   @override
   State<ReadingEntryScreen> createState() => _ReadingEntryScreenState();
 }
-

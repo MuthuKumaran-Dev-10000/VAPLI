@@ -1,0 +1,1276 @@
+﻿diff --git a/lib/features/dashboard/presentation/pages/dashboard_tab_state.dart b/lib/features/dashboard/presentation/pages/dashboard_tab_state.dart
+index dc4b8ec..cfc1307 100644
+--- a/lib/features/dashboard/presentation/pages/dashboard_tab_state.dart
++++ b/lib/features/dashboard/presentation/pages/dashboard_tab_state.dart
+@@ -71,6 +71,12 @@ class _DashboardTabState extends State<DashboardTab> {
+   _DashboardPdfRange _pdfRange = _DashboardPdfRange.current;
+   DateTimeRange? _customPdfRange;
+ 
++  // 🔖 Exporting state flags to prevent duplicate clicks and show loaders
++  bool _dashboardPdfExporting = false;
++  bool _alertsPdfExporting = false;
++  bool _inspectionPdfExporting = false;
++  bool _alertsPngExporting = false;
++
+   DatabaseReference _ref(String path) => DatabaseModeService.ref(path);
+   void _snack(String msg, {bool error = false}) {
+     if (!mounted) return;
+@@ -119,6 +125,11 @@ class _DashboardTabState extends State<DashboardTab> {
+   }
+ 
+   Future<void> _downloadPng(GlobalKey key, String fileName) async {
++    final isAlerts = fileName == 'dashboard_alerts';
++    if (isAlerts) {
++      if (_alertsPngExporting) return;
++      setState(() => _alertsPngExporting = true);
++    }
+     try {
+       final bytes = await _capture(key);
+       if (bytes == null) {
+@@ -138,6 +149,10 @@ class _DashboardTabState extends State<DashboardTab> {
+       });
+     } catch (e) {
+       _snack('PNG export failed: $e', error: true);
++    } finally {
++      if (isAlerts && mounted) {
++        setState(() => _alertsPngExporting = false);
++      }
+     }
+   }
+ 
+@@ -694,14 +709,149 @@ class _DashboardTabState extends State<DashboardTab> {
+       widgets.add(
+         pw.Text(
+           'No tank readings were found for the selected window.',
+-          style: const pw.TextStyle(fontSize: 8.5),
+-        ),
++  // 🔖 Helper to draw trend indicators as red upward/downward vector arrows in PDF
++  class _PdfArrowPainter extends pw.CustomPainter {
++    final bool isUp;
++    _PdfArrowPainter({required this.isUp});
++
++    @override
++    void paint(pw.Canvas canvas, pdf.PdfPoint size) {
++      canvas.setFillColor(pdf.PdfColors.red500);
++      if (isUp) {
++        canvas.moveTo(size.x / 2, size.y);
++        canvas.lineTo(0, 0);
++        canvas.lineTo(size.x, 0);
++      } else {
++        canvas.moveTo(size.x / 2, 0);
++        canvas.lineTo(0, size.y);
++        canvas.lineTo(size.x, size.y);
++      }
++      canvas.fillPath();
++    }
++  }
++
++  // 🔖 Helper to collect all image URLs associated with a specific parameter in a reading
++  List<String> _getParamImages(Map<String, dynamic> values, Map<String, dynamic> p) {
++    final urls = <String>[];
++    final id = p['id']?.toString() ?? '';
++    final label = p['label']?.toString() ?? '';
++    if (id.isEmpty) return urls;
++
++    // 1. Main parameter image
++    final mainImg = values['${id}__image_url']?.toString().trim() ?? '';
++    if (mainImg.startsWith('http')) {
++      urls.add(mainImg);
++    }
++
++    // 2. Violation images
++    for (final entry in values.entries) {
++      final key = entry.key;
++      if (key.startsWith('${id}__violation_') && key.endsWith('_image_url')) {
++        final img = entry.value?.toString().trim() ?? '';
++        if (img.startsWith('http')) {
++          urls.add(img);
++        }
++      }
++    }
++
++    // 3. Manual captured images
++    final manualPrefix = 'manual_${label}_captured_image';
++    for (final entry in values.entries) {
++      final key = entry.key;
++      if (key == manualPrefix || (key.startsWith('${manualPrefix}_') && RegExp(r'^\d+$').hasMatch(key.substring(manualPrefix.length + 1)))) {
++        final img = entry.value?.toString().trim() ?? '';
++        if (img.startsWith('http')) {
++          urls.add(img);
++        }
++      }
++    }
++
++    return urls;
++  }
++
++  // 🔖 Helper to build a cell displaying parameter value, trend arrow, and clickable image URLs
++  pw.Widget _buildParameterCell(String text, List<String> images, {pw.Widget? trendIndicator}) {
++    return pw.Container(
++      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
++      alignment: pw.Alignment.centerLeft,
++      child: pw.Column(
++        crossAxisAlignment: pw.CrossAxisAlignment.start,
++        mainAxisSize: pw.MainAxisSize.min,
++        children: [
++          pw.Row(
++            mainAxisSize: pw.MainAxisSize.min,
++            children: [
++              pw.Text(text, style: const pw.TextStyle(fontSize: 8)),
++              if (trendIndicator != null) ...[
++                pw.SizedBox(width: 3),
++                trendIndicator,
++              ],
++            ],
++          ),
++          if (images.isNotEmpty) ...[
++            pw.SizedBox(height: 2),
++            ...images.asMap().entries.map((e) {
++              final idx = e.key + 1;
++              final url = e.value;
++              return pw.Padding(
++                padding: const pw.EdgeInsets.only(top: 1.5),
++                child: pw.UrlLink(
++                  destination: url,
++                  child: pw.Text(
++                    '📷 Photo $idx',
++                    style: pw.TextStyle(
++                      fontSize: 7,
++                      color: pdf.PdfColors.blue800,
++                      decoration: pw.TextDecoration.underline,
++                    ),
++                  ),
++                ),
++              );
++            }),
++          ],
++        ],
++      ),
++    );
++  }
++
++  // 🔖 Helper to build a clickable list of images in a separate column if needed
++  pw.Widget _buildImagesCell(List<String> urls) {
++    if (urls.isEmpty) {
++      return pw.Container(
++        padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
++        child: pw.Text('-', style: const pw.TextStyle(fontSize: 8)),
+       );
+     }
+-    return widgets;
++    return pw.Container(
++      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
++      child: pw.Column(
++        crossAxisAlignment: pw.CrossAxisAlignment.start,
++        mainAxisSize: pw.MainAxisSize.min,
++        children: urls.asMap().entries.map((e) {
++          final idx = e.key + 1;
++          final url = e.value;
++          return pw.Padding(
++            padding: const pw.EdgeInsets.only(bottom: 2),
++            child: pw.UrlLink(
++              destination: url,
++              child: pw.Text(
++                'Link $idx',
++                style: pw.TextStyle(
++                  fontSize: 7.5,
++                  color: pdf.PdfColors.blue800,
++                  decoration: pw.TextDecoration.underline,
++                ),
++              ),
++            ),
++          );
++        }).toList(),
++      ),
++    );
+   }
+ 
+   Future<void> _downloadDashboardPdf() async {
++    if (_dashboardPdfExporting) return;
++    setState(() => _dashboardPdfExporting = true);
+     try {
+       final statsRepo = DashboardStatsRepository();
+       final statsByTank = <String, DashboardStatsModel>{};
+@@ -712,15 +862,86 @@ class _DashboardTabState extends State<DashboardTab> {
+       final openAlerts = _allAlerts.where((a) => !a.acknowledged).toList()
+         ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+       final completed = List<_CompletedTask>.from(_completed);
+-      final generatedAt = _fmtPdfTs(DateTime.now().toIso8601String());
++      final generatedAt = DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.now());
++      
+       final clientName = _tanks.isEmpty
+           ? 'All Tanks'
+           : (_tanks.first.location?.trim().isNotEmpty == true
+               ? _tanks.first.location!
+               : 'Dashboard');
+-      final inspectedTanks = statsByTank.values.where((s) => s.lastCapturedAt != null).length;
++
++      final window = _reportWindow();
++      final readings = await ReadingRepository().getAllReadings();
++      final filteredReadings = readings.where((r) {
++        final dt = DateTime.tryParse(r.capturedAt);
++        return dt != null && !dt.isBefore(window.start) && !dt.isAfter(window.end);
++      }).toList()
++        ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
++
++      final inspectedTanksCount = statsByTank.values.where((s) => s.lastCapturedAt != null).length;
++
++      // 🔖 Fetch folder mappings from tree node repository
++      final nodes = await TankTreeRepository().fetchAll();
++      final folderNameMap = <String, String>{};
++      for (final n in nodes) {
++        if (n.isFolder) {
++          folderNameMap[n.id] = n.name;
++        }
++      }
++      final tankFolderMap = <String, String>{};
++      for (final tank in _tanks) {
++        final leaf = nodes.firstWhere((n) => n.isLeaf && n.tankId == tank.id, orElse: () => null);
++        if (leaf != null && leaf.parentId != null) {
++          tankFolderMap[tank.id] = folderNameMap[leaf.parentId] ?? 'General';
++        } else {
++          tankFolderMap[tank.id] = (tank.location?.trim().isNotEmpty == true) ? tank.location! : 'General';
++        }
++      }
++
++      // Group tanks by folder
++      final groupedTanks = <String, List<TankModel>>{};
++      for (final tank in _tanks) {
++        final folderName = tankFolderMap[tank.id] ?? 'General';
++        groupedTanks.putIfAbsent(folderName, () => []).add(tank);
++      }
++
++      // Build records to show
++      final records = <Map<String, dynamic>>[];
++      if (_pdfRange == _DashboardPdfRange.current) {
++        for (final tank in _tanks) {
++          final stats = statsByTank[tank.id];
++          if (stats != null && stats.lastCapturedAt != null && stats.lastReading.isNotEmpty) {
++            records.add({
++              'tankId': tank.id,
++              'tankCode': tank.tankCode,
++              'tankName': tank.tankName,
++              'date': stats.lastCapturedAt!,
++              'values': stats.lastReading,
++              'inspector': stats.lastCapturedBy ?? '',
++              'duplicateReason': stats.lastDuplicateReason ?? '',
++            });
++          }
++        }
++      } else {
++        for (final r in filteredReadings) {
++          final tank = _tanks.firstWhere((t) => t.id == r.tankId, orElse: () => null);
++          if (tank != null) {
++            records.add({
++              'tankId': r.tankId,
++              'tankCode': tank.tankCode,
++              'tankName': tank.tankName,
++              'date': r.capturedAt,
++              'values': r.inspectionValues,
++              'inspector': r.capturedByName,
++              'duplicateReason': r.inspectionValues['duplicate_reason']?.toString() ?? r.inspectionValues['reason']?.toString() ?? '',
++            });
++          }
++        }
++      }
+ 
+       final doc = pw.Document();
++      
++      // Page 1: Cover Sheet / Executive Summary only
+       doc.addPage(
+         pw.MultiPage(
+           pageTheme: pw.PageTheme(
+@@ -730,7 +951,7 @@ class _DashboardTabState extends State<DashboardTab> {
+           header: (_) => _pdfHeader(
+             'Official Dashboard Report',
+             clientName,
+-            'Generated: $generatedAt | Current dashboard summary and compliance snapshot.',
++            'Generated: $generatedAt | Executive Summary and Compliance Snapshot.',
+           ),
+           footer: _pdfFooter,
+           build: (_) => [
+@@ -741,9 +962,9 @@ class _DashboardTabState extends State<DashboardTab> {
+             pw.Table.fromTextArray(
+               headers: const ['Metric', 'Value'],
+               data: [
+-                ['Tanks', _tanks.length.toString()],
+-                ['Inspected Tanks', inspectedTanks.toString()],
+-                ['Total Readings', statsByTank.values.fold<int>(0, (sum, s) => sum + s.count).toString()],
++                ['Total Assets', _tanks.length.toString()],
++                ['Inspected Assets Count', inspectedTanksCount.toString()],
++                ['Total Readings Submitted', statsByTank.values.fold<int>(0, (sum, s) => sum + s.count).toString()],
+                 ['Open Alerts', openAlerts.length.toString()],
+                 ['Resolved Alerts', completed.length.toString()],
+               ],
+@@ -756,27 +977,137 @@ class _DashboardTabState extends State<DashboardTab> {
+                 1: pw.FlexColumnWidth(1.8),
+               },
+             ),
+-            pw.NewPage(),
+-            if (inspectedTanks > 0) ...[
+-              _pdfSectionTitle(
+-                'Inspection Compliance',
+-                subtitle: 'Tanks without a recorded inspection are omitted from the report.',
+-              ),
++          ],
++        ),
++      );
++
++      // Subsequent pages: Group by Folder
++      final sortedFolders = groupedTanks.keys.toList()..sort();
++      for (final folderName in sortedFolders) {
++        final folderTanks = groupedTanks[folderName] ?? [];
++        final folderReadings = records.where((rec) => folderTanks.any((t) => t.id == rec['tankId'])).toList()
++          ..sort((a, b) => b['date'].toString().compareTo(a['date'].toString()));
++
++        if (folderReadings.isEmpty) continue; // Skip empty folders
++
++        // Collect parameters (labels) of assets in this folder, skipping 'group' type parameters
++        final folderParams = <Map<String, dynamic>>[];
++        final folderParamLabels = <String>[];
++        for (final tank in folderTanks) {
++          for (final prop in tank.inspectionProperties) {
++            final type = prop['type'] as String? ?? 'text';
++            if (type == 'group') continue;
++            final label = prop['label'] as String? ?? '';
++            if (label.isNotEmpty && !folderParamLabels.contains(label)) {
++              folderParamLabels.add(label);
++              folderParams.add(prop);
++            }
++          }
++        }
++
++        doc.addPage(
++          pw.MultiPage(
++            pageTheme: pw.PageTheme(
++              pageFormat: pdf.PdfPageFormat.a4.landscape,
++              margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
++            ),
++            header: (_) => _pdfHeader(
++              'Official Dashboard Report',
++              clientName,
++              'Generated: $generatedAt | $folderName readings.',
++            ),
++            footer: _pdfFooter,
++            build: (_) => [
++              _pdfSectionTitle(folderName),
++              pw.SizedBox(height: 6),
+               pw.Table(
+                 border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
+-                children: _buildComplianceRows(statsByTank, _reportWindow()),
++                columnWidths: (() {
++                  final colWidths = <int, pw.TableColumnWidth>{};
++                  colWidths[0] = const pw.FlexColumnWidth(1.8); // Date
++                  colWidths[1] = const pw.FlexColumnWidth(1.6); // Asset Name
++                  int colIdx = 2;
++                  for (final _ in folderParamLabels) {
++                    colWidths[colIdx] = const pw.FlexColumnWidth(1.0); // Parameters
++                    colIdx++;
++                  }
++                  colWidths[colIdx] = const pw.FlexColumnWidth(1.0); // Images
++                  colWidths[colIdx + 1] = const pw.FlexColumnWidth(1.2); // Duplicate Reason
++                  return colWidths;
++                })(),
++                children: [
++                  // Header Row
++                  pw.TableRow(
++                    decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                    children: [
++                      _pdfCell('Date', header: true),
++                      _pdfCell('Asset Name', header: true),
++                      ...folderParamLabels.map((l) => _pdfCell(l, header: true)),
++                      _pdfCell('Images', header: true),
++                      _pdfCell('Duplicate Reason', header: true),
++                    ],
++                  ),
++                  // Data Rows
++                  ...folderReadings.map((rec) {
++                    final tankId = rec['tankId'] as String;
++                    final tankCode = rec['tankCode'] as String;
++                    final tankName = rec['tankName'] as String;
++                    final dateStr = DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.parse(rec['date'] as String).toLocal());
++                    final values = rec['values'] as Map<String, dynamic>;
++                    final stats = statsByTank[tankId];
++
++                    // Gather all manual capture image URLs for this reading record
++                    final allImages = <String>[];
++                    for (final p in folderParams) {
++                      allImages.addAll(_getParamImages(values, p));
++                    }
++
++                    return pw.TableRow(
++                      children: [
++                        _pdfCell(dateStr),
++                        _pdfCell('$tankName ($tankCode)'),
++                        // Parameter columns with values and trend indicators + parameter specific image links
++                        ...folderParams.map((p) {
++                          final lbl = p['label'] as String;
++                          final val = values[lbl];
++                          final valText = _fmtPdfAny(val);
++                          final pStats = stats?.paramStats[lbl];
++                          
++                          // Trend Indicator (red vector arrow)
++                          pw.Widget? trendArrow;
++                          if (val != null && pStats != null && pStats.avg != null) {
++                            final numVal = double.tryParse(val.toString());
++                            if (numVal != null) {
++                              if (numVal > pStats.avg!) {
++                                trendArrow = pw.CustomPaint(
++                                  size: const pdf.PdfPoint(6, 6),
++                                  painter: _PdfArrowPainter(isUp: true),
++                                );
++                              } else if (numVal < pStats.avg!) {
++                                trendArrow = pw.CustomPaint(
++                                  size: const pdf.PdfPoint(6, 6),
++                                  painter: _PdfArrowPainter(isUp: false),
++                                );
++                              }
++                            }
++                          }
++
++                          // Param specific images under the value
++                          final paramImages = _getParamImages(values, p);
++
++                          return _buildParameterCell(valText, paramImages, trendIndicator: trendArrow);
++                        }),
++                        _buildImagesCell(allImages),
++                        _pdfCell(rec['duplicateReason']?.toString() ?? '-'),
++                      ],
++                    );
++                  }).toList(),
++                ],
+               ),
+             ],
+-            ..._buildTankStatsWidgets(statsByTank),
+-            if (openAlerts.isNotEmpty || completed.isNotEmpty) pw.NewPage(),
+-            ..._buildAlertWidgets(
+-              alerts: openAlerts,
+-              completed: completed,
+-              includeCompleted: true,
+-            ),
+-          ],
+-        ),
+-      );
++          ),
++        );
++      }
+ 
+       final dir = await _preferredExportDir();
+       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+@@ -791,10 +1122,16 @@ class _DashboardTabState extends State<DashboardTab> {
+       });
+     } catch (e) {
+       _snack('PDF export failed: $e', error: true);
++    } finally {
++      if (mounted) {
++        setState(() => _dashboardPdfExporting = false);
++      }
+     }
+   }
+ 
+   Future<void> _downloadAlertsPdf() async {
++    if (_alertsPdfExporting) return;
++    setState(() => _alertsPdfExporting = true);
+     try {
+       final window = _reportWindow();
+       final alerts = _allAlerts
+@@ -849,20 +1186,56 @@ class _DashboardTabState extends State<DashboardTab> {
+       });
+     } catch (e) {
+       _snack('Alerts PDF export failed: $e', error: true);
++    } finally {
++      if (mounted) {
++        setState(() => _alertsPdfExporting = false);
++      }
+     }
+   }
+ 
+   Future<void> _downloadInspectionReportPdf() async {
++    if (_inspectionPdfExporting) return;
++    setState(() => _inspectionPdfExporting = true);
+     try {
+       final window = _reportWindow();
+       final readings = await ReadingRepository().getAllReadings();
+       final filtered = readings.where((r) {
+         final dt = DateTime.tryParse(r.capturedAt);
+         return dt != null && !dt.isBefore(window.start) && !dt.isAfter(window.end);
+-      }).toList();
+-      final generatedAt = _fmtPdfTs(DateTime.now().toIso8601String());
++      }).toList()
++        ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
++      final generatedAt = DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.now());
++
++      final statsRepo = DashboardStatsRepository();
++      final statsByTank = <String, DashboardStatsModel>{};
++      for (final tank in _tanks) {
++        statsByTank[tank.id] = await statsRepo.getStats(tank.id);
++      }
++
++      final nodes = await TankTreeRepository().fetchAll();
++      final folderNameMap = <String, String>{};
++      for (final n in nodes) {
++        if (n.isFolder) {
++          folderNameMap[n.id] = n.name;
++        }
++      }
++      final tankFolderMap = <String, String>{};
++      for (final tank in _tanks) {
++        final leaf = nodes.firstWhere((n) => n.isLeaf && n.tankId == tank.id, orElse: () => null);
++        if (leaf != null && leaf.parentId != null) {
++          tankFolderMap[tank.id] = folderNameMap[leaf.parentId] ?? 'General';
++        } else {
++          tankFolderMap[tank.id] = (tank.location?.trim().isNotEmpty == true) ? tank.location! : 'General';
++        }
++      }
++
++      final inspectedTankIds = filtered.map((r) => r.tankId).toSet();
++      final inspectedTanks = _tanks.where((t) => inspectedTankIds.contains(t.id)).toList();
++      final pendingTanks = _tanks.where((t) => !inspectedTankIds.contains(t.id)).toList();
+ 
+       final doc = pw.Document();
++
++      // Page 1: Professional Summary Sheet
+       doc.addPage(
+         pw.MultiPage(
+           pageTheme: pw.PageTheme(
+@@ -871,19 +1244,294 @@ class _DashboardTabState extends State<DashboardTab> {
+           ),
+           header: (_) => _pdfHeader(
+             'Official Inspection Report',
+-            'All Tanks',
+-            'Generated: $generatedAt | Detailed inspection compliance table.',
++            'Summary Page',
++            'Generated: $generatedAt',
+           ),
+           footer: _pdfFooter,
+-          build: (_) => [
+-            _pdfSectionTitle(
+-              'Range',
+-              subtitle:
+-                  '${_fmtPdfDateOnly(window.start.toIso8601String())} to ${_fmtPdfDateOnly(window.end.toIso8601String())}',
+-            ),
+-            pw.NewPage(),
+-            ..._buildInspectionReportWidgets(filtered),
+-          ],
++          build: (_) {
++            // Folder Stats
++            final folderCounts = <String, int>{};
++            for (final tank in _tanks) {
++              final fName = tankFolderMap[tank.id] ?? 'General';
++              folderCounts[fName] = (folderCounts[fName] ?? 0) + 1;
++            }
++
++            // Ranges
++            final rangesRows = <List<String>>[];
++            for (final tank in _tanks) {
++              for (final p in tank.inspectionProperties) {
++                final type = p['type'] as String? ?? 'text';
++                if (type == 'group') continue;
++                final label = p['label'] as String? ?? '';
++                if (label.isEmpty) continue;
++                
++                final expectedAvg = p['expected_avg'] != null ? p['expected_avg'].toString() : '-';
++                final expectedMin = p['expected_min'] != null ? p['expected_min'].toString() : '-';
++                final expectedMax = p['expected_max'] != null ? p['expected_max'].toString() : '-';
++                
++                if (expectedAvg != '-' || expectedMin != '-' || expectedMax != '-') {
++                  rangesRows.add([
++                    '${tank.tankName} (${tank.tankCode})',
++                    label,
++                    'Min: $expectedMin | Max: $expectedMax | Avg: $expectedAvg',
++                  ]);
++                }
++              }
++            }
++
++            // Latest Readings
++            final latestReadingRows = <List<String>>[];
++            for (final tank in inspectedTanks) {
++              final tankReadings = filtered.where((r) => r.tankId == tank.id).toList()
++                ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
++              if (tankReadings.isNotEmpty) {
++                final latest = tankReadings.first;
++                latestReadingRows.add([
++                  '${tank.tankName} (${tank.tankCode})',
++                  DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.parse(latest.capturedAt).toLocal()),
++                  latest.capturedByName,
++                ]);
++              }
++            }
++
++            return [
++              _pdfSectionTitle('Professional Inspection Summary'),
++              pw.SizedBox(height: 6),
++              pw.Row(
++                crossAxisAlignment: pw.CrossAxisAlignment.start,
++                children: [
++                  pw.Expanded(
++                    child: pw.Column(
++                      crossAxisAlignment: pw.CrossAxisAlignment.start,
++                      children: [
++                        pw.Text('General Info', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
++                        pw.SizedBox(height: 4),
++                        pw.Text('Report Date Range: ${DateFormat('dd MMM yyyy').format(window.start)} to ${DateFormat('dd MMM yyyy').format(window.end)}', style: const pw.TextStyle(fontSize: 8)),
++                        pw.Text('Compliance Rate: ${_tanks.isEmpty ? '0.0%' : '${(inspectedTanks.length / _tanks.length * 100).toStringAsFixed(1)}%'}', style: const pw.TextStyle(fontSize: 8)),
++                        pw.SizedBox(height: 10),
++                        pw.Text('Reading Statistics', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
++                        pw.SizedBox(height: 4),
++                        pw.Table.fromTextArray(
++                          headers: const ['Metric', 'Count'],
++                          data: [
++                            ['Total Configured Assets', _tanks.length.toString()],
++                            ['Assets with Readings', inspectedTanks.length.toString()],
++                            ['Assets Pending Readings', pendingTanks.length.toString()],
++                            ['Total Readings Collected', filtered.length.toString()],
++                          ],
++                          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
++                          cellStyle: const pw.TextStyle(fontSize: 7),
++                          headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                        ),
++                      ],
++                    ),
++                  ),
++                  pw.SizedBox(width: 14),
++                  pw.Expanded(
++                    child: pw.Column(
++                      crossAxisAlignment: pw.CrossAxisAlignment.start,
++                      children: [
++                        pw.Text('Folder Structure', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
++                        pw.SizedBox(height: 4),
++                        pw.Table.fromTextArray(
++                          headers: const ['Folder Name', 'Asset Count'],
++                          data: folderCounts.entries.map((e) => [e.key, e.value.toString()]).toList(),
++                          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
++                          cellStyle: const pw.TextStyle(fontSize: 7),
++                          headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                        ),
++                      ],
++                    ),
++                  ),
++                ],
++              ),
++              if (rangesRows.isNotEmpty) ...[
++                pw.SizedBox(height: 12),
++                pw.Text('Official Operating Ranges', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
++                pw.SizedBox(height: 4),
++                pw.Table.fromTextArray(
++                  headers: const ['Asset Name', 'Parameter', 'Operating Ranges'],
++                  data: rangesRows,
++                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
++                  cellStyle: const pw.TextStyle(fontSize: 7),
++                  headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                ),
++              ],
++              if (latestReadingRows.isNotEmpty) ...[
++                pw.SizedBox(height: 12),
++                pw.Text('Latest Captured Inspection Info', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
++                pw.SizedBox(height: 4),
++                pw.Table.fromTextArray(
++                  headers: const ['Asset Name', 'Inspection Date', 'Captured By'],
++                  data: latestReadingRows,
++                  headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 7.5),
++                  cellStyle: const pw.TextStyle(fontSize: 7),
++                  headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                ),
++              ],
++            ];
++          },
++        ),
++      );
++
++      // Section 2: READINGS TAKEN
++      doc.addPage(
++        pw.MultiPage(
++          pageTheme: pw.PageTheme(
++            pageFormat: pdf.PdfPageFormat.a4.landscape,
++            margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
++          ),
++          header: (_) => _pdfHeader(
++            'Official Inspection Report',
++            'Readings Taken',
++            'Generated: $generatedAt',
++          ),
++          footer: _pdfFooter,
++          build: (_) {
++            final readingsTakenRows = <pw.TableRow>[
++              pw.TableRow(
++                decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                children: [
++                  _pdfCell('Date / Time', header: true),
++                  _pdfCell('Asset Name', header: true),
++                  _pdfCell('Captured Readings', header: true),
++                  _pdfCell('Clickable Images', header: true),
++                  _pdfCell('Inspector', header: true),
++                ],
++              ),
++            ];
++
++            for (final r in filtered) {
++              final tank = _tanks.firstWhere((t) => t.id == r.tankId, orElse: () => null);
++              final assetName = tank != null ? '${tank.tankName} (${tank.tankCode})' : r.tankSnapshotName ?? 'Unknown';
++              
++              // Build parameter readings text
++              final vals = <String>[];
++              final imagesList = <String>[];
++              if (tank != null) {
++                for (final prop in tank.inspectionProperties) {
++                  final type = prop['type'] as String? ?? 'text';
++                  if (type == 'group') continue;
++                  final label = prop['label'] as String? ?? '';
++                  if (label.isEmpty) continue;
++                  final v = r.inspectionValues[label];
++                  if (v != null) {
++                    vals.add('$label: ${_fmtPdfAny(v)}');
++                  }
++                  imagesList.addAll(_getParamImages(r.inspectionValues, prop));
++                }
++              } else {
++                for (final e in r.inspectionValues.entries) {
++                  if (!e.key.contains('__image_url') && !e.key.startsWith('manual_')) {
++                    vals.add('${e.key}: ${_fmtPdfAny(e.value)}');
++                  }
++                }
++              }
++              final readingsText = vals.isEmpty ? 'No values recorded' : vals.join('\n');
++
++              if (r.imageUrl != null && r.imageUrl!.startsWith('http') && !imagesList.contains(r.imageUrl)) {
++                imagesList.add(r.imageUrl!);
++              }
++
++              readingsTakenRows.add(
++                pw.TableRow(
++                  children: [
++                    _pdfCell(DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.parse(r.capturedAt).toLocal())),
++                    _pdfCell(assetName),
++                    _pdfCell(readingsText),
++                    _buildImagesCell(imagesList),
++                    _pdfCell(r.capturedByName),
++                  ],
++                ),
++              );
++            }
++
++            return [
++              _pdfSectionTitle('READINGS TAKEN'),
++              pw.SizedBox(height: 6),
++              if (filtered.isEmpty)
++                pw.Text('No assets with captured readings in this range.', style: const pw.TextStyle(fontSize: 8.5))
++              else
++                pw.Table(
++                  border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
++                  columnWidths: const {
++                    0: pw.FlexColumnWidth(1.4), // Date
++                    1: pw.FlexColumnWidth(1.6), // Asset Name
++                    2: pw.FlexColumnWidth(2.5), // Captured Readings
++                    3: pw.FlexColumnWidth(1.2), // Images
++                    4: pw.FlexColumnWidth(1.3), // Inspector
++                  },
++                  children: readingsTakenRows,
++                ),
++            ];
++          },
++        ),
++      );
++
++      // Section 3: READINGS NOT TAKEN
++      doc.addPage(
++        pw.MultiPage(
++          pageTheme: pw.PageTheme(
++            pageFormat: pdf.PdfPageFormat.a4.landscape,
++            margin: const pw.EdgeInsets.fromLTRB(18, 18, 18, 18),
++          ),
++          header: (_) => _pdfHeader(
++            'Official Inspection Report',
++            'Readings Not Taken',
++            'Generated: $generatedAt',
++          ),
++          footer: _pdfFooter,
++          build: (_) {
++            final readingsNotTakenRows = <pw.TableRow>[
++              pw.TableRow(
++                decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
++                children: [
++                  _pdfCell('Asset Name', header: true),
++                  _pdfCell('Folder', header: true),
++                  _pdfCell('Expected Frequency', header: true),
++                  _pdfCell('Last Inspected Date', header: true),
++                ],
++              ),
++            ];
++
++            for (final tank in pendingTanks) {
++              final folderName = tankFolderMap[tank.id] ?? 'General';
++              final freq = '${_freqDays(tank)} day(s)';
++              final stats = statsByTank[tank.id];
++              final lastInspected = stats?.lastCapturedAt != null 
++                  ? DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.parse(stats!.lastCapturedAt!).toLocal()) 
++                  : 'Never';
++              
++              readingsNotTakenRows.add(
++                pw.TableRow(
++                  children: [
++                    _pdfCell('${tank.tankName} (${tank.tankCode})'),
++                    _pdfCell(folderName),
++                    _pdfCell(freq),
++                    _pdfCell(lastInspected),
++                  ],
++                ),
++              );
++            }
++
++            return [
++              _pdfSectionTitle('READINGS NOT TAKEN'),
++              pw.SizedBox(height: 6),
++              if (pendingTanks.isEmpty)
++                pw.Text('All assets have been inspected.', style: const pw.TextStyle(fontSize: 8.5))
++              else
++                pw.Table(
++                  border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
++                  columnWidths: const {
++                    0: pw.FlexColumnWidth(1.8),
++                    1: pw.FlexColumnWidth(1.8),
++                    2: pw.FlexColumnWidth(1.2),
++                    3: pw.FlexColumnWidth(1.6),
++                  },
++                  children: readingsNotTakenRows,
++                ),
++            ];
++          },
+         ),
+       );
+ 
+@@ -901,9 +1549,197 @@ class _DashboardTabState extends State<DashboardTab> {
+       });
+     } catch (e) {
+       _snack('Inspection PDF export failed: $e', error: true);
++    } finally {
++      if (mounted) {
++        setState(() => _inspectionPdfExporting = false);
++      }
+     }
+   }
+ 
++  Future<void> _downloadAbnormalityExcel() async {
++    if (_abnormalityExporting) return;
++    setState(() => _abnormalityExporting = true);
++    try {
++      final window = _reportWindow();
++      final readings = await ReadingRepository().getAllReadings();
++      final filteredReadings = readings.where((r) {
++        final dt = DateTime.tryParse(r.capturedAt);
++        return dt != null && !dt.isBefore(window.start) && !dt.isAfter(window.end);
++      }).toList()
++        ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
++
++      final statsRepo = DashboardStatsRepository();
++      final statsByTank = <String, DashboardStatsModel>{};
++      for (final tank in _tanks) {
++        statsByTank[tank.id] = await statsRepo.getStats(tank.id);
++      }
++
++      // Fetch folder mappings from tree node repository
++      final nodes = await TankTreeRepository().fetchAll();
++      final folderNameMap = <String, String>{};
++      for (final n in nodes) {
++        if (n.isFolder) {
++          folderNameMap[n.id] = n.name;
++        }
++      }
++      final tankFolderMap = <String, String>{};
++      for (final tank in _tanks) {
++        final leaf = nodes.firstWhere((n) => n.isLeaf && n.tankId == tank.id, orElse: () => null);
++        if (leaf != null && leaf.parentId != null) {
++          tankFolderMap[tank.id] = folderNameMap[leaf.parentId] ?? 'General';
++        } else {
++          tankFolderMap[tank.id] = (tank.location?.trim().isNotEmpty == true) ? tank.location! : 'General';
++        }
++      }
++
++      // Group tanks by folder
++      final groupedTanks = <String, List<TankModel>>{};
++      for (final tank in _tanks) {
++        final folderName = tankFolderMap[tank.id] ?? 'General';
++        groupedTanks.putIfAbsent(folderName, () => []).add(tank);
++      }
++
++      // Build records to show
++      final records = <Map<String, dynamic>>[];
++      if (_pdfRange == _DashboardPdfRange.current) {
++        for (final tank in _tanks) {
++          final stats = statsByTank[tank.id];
++          if (stats != null && stats.lastCapturedAt != null && stats.lastReading.isNotEmpty) {
++            records.add({
++              'tankId': tank.id,
++              'tankCode': tank.tankCode,
++              'tankName': tank.tankName,
++              'date': stats.lastCapturedAt!,
++              'values': stats.lastReading,
++              'inspector': stats.lastCapturedBy ?? '',
++              'duplicateReason': stats.lastDuplicateReason ?? '',
++            });
++          }
++        }
++      } else {
++        for (final r in filteredReadings) {
++          final tank = _tanks.firstWhere((t) => t.id == r.tankId, orElse: () => null);
++          if (tank != null) {
++            records.add({
++              'tankId': r.tankId,
++              'tankCode': r.tankCode,
++              'tankName': r.tankName,
++              'date': r.capturedAt,
++              'values': r.inspectionValues,
++              'inspector': r.capturedByName,
++              'duplicateReason': r.inspectionValues['duplicate_reason']?.toString() ?? r.inspectionValues['reason']?.toString() ?? '',
++            });
++          }
++        }
++      }
++
++      final excel = xl.Excel.createExcel();
++      
++      // Sheet 1: Summary Sheet
++      final summarySheet = excel['Summary'];
++      if (excel.tables.containsKey('Sheet1') && 'Sheet1' != 'Summary') {
++        excel.delete('Sheet1');
++      }
++
++      summarySheet.appendRow([
++        xl.TextCellValue('Metric'),
++        xl.TextCellValue('Value'),
++      ]);
++      summarySheet.appendRow([
++        xl.TextCellValue('Total Assets'),
++        xl.TextCellValue(_tanks.length.toString()),
++      ]);
++      summarySheet.appendRow([
++        xl.TextCellValue('Total Readings in Window'),
++        xl.TextCellValue(records.length.toString()),
++      ]);
++
++      // Sheets 2..N: one per folder
++      final sortedFolders = groupedTanks.keys.toList()..sort();
++      for (final folderName in sortedFolders) {
++        final folderTanks = groupedTanks[folderName] ?? [];
++        final folderReadings = records.where((rec) => folderTanks.any((t) => t.id == rec['tankId'])).toList()
++          ..sort((a, b) => b['date'].toString().compareTo(a['date'].toString()));
++
++        if (folderReadings.isEmpty) continue; // Skip empty folders
++
++        // Collect parameters
++        final folderParams = <Map<String, dynamic>>[];
++        final folderParamLabels = <String>[];
++        for (final tank in folderTanks) {
++          for (final prop in tank.inspectionProperties) {
++            final type = prop['type'] as String? ?? 'text';
++            if (type == 'group') continue;
++            final label = prop['label'] as String? ?? '';
++            if (label.isNotEmpty && !folderParamLabels.contains(label)) {
++              folderParamLabels.add(label);
++              folderParams.add(prop);
++            }
++          }
++        }
++
++        // Limit sheet name to 31 chars as Excel requires
++        final cleanSheetName = folderName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
++        final sheetName = cleanSheetName.length > 31 ? cleanSheetName.substring(0, 31) : cleanSheetName;
++        final sheet = excel[sheetName];
++
++        // Header Row
++        final headers = <xl.CellValue>[
++          xl.TextCellValue('Date'),
++          xl.TextCellValue('Asset Name'),
++          ...folderParamLabels.map((l) => xl.TextCellValue(l)),
++          xl.TextCellValue('Images'),
++          xl.TextCellValue('Duplicate Reason'),
++        ];
++        sheet.appendRow(headers);
++
++        // Data Rows
++        for (final rec in folderReadings) {
++          final tankCode = rec['tankCode'] as String;
++          final tankName = rec['tankName'] as String;
++          final dateStr = DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.parse(rec['date'] as String).toLocal());
++          final values = rec['values'] as Map<String, dynamic>;
++
++          // Gather image URLs
++          final allImages = <String>[];
++          for (final p in folderParams) {
++            allImages.addAll(_getParamImages(values, p));
++          }
++
++          final row = <xl.CellValue>[
++            xl.TextCellValue(dateStr),
++            xl.TextCellValue('$tankName ($tankCode)'),
++            ...folderParams.map((p) {
++              final lbl = p['label'] as String;
++              final val = values[lbl];
++              if (val is Map) {
++                return xl.TextCellValue('${val['left'] ?? ''} | ${val['right'] ?? ''}');
++              }
++              return xl.TextCellValue(val?.toString() ?? '');
++            }),
++            xl.TextCellValue(allImages.join(', ')),
++            xl.TextCellValue(rec['duplicateReason']?.toString() ?? ''),
++          ];
++          sheet.appendRow(row);
++        }
++      }
++
++      final dir = await _preferredExportDir();
++      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
++      final file = File('${dir.path}/dashboard_report_$ts.xlsx');
++      await file.writeAsBytes(excel.save()!, flush: true);
++      _snack('Saved: ${file.path}');
++      await Share.shareXFiles([XFile(file.path)], text: 'Dashboard Report Excel');
++    } catch (e) {
++      _snack('Abnormality Excel export failed: $e', error: true);
++    } finally {
++      if (mounted) {
++        setState(() => _abnormalityExporting = false);
++      }
++    }
++  }
++
++  // 🔖 Restored helper methods for auditing and filtering dashboard tasks
+   Future<void> _auditExport(
+     String operation,
+     String label,
+@@ -1018,128 +1854,6 @@ class _DashboardTabState extends State<DashboardTab> {
+     return DateFormat('dd-MM-yyyy HH:mm:ss').format(dt);
+   }
+ 
+-  Future<void> _downloadAbnormalityExcel() async {
+-    setState(() => _abnormalityExporting = true);
+-    try {
+-      final window = _abnormalityWindow();
+-      final includeAlerts = _abnormalityType == _DashboardReportType.abnormalities ||
+-          _abnormalityType == _DashboardReportType.both;
+-      final includeCompleted = _abnormalityType == _DashboardReportType.completed ||
+-          _abnormalityType == _DashboardReportType.both;
+-
+-      final alerts = includeAlerts ? _orderedAbnormalities(window) : <_AlertModel>[];
+-      final completed = includeCompleted ? _orderedCompleted(window) : <_CompletedTask>[];
+-
+-      if (alerts.isEmpty && completed.isEmpty) {
+-        _snack('No records available for selected filters.', error: true);
+-        return;
+-      }
+-
+-      final excel = xl.Excel.createExcel();
+-      final sheet = excel['Abnormality_Report'];
+-      if (excel.tables.containsKey('Sheet1') && 'Sheet1' != 'Abnormality_Report') {
+-        excel.delete('Sheet1');
+-      }
+-
+-      sheet.appendRow([
+-        xl.TextCellValue('Range'),
+-        xl.TextCellValue(_abnormalityRange.label),
+-        xl.TextCellValue('Type'),
+-        xl.TextCellValue(_abnormalityType.label),
+-      ]);
+-      sheet.appendRow([
+-        xl.TextCellValue('From'),
+-        xl.TextCellValue(_fmtExcelTs(window.start.toIso8601String())),
+-        xl.TextCellValue('To'),
+-        xl.TextCellValue(_fmtExcelTs(window.end.toIso8601String())),
+-      ]);
+-      sheet.appendRow([
+-        xl.TextCellValue('Tank Filter'),
+-        xl.TextCellValue(
+-          _abnormalityTankId == _allTanksFilterId
+-              ? 'All Tanks'
+-              : _tankLabel(_abnormalityTankId),
+-        ),
+-        xl.TextCellValue(''),
+-        xl.TextCellValue(''),
+-      ]);
+-      sheet.appendRow([
+-        xl.TextCellValue(''),
+-      ]);
+-
+-      sheet.appendRow([
+-        xl.TextCellValue('Order'),
+-        xl.TextCellValue('Record Type'),
+-        xl.TextCellValue('Time'),
+-        xl.TextCellValue('Tank Code'),
+-        xl.TextCellValue('Tank Name'),
+-        xl.TextCellValue('Alert Title'),
+-        xl.TextCellValue('Severity'),
+-        xl.TextCellValue('Parameter'),
+-        xl.TextCellValue('Value'),
+-        xl.TextCellValue('Status'),
+-        xl.TextCellValue('Completed By'),
+-        xl.TextCellValue('Message'),
+-        xl.TextCellValue('Image URL'),
+-      ]);
+-
+-      var order = 1;
+-      if (includeAlerts) {
+-        for (final a in alerts) {
+-          sheet.appendRow([
+-            xl.TextCellValue(order.toString()),
+-            xl.TextCellValue('Abnormality'),
+-            xl.TextCellValue(_fmtExcelTs(a.timestamp)),
+-            xl.TextCellValue(a.tankCode),
+-            xl.TextCellValue(a.tankName),
+-            xl.TextCellValue(a.alertTitle),
+-            xl.TextCellValue(a.severity),
+-            xl.TextCellValue(a.paramLabel),
+-            xl.TextCellValue(a.paramValue),
+-            xl.TextCellValue('Open'),
+-            xl.TextCellValue(''),
+-            xl.TextCellValue(a.message),
+-            xl.TextCellValue(a.imageUrl),
+-          ]);
+-          order++;
+-        }
+-      }
+-
+-      if (includeCompleted) {
+-        for (final c in completed) {
+-          final a = c.alert;
+-          sheet.appendRow([
+-            xl.TextCellValue(order.toString()),
+-            xl.TextCellValue('Completed'),
+-            xl.TextCellValue(_fmtExcelTs(c.completedAt)),
+-            xl.TextCellValue(a.tankCode),
+-            xl.TextCellValue(a.tankName),
+-            xl.TextCellValue(a.alertTitle),
+-            xl.TextCellValue(a.severity),
+-            xl.TextCellValue(a.paramLabel),
+-            xl.TextCellValue(a.paramValue),
+-            xl.TextCellValue('Completed'),
+-            xl.TextCellValue(c.completedBy),
+-            xl.TextCellValue(a.message),
+-            xl.TextCellValue(a.imageUrl),
+-          ]);
+-          order++;
+-        }
+-      }
+-
+-      final dir = await _preferredExportDir();
+-      final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+-      final file = File('${dir.path}/dashboard_abnormality_report_$ts.xlsx');
+-      await file.writeAsBytes(excel.save()!, flush: true);
+-      _snack('Saved: ${file.path}');
+-      await Share.shareXFiles([XFile(file.path)], text: 'Dashboard Abnormality Report');
+-    } catch (e) {
+-      _snack('Abnormality export failed: $e', error: true);
+-    } finally {
+-      if (mounted) setState(() => _abnormalityExporting = false);
+-    }
+-  }
+-
+   @override
+   void dispose() {
+     _tankSub?.cancel();
+@@ -1505,18 +2219,42 @@ class _DashboardTabState extends State<DashboardTab> {
+                       crossAxisAlignment: CrossAxisAlignment.stretch,
+                       children: [
+                         OutlinedButton.icon(
+-                          onPressed: () => _downloadPng(
+-                            _alertsCaptureKey,
+-                            'dashboard_alerts',
+-                          ),
+-                          icon: const Icon(Icons.download_rounded),
+-                          label: const Text('Download Alerts as PNG'),
++                          onPressed: _alertsPngExporting
++                              ? null
++                              : () => _downloadPng(
++                                    _alertsCaptureKey,
++                                    'dashboard_alerts',
++                                  ),
++                          icon: _alertsPngExporting
++                              ? const SizedBox(
++                                  width: 16,
++                                  height: 16,
++                                  child: CircularProgressIndicator(
++                                    strokeWidth: 2,
++                                    valueColor: AlwaysStoppedAnimation<Color>(_kCopper),
++                                  ),
++                                )
++                              : const Icon(Icons.download_rounded),
++                          label: Text(_alertsPngExporting
++                              ? 'Exporting PNG...'
++                              : 'Download Alerts as PNG'),
+                         ),
+                         const SizedBox(height: 10),
+                         ElevatedButton.icon(
+-                          onPressed: _downloadDashboardPdf,
+-                          icon: const Icon(Icons.picture_as_pdf_outlined),
+-                          label: const Text('Download Dashboard Report (PDF)'),
++                          onPressed: _dashboardPdfExporting ? null : _downloadDashboardPdf,
++                          icon: _dashboardPdfExporting
++                              ? const SizedBox(
++                                  width: 16,
++                                  height: 16,
++                                  child: CircularProgressIndicator(
++                                    strokeWidth: 2,
++                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
++                                  ),
++                                )
++                              : const Icon(Icons.picture_as_pdf_outlined),
++                          label: Text(_dashboardPdfExporting
++                              ? 'Exporting PDF...'
++                              : 'Download Dashboard Report (PDF)'),
+                         ),
+                         const SizedBox(height: 18),
+                         Container(
+@@ -1678,18 +2416,42 @@ class _DashboardTabState extends State<DashboardTab> {
+                               SizedBox(
+                                 width: double.infinity,
+                                 child: ElevatedButton.icon(
+-                                  onPressed: _downloadAlertsPdf,
+-                                  icon: const Icon(Icons.notifications_outlined),
+-                                  label: const Text('Download Alerts PDF'),
++                                  onPressed: _alertsPdfExporting ? null : _downloadAlertsPdf,
++                                  icon: _alertsPdfExporting
++                                      ? const SizedBox(
++                                          width: 16,
++                                          height: 16,
++                                          child: CircularProgressIndicator(
++                                            strokeWidth: 2,
++                                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
++                                          ),
++                                        )
++                                      : const Icon(Icons.notifications_outlined),
++                                  label: Text(_alertsPdfExporting
++                                      ? 'Exporting PDF...'
++                                      : 'Download Alerts PDF'),
+                                 ),
+                               ),
+                               const SizedBox(height: 10),
+                               SizedBox(
+                                 width: double.infinity,
+                                 child: ElevatedButton.icon(
+-                                  onPressed: _downloadInspectionReportPdf,
+-                                  icon: const Icon(Icons.fact_check_outlined),
+-                                  label: const Text('Download Inspection Report'),
++                                  onPressed: _inspectionPdfExporting
++                                      ? null
++                                      : _downloadInspectionReportPdf,
++                                  icon: _inspectionPdfExporting
++                                      ? const SizedBox(
++                                          width: 16,
++                                          height: 16,
++                                          child: CircularProgressIndicator(
++                                            strokeWidth: 2,
++                                            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
++                                          ),
++                                        )
++                                      : const Icon(Icons.fact_check_outlined),
++                                  label: Text(_inspectionPdfExporting
++                                      ? 'Exporting Report...'
++                                      : 'Download Inspection Report'),
+                                 ),
+                               ),
+                             ],
+@@ -1997,4 +2759,4 @@ class _DashboardTabState extends State<DashboardTab> {
+ 
+ // ─────────────────────────────────────────────────────────────────────────────
+ // ALERT CARD
+-// ─────────────────────────────────────────────────────────────────────────────
++// ─────────────────────────────────────────────────────────────────────────────
+\ No newline at end of file

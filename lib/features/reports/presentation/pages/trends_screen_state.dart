@@ -260,7 +260,17 @@ class _TrendsScreenState extends State<TrendsScreen> {
 
               for (final image in pdfImages) {
                 widgets.add(
-                  pw.Text(image.key, style: const pw.TextStyle(fontSize: 8)),
+                  pw.UrlLink(
+                    destination: image.key,
+                    child: pw.Text(
+                      image.key,
+                      style: pw.TextStyle(
+                        fontSize: 8,
+                        decoration: pw.TextDecoration.underline,
+                        color: pdf.PdfColors.blue700,
+                      ),
+                    ),
+                  ),
                 );
                 widgets.add(pw.SizedBox(height: 4));
                 widgets.add(

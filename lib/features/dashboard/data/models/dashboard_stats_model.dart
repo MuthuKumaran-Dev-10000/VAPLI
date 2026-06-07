@@ -27,6 +27,7 @@ class DashboardStatsModel {
   final int count;
   final String? lastCapturedAt;
   final String? lastCapturedBy;
+  final String? lastDuplicateReason;
   final Map<String, dynamic> lastReading; // inspection_values snapshot
   final Map<String, ParamStat> paramStats;
 
@@ -35,6 +36,7 @@ class DashboardStatsModel {
     required this.count,
     this.lastCapturedAt,
     this.lastCapturedBy,
+    this.lastDuplicateReason,
     required this.lastReading,
     required this.paramStats,
   });
@@ -51,6 +53,7 @@ class DashboardStatsModel {
         'count': count,
         'last_captured_at': lastCapturedAt,
         'last_captured_by': lastCapturedBy,
+        'last_duplicate_reason': lastDuplicateReason,
         'last_reading': lastReading,
         'param_stats': {
           for (final e in paramStats.entries) e.key: e.value.toMap(),
@@ -80,6 +83,7 @@ class DashboardStatsModel {
       count: (m['count'] ?? 0) as int,
       lastCapturedAt: m['last_captured_at'] as String?,
       lastCapturedBy: m['last_captured_by'] as String?,
+      lastDuplicateReason: m['last_duplicate_reason'] as String?,
       lastReading: lastReading,
       paramStats: stats,
     );

@@ -1,6 +1,5 @@
 part of '../dashboard_tab.dart';
 
-
 class _TankStatsCardState extends State<_TankStatsCard> {
   DashboardStatsModel? _stats;
   bool _lastExpanded = false;
@@ -76,57 +75,79 @@ class _TankStatsCardState extends State<_TankStatsCard> {
           border: Border.all(color: _kBorder),
         ),
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildCardHeader(tank, stats),
-          if (stats == null)
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(
-                child: SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: _kCopper)),
-              ),
-            )
-          else if (!hasData)
-            _buildNoData()
-          else ...[
-            _buildMetaRow(stats),
-            const _Divider(),
-            if (topLevelProps.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _SectionLabel('PARAMETER STATS'),
-                    const SizedBox(height: 12),
-                    ...topLevelProps.map((p) {
-                      final type = (p['type'] as String?) ?? 'text';
-                      if (type == 'group') {
-                        return _buildGroupedParamBlock(
-                          group: p,
-                          propById: propById,
-                          stats: stats,
-                        );
-                      }
-                      return _buildParamBlock(p, stats);
-                    }),
-                  ],
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildCardHeader(tank, stats),
+            if (stats == null)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Center(
+                  child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: _kCopper)),
                 ),
+              )
+            else if (!hasData)
+              _buildNoData()
+            else ...[
+              _buildMetaRow(stats),
+              if ((stats.lastDuplicateReason ?? '').trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _kWarn.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kWarn.withOpacity(0.22)),
+                    ),
+                    child: Text(
+                      'Duplicate reading reason: ${stats.lastDuplicateReason}',
+                      style: GoogleFonts.dmSans(
+                        fontSize: 11,
+                        color: _kWarn,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              const _Divider(),
+              if (topLevelProps.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _SectionLabel('PARAMETER STATS'),
+                      const SizedBox(height: 12),
+                      ...topLevelProps.map((p) {
+                        final type = (p['type'] as String?) ?? 'text';
+                        if (type == 'group') {
+                          return _buildGroupedParamBlock(
+                            group: p,
+                            propById: propById,
+                            stats: stats,
+                          );
+                        }
+                        return _buildParamBlock(p, stats);
+                      }),
+                    ],
+                  ),
+                ),
+              const _Divider(),
+              _buildLastInspection(
+                topLevelProps,
+                propById,
+                stats,
+                forceExpanded: showLastInspectionExpanded,
               ),
-            const _Divider(),
-            _buildLastInspection(
-              topLevelProps,
-              propById,
-              stats,
-              forceExpanded: showLastInspectionExpanded,
-            ),
+            ],
           ],
-        ],
-      ),
+        ),
       ),
     );
   }
@@ -204,8 +225,14 @@ class _TankStatsCardState extends State<_TankStatsCard> {
         const SizedBox(width: 8),
         IconButton(
           tooltip: 'Download tank as PNG',
-          onPressed: widget.onDownloadPng,
-          icon: const Icon(Icons.download_rounded, color: _kCopper),
+          onPressed: widget.isExportingPng ? null : widget.onDownloadPng,
+          icon: widget.isExportingPng
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: _kCopper),
+                )
+              : const Icon(Icons.download_rounded, color: _kCopper),
         ),
       ]),
     );
@@ -261,14 +288,14 @@ class _TankStatsCardState extends State<_TankStatsCard> {
           Text('No data', style: GoogleFonts.dmSans(fontSize: 12, color: _kSub))
         else if (type == 'number' || type == 'slider')
           _NumericStatRow(
-  stat: stat,
-  fmtNum: _fmtNum,
-  expectedAvg: (p['expected_avg'] as num?)?.toDouble(),
-  expectedMin: (p['expected_min'] as num?)?.toDouble(),
-expectedMax: (p['expected_max'] as num?)?.toDouble(),
-  // expectedMin: (p['min'] as num?)?.toDouble(),
-  // expectedMax: (p['max'] as num?)?.toDouble(),
-)
+            stat: stat,
+            fmtNum: _fmtNum,
+            expectedAvg: (p['expected_avg'] as num?)?.toDouble(),
+            expectedMin: (p['expected_min'] as num?)?.toDouble(),
+            expectedMax: (p['expected_max'] as num?)?.toDouble(),
+            // expectedMin: (p['min'] as num?)?.toDouble(),
+            // expectedMax: (p['max'] as num?)?.toDouble(),
+          )
         else if (type == 'dropdown')
           _DropdownStatBlock(stat: stat, totalCount: stats.count)
         else if (type == 'dual_text')
@@ -409,8 +436,7 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
         ),
         const SizedBox(height: 8),
         if (stat == null)
-          Text('No data',
-              style: GoogleFonts.dmSans(fontSize: 11, color: _kSub))
+          Text('No data', style: GoogleFonts.dmSans(fontSize: 11, color: _kSub))
         else if (type == 'number' || type == 'slider')
           _NumericStatRow(
             stat: stat,
@@ -528,13 +554,15 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 14, vertical: 10),
                                 decoration: const BoxDecoration(
-                                  border: Border(top: BorderSide(color: _kBorder)),
+                                  border:
+                                      Border(top: BorderSide(color: _kBorder)),
                                 ),
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     SizedBox(
-                                      width: MediaQuery.of(context).size.width * 0.28,
+                                      width: MediaQuery.of(context).size.width *
+                                          0.28,
                                       child: Text(
                                         e.key,
                                         style: GoogleFonts.dmSans(
@@ -601,7 +629,7 @@ expectedMax: (p['expected_max'] as num?)?.toDouble(),
                       color: _kText,
                     ),
                   ),
-                  ),
+                ),
               ],
             ),
           ),

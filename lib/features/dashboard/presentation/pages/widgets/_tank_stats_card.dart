@@ -8,11 +8,13 @@ class _TankStatsCard extends StatefulWidget {
   final TankModel tank;
   final GlobalKey captureKey;
   final Future<void> Function() onDownloadPng;
+  final bool isExportingPng;
   final bool forceExpandLastInspection;
   const _TankStatsCard({
     required this.tank,
     required this.captureKey,
     required this.onDownloadPng,
+    this.isExportingPng = false,
     this.forceExpandLastInspection = false,
   });
 
