@@ -368,7 +368,7 @@ class _DashboardTabState extends State<DashboardTab> {
     String text, {
     bool header = false,
     pdf.PdfColor? fill,
-    pw.Alignment alignment = pw.Alignment.centerLeft,
+    pw.Alignment? alignment,
     double fontSize = 8.4,
     pw.FontWeight fontWeight = pw.FontWeight.normal,
   }) {
@@ -534,7 +534,7 @@ class _DashboardTabState extends State<DashboardTab> {
     return widgets;
   }
 
-  List<pw.Widget> _buildAlertWidgets({
+  List<pw.Widget> _buildAlertWidgets({ // 🔖 Added/Refactored for Alert Image Link Support in PDF
     required List<_AlertModel> alerts,
     required List<_CompletedTask> completed,
     required bool includeCompleted,
@@ -544,71 +544,126 @@ class _DashboardTabState extends State<DashboardTab> {
     if (alerts.isEmpty) {
       widgets.add(pw.Text('No alerts in selected range.', style: pw.TextStyle(fontSize: 8.5)));
     } else {
-      final rows = alerts.map((a) {
-        return [
-          _fmtPdfTs(a.timestamp),
-          '${a.tankName} (${a.tankCode})',
-          a.severity,
-          a.paramLabel,
-          a.paramValue.isEmpty ? '-' : a.paramValue,
-          a.capturedByName.isEmpty ? 'Dashboard' : a.capturedByName,
-          a.message.isEmpty ? '-' : a.message,
-        ];
-      }).toList();
-      widgets.add(
-        pw.Table.fromTextArray(
-          headers: const [
-            'Time',
-            'Tank',
-            'Severity',
-            'Parameter',
-            'Value',
-            'By',
-            'Message',
+      final headerRow = pw.TableRow(
+        decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+        children: [
+          _pdfCell('Time', header: true),
+          _pdfCell('Tank', header: true),
+          _pdfCell('Severity', header: true),
+          _pdfCell('Parameter', header: true),
+          _pdfCell('Value', header: true),
+          _pdfCell('By', header: true),
+          _pdfCell('Message', header: true),
+          _pdfCell('Images', header: true),
+        ],
+      );
+
+      final dataRows = alerts.map((a) {
+        return pw.TableRow(
+          children: [
+            _pdfCell(_fmtPdfTs(a.timestamp)),
+            _pdfCell('${a.tankName} (${a.tankCode})'),
+            _pdfCell(a.severity.toUpperCase()),
+            _pdfCell(a.paramLabel),
+            _pdfCell(a.paramValue.isEmpty ? '-' : a.paramValue),
+            _pdfCell(a.capturedByName.isEmpty ? 'Dashboard' : a.capturedByName),
+            _pdfCell(a.message.isEmpty ? '-' : a.message),
+            _buildAlertImageCell(a.imageUrl),
           ],
-          data: rows,
-          headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.2),
-          cellStyle: const pw.TextStyle(fontSize: 7.5),
-          headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
-          rowDecoration: const pw.BoxDecoration(
-            border: pw.Border(bottom: pw.BorderSide(width: 0.4, color: pdf.PdfColors.grey400)),
-          ),
-          cellAlignment: pw.Alignment.centerLeft,
+        );
+      }).toList();
+
+      widgets.add(
+        pw.Table(
+          border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
+          columnWidths: const {
+            0: pw.FlexColumnWidth(1.3), // Time
+            1: pw.FlexColumnWidth(1.5), // Tank
+            2: pw.FlexColumnWidth(0.9), // Severity
+            3: pw.FlexColumnWidth(1.2), // Parameter
+            4: pw.FlexColumnWidth(0.9), // Value
+            5: pw.FlexColumnWidth(1.1), // By
+            6: pw.FlexColumnWidth(2.0), // Message
+            7: pw.FlexColumnWidth(0.8), // Images
+          },
+          children: [headerRow, ...dataRows],
         ),
       );
     }
 
     if (includeCompleted) {
+      widgets.add(pw.SizedBox(height: 14));
       widgets.add(_pdfSectionTitle('Resolved Alerts'));
       if (completed.isEmpty) {
         widgets.add(pw.Text('No completed tasks in selected range.', style: pw.TextStyle(fontSize: 8.5)));
       } else {
+        final headerRow = pw.TableRow(
+          decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
+          children: [
+            _pdfCell('Completed At', header: true),
+            _pdfCell('Tank', header: true),
+            _pdfCell('Severity', header: true),
+            _pdfCell('Parameter', header: true),
+            _pdfCell('Completed By', header: true),
+            _pdfCell('Message', header: true),
+            _pdfCell('Images', header: true),
+          ],
+        );
+
+        final dataRows = completed.map((c) {
+          final a = c.alert;
+          return pw.TableRow(
+            children: [
+              _pdfCell(_fmtPdfTs(c.completedAt)),
+              _pdfCell('${a.tankName} (${a.tankCode})'),
+              _pdfCell(a.severity.toUpperCase()),
+              _pdfCell(a.paramLabel),
+              _pdfCell(c.completedBy),
+              _pdfCell(a.message.isEmpty ? '-' : a.message),
+              _buildAlertImageCell(a.imageUrl),
+            ],
+          );
+        }).toList();
+
         widgets.add(
-          pw.Table.fromTextArray(
-            headers: const ['Completed At', 'Tank', 'Severity', 'Parameter', 'Completed By', 'Message'],
-            data: completed.map((c) {
-              final a = c.alert;
-              return [
-                _fmtPdfTs(c.completedAt),
-                '${a.tankName} (${a.tankCode})',
-                a.severity,
-                a.paramLabel,
-                c.completedBy,
-                a.message.isEmpty ? '-' : a.message,
-              ];
-            }).toList(),
-            headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 8.2),
-            cellStyle: const pw.TextStyle(fontSize: 7.5),
-            headerDecoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
-            rowDecoration: const pw.BoxDecoration(
-              border: pw.Border(bottom: pw.BorderSide(width: 0.4, color: pdf.PdfColors.grey400)),
-            ),
-            cellAlignment: pw.Alignment.centerLeft,
+          pw.Table(
+            border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
+            columnWidths: const {
+              0: pw.FlexColumnWidth(1.3), // Completed At
+              1: pw.FlexColumnWidth(1.5), // Tank
+              2: pw.FlexColumnWidth(0.9), // Severity
+              3: pw.FlexColumnWidth(1.2), // Parameter
+              4: pw.FlexColumnWidth(1.2), // Completed By
+              5: pw.FlexColumnWidth(2.2), // Message
+              6: pw.FlexColumnWidth(0.8), // Images
+            },
+            children: [headerRow, ...dataRows],
           ),
         );
       }
     }
     return widgets;
+  }
+
+  pw.Widget _buildAlertImageCell(String imageUrl) { // 🔖 Added for Alert Image Link Support in PDF
+    if (imageUrl.isEmpty || !imageUrl.startsWith('http')) {
+      return _pdfCell('-');
+    }
+    return pw.Container(
+      padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+      alignment: pw.Alignment.centerLeft,
+      child: pw.UrlLink(
+        destination: imageUrl,
+        child: pw.Text(
+          '📷 Photo',
+          style: pw.TextStyle(
+            fontSize: 7.5,
+            color: pdf.PdfColors.blue800,
+            decoration: pw.TextDecoration.underline,
+          ),
+        ),
+      ),
+    );
   }
 
   List<pw.Widget> _buildInspectionReportWidgets(List<ReadingModel> readings) {
@@ -759,13 +814,12 @@ class _DashboardTabState extends State<DashboardTab> {
   pw.Widget _buildParameterCell(String text, List<String> images, {pw.Widget? trendIndicator}) {
     return pw.Container(
       padding: const pw.EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-      alignment: pw.Alignment.centerLeft,
       child: pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
         mainAxisSize: pw.MainAxisSize.min,
         children: [
-          pw.Row(
-            mainAxisSize: pw.MainAxisSize.min,
+          pw.Wrap(
+            crossAxisAlignment: pw.WrapCrossAlignment.center,
             children: [
               pw.Text(text, style: const pw.TextStyle(fontSize: 8)),
               if (trendIndicator != null) ...[
@@ -1139,8 +1193,11 @@ class _DashboardTabState extends State<DashboardTab> {
     try {
       final window = _reportWindow();
       final alerts = _allAlerts
-          .where((a) => _inRange(a.timestamp, window))
-          .where((a) => _tankMatch(a.tankId))
+          .where((a) {
+            final isActive = !a.acknowledged && a.status.toLowerCase() != 'completed';
+            if (isActive) return _tankMatch(a.tankId);
+            return _inRange(a.timestamp, window) && _tankMatch(a.tankId);
+          })
           .toList()
         ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
       final completed = _completed
@@ -1404,6 +1461,7 @@ class _DashboardTabState extends State<DashboardTab> {
                   _pdfCell('Captured Readings', header: true),
                   _pdfCell('Clickable Images', header: true),
                   _pdfCell('Inspector', header: true),
+                  _pdfCell('Duplicate Reason', header: true), // 🔖 Added Duplicate Reason
                 ],
               ),
             ];
@@ -1443,6 +1501,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 imagesList.add(r.imageUrl!);
               }
 
+              final dupReason = r.inspectionValues['duplicate_reason']?.toString() ?? r.inspectionValues['reason']?.toString() ?? '';
               readingsTakenRows.add(
                 pw.TableRow(
                   children: [
@@ -1451,6 +1510,7 @@ class _DashboardTabState extends State<DashboardTab> {
                     _pdfCell(readingsText),
                     _buildImagesCell(imagesList),
                     _pdfCell(r.capturedByName),
+                    _pdfCell(dupReason.isNotEmpty ? dupReason : '-'),
                   ],
                 ),
               );
@@ -1465,11 +1525,12 @@ class _DashboardTabState extends State<DashboardTab> {
                 pw.Table(
                   border: pw.TableBorder.all(color: pdf.PdfColors.grey400, width: 0.4),
                   columnWidths: const {
-                    0: pw.FlexColumnWidth(1.4), // Date
-                    1: pw.FlexColumnWidth(1.6), // Asset Name
-                    2: pw.FlexColumnWidth(2.5), // Captured Readings
-                    3: pw.FlexColumnWidth(1.2), // Images
-                    4: pw.FlexColumnWidth(1.3), // Inspector
+                    0: pw.FlexColumnWidth(1.3), // Date
+                    1: pw.FlexColumnWidth(1.5), // Asset Name
+                    2: pw.FlexColumnWidth(2.2), // Captured Readings
+                    3: pw.FlexColumnWidth(1.0), // Images
+                    4: pw.FlexColumnWidth(1.1), // Inspector
+                    5: pw.FlexColumnWidth(1.4), // Duplicate Reason
                   },
                   children: readingsTakenRows,
                 ),
@@ -1566,92 +1627,32 @@ class _DashboardTabState extends State<DashboardTab> {
     }
   }
 
-  Future<void> _downloadAbnormalityExcel() async {
+  Future<void> _downloadAbnormalityExcel() async { // 🔖 Added/Refactored for Alerts Excel Export
     if (_abnormalityExporting) return;
     setState(() => _abnormalityExporting = true);
     try {
-      final window = _reportWindow();
-      final readings = await ReadingRepository().getAllReadings();
-      final filteredReadings = readings.where((r) {
-        final dt = DateTime.tryParse(r.capturedAt);
-        return dt != null && !dt.isBefore(window.start) && !dt.isAfter(window.end);
-      }).toList()
-        ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
-
-      final statsRepo = DashboardStatsRepository();
-      final statsByTank = <String, DashboardStatsModel>{};
-      for (final tank in _tanks) {
-        statsByTank[tank.id] = await statsRepo.getStats(tank.id);
-      }
-
-      // Fetch folder mappings from tree node repository
-      final nodes = await TankTreeRepository().fetchAll();
-      final folderNameMap = <String, String>{};
-      for (final n in nodes) {
-        if (n.isFolder) {
-          folderNameMap[n.id] = n.name;
-        }
-      }
-      final tankFolderMap = <String, String>{};
-      for (final tank in _tanks) {
-        final leaf = nodes.cast<TankNode?>().firstWhere(
-              (n) => n != null && n.isLeaf && n.tankId == tank.id,
-              orElse: () => null,
-            );
-        if (leaf != null && leaf.parentId != null) {
-          tankFolderMap[tank.id] = folderNameMap[leaf.parentId] ?? 'General';
-        } else {
-          tankFolderMap[tank.id] = (tank.location?.trim().isNotEmpty == true) ? tank.location! : 'General';
-        }
-      }
-
-      // Group tanks by folder
-      final groupedTanks = <String, List<TankModel>>{};
-      for (final tank in _tanks) {
-        final folderName = tankFolderMap[tank.id] ?? 'General';
-        groupedTanks.putIfAbsent(folderName, () => []).add(tank);
-      }
-
-      // Build records to show
-      final records = <Map<String, dynamic>>[];
-      if (_pdfRange == _DashboardPdfRange.current) {
-        for (final tank in _tanks) {
-          final stats = statsByTank[tank.id];
-          if (stats != null && stats.lastCapturedAt != null && stats.lastReading.isNotEmpty) {
-            records.add({
-              'tankId': tank.id,
-              'tankCode': tank.tankCode,
-              'tankName': tank.tankName,
-              'date': stats.lastCapturedAt!,
-              'values': stats.lastReading,
-              'inspector': stats.lastCapturedBy ?? '',
-              'duplicateReason': stats.lastDuplicateReason ?? '',
-            });
-          }
-        }
-      } else {
-        for (final r in filteredReadings) {
-          final tank = _tanks.cast<TankModel?>().firstWhere(
-                (t) => t != null && t.id == r.tankId,
-                orElse: () => null,
-              );
-          if (tank != null) {
-            records.add({
-              'tankId': r.tankId,
-              'tankCode': tank.tankCode,
-              'tankName': tank.tankName,
-              'date': r.capturedAt,
-              'values': r.inspectionValues,
-              'inspector': r.capturedByName,
-              'duplicateReason': r.inspectionValues['duplicate_reason']?.toString() ?? r.inspectionValues['reason']?.toString() ?? '',
-            });
-          }
-        }
-      }
+      final window = _abnormalityWindow();
+      final activeAlerts = _allAlerts
+          .where((a) {
+            final isActive = !a.acknowledged && a.status.toLowerCase() != 'completed';
+            if (isActive) return _tankMatch(a.tankId);
+            return _inRange(a.timestamp, window) && _tankMatch(a.tankId);
+          })
+          .toList()
+        ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      final completedAlerts = _completed
+          .where((c) => _inRange(c.completedAt, window))
+          .where((c) => _tankMatch(c.alert.tankId))
+          .toList()
+        ..sort((a, b) => b.completedAt.compareTo(a.completedAt));
 
       final excel = xl.Excel.createExcel();
-      
-      // Sheet 1: Summary Sheet
+
+      // Setup sheets based on _abnormalityType
+      final showActive = _abnormalityType == _DashboardReportType.abnormalities || _abnormalityType == _DashboardReportType.both;
+      final showCompleted = _abnormalityType == _DashboardReportType.completed || _abnormalityType == _DashboardReportType.both;
+
+      // Summary Sheet
       final summarySheet = excel['Summary'];
       if (excel.tables.containsKey('Sheet1') && 'Sheet1' != 'Summary') {
         excel.delete('Sheet1');
@@ -1662,90 +1663,109 @@ class _DashboardTabState extends State<DashboardTab> {
         xl.TextCellValue('Value'),
       ]);
       summarySheet.appendRow([
-        xl.TextCellValue('Total Assets'),
-        xl.TextCellValue(_tanks.length.toString()),
+        xl.TextCellValue('Time Range'),
+        xl.TextCellValue(_abnormalityRange.label),
       ]);
       summarySheet.appendRow([
-        xl.TextCellValue('Total Readings in Window'),
-        xl.TextCellValue(records.length.toString()),
+        xl.TextCellValue('Start Date'),
+        xl.TextCellValue(DateFormat('dd-MM-yyyy HH:mm:ss').format(window.start.toLocal())),
       ]);
+      summarySheet.appendRow([
+        xl.TextCellValue('End Date'),
+        xl.TextCellValue(DateFormat('dd-MM-yyyy HH:mm:ss').format(window.end.toLocal())),
+      ]);
+      if (showActive) {
+        summarySheet.appendRow([
+          xl.TextCellValue('Active Alerts'),
+          xl.TextCellValue(activeAlerts.length.toString()),
+        ]);
+      }
+      if (showCompleted) {
+        summarySheet.appendRow([
+          xl.TextCellValue('Resolved Alerts'),
+          xl.TextCellValue(completedAlerts.length.toString()),
+        ]);
+      }
 
-      // Sheets 2..N: one per folder
-      final sortedFolders = groupedTanks.keys.toList()..sort();
-      for (final folderName in sortedFolders) {
-        final folderTanks = groupedTanks[folderName] ?? [];
-        final folderReadings = records.where((rec) => folderTanks.any((t) => t.id == rec['tankId'])).toList()
-          ..sort((a, b) => b['date'].toString().compareTo(a['date'].toString()));
-
-        if (folderReadings.isEmpty) continue; // Skip empty folders
-
-        // Collect parameters
-        final folderParams = <Map<String, dynamic>>[];
-        final folderParamLabels = <String>[];
-        for (final tank in folderTanks) {
-          for (final prop in tank.inspectionProperties) {
-            final type = prop['type'] as String? ?? 'text';
-            if (type == 'group') continue;
-            final label = prop['label'] as String? ?? '';
-            if (label.isNotEmpty && !folderParamLabels.contains(label)) {
-              folderParamLabels.add(label);
-              folderParams.add(prop);
-            }
-          }
-        }
-
-        // Limit sheet name to 31 chars as Excel requires
-        final cleanSheetName = folderName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-        final sheetName = cleanSheetName.length > 31 ? cleanSheetName.substring(0, 31) : cleanSheetName;
-        final sheet = excel[sheetName];
-
-        // Header Row
-        final headers = <xl.CellValue>[
-          xl.TextCellValue('Date'),
+      // Active Alerts Sheet
+      if (showActive) {
+        final activeSheet = excel['Active Alerts'];
+        activeSheet.appendRow([
+          xl.TextCellValue('Time'),
           xl.TextCellValue('Asset Name'),
-          ...folderParamLabels.map((l) => xl.TextCellValue(l)),
-          xl.TextCellValue('Images'),
-          xl.TextCellValue('Duplicate Reason'),
-        ];
-        sheet.appendRow(headers);
+          xl.TextCellValue('Asset Code'),
+          xl.TextCellValue('Severity'),
+          xl.TextCellValue('Parameter'),
+          xl.TextCellValue('Value'),
+          xl.TextCellValue('Created By'),
+          xl.TextCellValue('Message'),
+          xl.TextCellValue('Image URL'),
+        ]);
 
-        // Data Rows
-        for (final rec in folderReadings) {
-          final tankCode = rec['tankCode'] as String;
-          final tankName = rec['tankName'] as String;
-          final dateStr = DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.parse(rec['date'] as String).toLocal());
-          final values = rec['values'] as Map<String, dynamic>;
-
-          // Gather image URLs
-          final allImages = <String>[];
-          for (final p in folderParams) {
-            allImages.addAll(_getParamImages(values, p));
-          }
-
-          final row = <xl.CellValue>[
+        for (final a in activeAlerts) {
+          final dateStr = DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.parse(a.timestamp).toLocal());
+          activeSheet.appendRow([
             xl.TextCellValue(dateStr),
-            xl.TextCellValue('$tankName ($tankCode)'),
-            ...folderParams.map((p) {
-              final lbl = p['label'] as String;
-              final val = values[lbl];
-              if (val is Map) {
-                return xl.TextCellValue('${val['left'] ?? ''} | ${val['right'] ?? ''}');
-              }
-              return xl.TextCellValue(val?.toString() ?? '');
-            }),
-            xl.TextCellValue(allImages.join(', ')),
-            xl.TextCellValue(rec['duplicateReason']?.toString() ?? ''),
-          ];
-          sheet.appendRow(row);
+            xl.TextCellValue(a.tankName),
+            xl.TextCellValue(a.tankCode),
+            xl.TextCellValue(a.severity.toUpperCase()),
+            xl.TextCellValue(a.paramLabel),
+            xl.TextCellValue(a.paramValue.isEmpty ? '-' : a.paramValue),
+            xl.TextCellValue(a.capturedByName.isEmpty ? 'Dashboard' : a.capturedByName),
+            xl.TextCellValue(a.message.isEmpty ? '-' : a.message),
+            xl.TextCellValue(a.imageUrl),
+          ]);
+        }
+      }
+
+      // Completed Alerts Sheet
+      if (showCompleted) {
+        final completedSheet = excel['Completed Alerts'];
+        completedSheet.appendRow([
+          xl.TextCellValue('Completed At'),
+          xl.TextCellValue('Alert Time'),
+          xl.TextCellValue('Asset Name'),
+          xl.TextCellValue('Asset Code'),
+          xl.TextCellValue('Severity'),
+          xl.TextCellValue('Parameter'),
+          xl.TextCellValue('Value'),
+          xl.TextCellValue('Created By'),
+          xl.TextCellValue('Resolved By'),
+          xl.TextCellValue('Message'),
+          xl.TextCellValue('Image URL'),
+        ]);
+
+        for (final c in completedAlerts) {
+          final a = c.alert;
+          final compDateStr = DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.parse(c.completedAt).toLocal());
+          final alertDateStr = DateFormat('dd-MM-yyyy HH:mm:ss').format(DateTime.parse(a.timestamp).toLocal());
+          completedSheet.appendRow([
+            xl.TextCellValue(compDateStr),
+            xl.TextCellValue(alertDateStr),
+            xl.TextCellValue(a.tankName),
+            xl.TextCellValue(a.tankCode),
+            xl.TextCellValue(a.severity.toUpperCase()),
+            xl.TextCellValue(a.paramLabel),
+            xl.TextCellValue(a.paramValue.isEmpty ? '-' : a.paramValue),
+            xl.TextCellValue(a.capturedByName.isEmpty ? 'Dashboard' : a.capturedByName),
+            xl.TextCellValue(c.completedBy),
+            xl.TextCellValue(a.message.isEmpty ? '-' : a.message),
+            xl.TextCellValue(a.imageUrl),
+          ]);
         }
       }
 
       final dir = await _preferredExportDir();
       final ts = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-      final file = File('${dir.path}/dashboard_report_$ts.xlsx');
+      final file = File('${dir.path}/abnormality_report_$ts.xlsx');
       await file.writeAsBytes(excel.save()!, flush: true);
       _snack('Saved: ${file.path}');
-      await Share.shareXFiles([XFile(file.path)], text: 'Dashboard Report Excel');
+      await Share.shareXFiles([XFile(file.path)], text: 'Abnormality Report Excel');
+      await _auditExport('download_excel', 'abnormality_report', {
+        'format': 'xlsx',
+        'report_type': 'abnormalities',
+        'path': file.path,
+      });
     } catch (e) {
       _snack('Abnormality Excel export failed: $e', error: true);
     } finally {
@@ -1969,6 +1989,7 @@ class _DashboardTabState extends State<DashboardTab> {
         'timestamp': DateTime.now().toIso8601String(),
         'acknowledged': false,
         'live': false,
+        'status': 'active', // 🔖 Added for Alert Lifecycle Bug Fix
       };
       await _ref('alerts/$alertId').set(alert);
       debugPrint('[Dashboard] Expected-avg alert written: $alertId');
@@ -2004,11 +2025,15 @@ class _DashboardTabState extends State<DashboardTab> {
         'timestamp': alert.timestamp,
         'acknowledged': true,
         'live': alert.isLive,
+        'status': 'COMPLETED', // 🔖 Added for Alert Lifecycle Bug Fix
       },
     });
 
-    // Mark acknowledged in alerts/
-    await _ref('alerts/${alert.id}/acknowledged').set(true);
+    // Mark acknowledged and status: COMPLETED in alerts/
+    await _ref('alerts/${alert.id}').update({
+      'acknowledged': true,
+      'status': 'COMPLETED', // 🔖 Added for Alert Lifecycle Bug Fix
+    });
     debugPrint('[Dashboard] Task completed: ${alert.id}');
   }
 
@@ -2136,7 +2161,7 @@ class _DashboardTabState extends State<DashboardTab> {
 
   List<_AlertModel> get _todayOpenAlerts {
     final open = _allAlerts
-        .where((a) => !a.acknowledged && _isToday(a.timestamp))
+        .where((a) => !a.acknowledged && a.status.toLowerCase() != 'completed')
         .toList();
 
     switch (_filter) {
@@ -2548,7 +2573,7 @@ class _DashboardTabState extends State<DashboardTab> {
                     color: _kDanger, borderRadius: BorderRadius.circular(2))),
             const SizedBox(width: 10),
             Expanded(
-              child: Text("TODAY'S TASKS",
+              child: Text("ACTIVE ALERTS", // 🔖 Renamed for Alert Lifecycle Bug Fix
                   style: GoogleFonts.spaceGrotesk(
                       fontSize: 10,
                       fontWeight: FontWeight.w700,

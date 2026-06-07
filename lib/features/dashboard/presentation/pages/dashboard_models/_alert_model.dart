@@ -19,6 +19,7 @@ class _AlertModel {
   final String timestamp;
   final bool acknowledged;
   final bool isLive;
+  final String status;
 
   _AlertModel({
     required this.id,
@@ -39,6 +40,7 @@ class _AlertModel {
     required this.timestamp,
     required this.acknowledged,
     required this.isLive,
+    required this.status,
   });
 
   factory _AlertModel.fromMap(Map<dynamic, dynamic> m) => _AlertModel(
@@ -60,6 +62,7 @@ class _AlertModel {
         timestamp: m['timestamp']?.toString() ?? '',
         acknowledged: m['acknowledged'] == true,
         isLive: m['live'] == true,
+        status: m['status']?.toString() ?? 'active',
       );
 }
 

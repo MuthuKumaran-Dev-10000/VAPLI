@@ -8,11 +8,17 @@ class _MetaCard extends StatelessWidget {
   final TankModel tank;
   final UserModel currentUser;
   final String nowLabel;
+  final String? endLabel; // 🔖 Added for Historical Upload Permission
+  final VoidCallback? onStartTap; // 🔖 Added for Historical Upload Permission
+  final VoidCallback? onEndTap; // 🔖 Added for Historical Upload Permission
 
   const _MetaCard({
     required this.tank,
     required this.currentUser,
     required this.nowLabel,
+    this.endLabel, // 🔖 Added for Historical Upload Permission
+    this.onStartTap, // 🔖 Added for Historical Upload Permission
+    this.onEndTap, // 🔖 Added for Historical Upload Permission
   });
 
   @override
@@ -58,7 +64,31 @@ class _MetaCard extends StatelessWidget {
           child: Column(children: [
             _MetaRow(label: 'Zone', value: tank.location ?? '—'),
             _MetaRow(label: 'Inspector', value: currentUser.fullName),
-            _MetaRow(label: 'Captured At Start', value: nowLabel),
+            
+            // Start Date Row
+            onStartTap != null
+                ? InkWell(
+                    onTap: onStartTap,
+                    child: _MetaRow(
+                      label: 'Captured At Start',
+                      value: nowLabel,
+                      suffixIcon: Icons.edit_calendar_rounded,
+                    ),
+                  )
+                : _MetaRow(label: 'Captured At Start', value: nowLabel),
+            
+            // End Date Row
+            if (endLabel != null)
+              onEndTap != null
+                  ? InkWell(
+                      onTap: onEndTap,
+                      child: _MetaRow(
+                        label: 'Captured At End',
+                        value: endLabel!,
+                        suffixIcon: Icons.edit_calendar_rounded,
+                      ),
+                    )
+                  : _MetaRow(label: 'Captured At End', value: endLabel!),
           ]),
         ),
       ]),

@@ -21,6 +21,8 @@ class AccessControlService {
   static const String pAllocateUsersToClients = 'allocate_users_to_clients';
   static const String pChangeSettings = 'change_settings';
 
+  static const String pHistoricalUpload = 'historical_upload'; // 🔖 Added for Historical Upload Permission
+
   static const List<String> viewPrivileges = [
     pOpenAdminPage,
     pViewAdminTanks,
@@ -39,6 +41,7 @@ class AccessControlService {
     pModifyTanks,
     pAllocateUsersToClients,
     pChangeSettings,
+    pHistoricalUpload, // 🔖 Added for Historical Upload Permission
   ];
 
   static const List<String> allPrivileges = [
@@ -56,6 +59,7 @@ class AccessControlService {
     pModifyTanks,
     pAllocateUsersToClients,
     pChangeSettings,
+    pHistoricalUpload, // 🔖 Added for Historical Upload Permission
   ];
 
   static int rankOf(String role) {

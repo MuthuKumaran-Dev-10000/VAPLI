@@ -68,6 +68,7 @@ class AlertModel {
   final bool    resolved;
   final String? resolvedAt;
   final String? resolvedBy;
+  final String  status; // "active" | "COMPLETED"
 
   const AlertModel({
     required this.id,
@@ -96,6 +97,7 @@ class AlertModel {
     this.resolved = false,
     this.resolvedAt,
     this.resolvedBy,
+    this.status = 'active',
   });
 
   // ── Serialise ──────────────────────────────────────────────────────────────
@@ -127,6 +129,7 @@ class AlertModel {
     'resolved':                  resolved,
     'resolved_at':               resolvedAt,
     'resolved_by':               resolvedBy,
+    'status':                    status,
   };
 
   factory AlertModel.fromMap(String id, Map<dynamic, dynamic> m) {
@@ -161,6 +164,7 @@ class AlertModel {
       resolved:                  m['resolved'] == true,
       resolvedAt:                m['resolved_at']?.toString(),
       resolvedBy:                m['resolved_by']?.toString(),
+      status:                    m['status']?.toString()              ?? 'active',
     );
   }
 
@@ -168,6 +172,7 @@ class AlertModel {
     bool?    resolved,
     String?  resolvedAt,
     String?  resolvedBy,
+    String?  status,
   }) => AlertModel(
     id:                        id,
     tankId:                    tankId,
@@ -195,5 +200,6 @@ class AlertModel {
     resolved:                  resolved ?? this.resolved,
     resolvedAt:                resolvedAt ?? this.resolvedAt,
     resolvedBy:                resolvedBy ?? this.resolvedBy,
+    status:                    status ?? this.status,
   );
 }

@@ -103,6 +103,7 @@ class AlertRepository {
       blockSubmission: constraint['block_submission'] == true,
       lastInspectionValues: lastInspectionValues,
       resolved: false,
+      status: 'active', // 🔖 Added for Alert Lifecycle Bug Fix
     );
 
     await newRef.set(alert.toMap());
@@ -190,6 +191,7 @@ class AlertRepository {
       'resolved': true,
       'resolved_at': DateTime.now().toIso8601String(),
       'resolved_by': resolvedBy,
+      'status': 'COMPLETED', // 🔖 Added for Alert Lifecycle Bug Fix
     });
   }
 

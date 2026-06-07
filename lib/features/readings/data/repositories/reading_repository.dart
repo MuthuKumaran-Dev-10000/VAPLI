@@ -22,13 +22,8 @@ class ReadingRepository {
     required String capturedBy,
     required String capturedByName,
     String? capturedAtStart,
-
-    /// Dynamic property values collected from the inspection form.
-    /// Key   = property label  (e.g. "Oil Temperature")
-    /// Value = entered value   (double | String | Map for dual_text)
+    String? capturedAt, // 🔖 Added for Historical Upload Permission
     Map<String, dynamic>? inspectionValues,
-
-    // CLOUDINARY URL
     String? imageUrl,
   }) async {
     final id = HashUtil.generateId();
@@ -39,13 +34,12 @@ class ReadingRepository {
       tankSnapshotName: tankName,
       finalLevel: level,
       inspectionValues: inspectionValues ?? {},
-      // CLOUDINARY
       imageUrl: imageUrl,
       source: "manual",
       capturedBy: capturedBy,
       capturedByName: capturedByName,
       capturedAtStart: capturedAtStart,
-      capturedAt: DateTime.now().toIso8601String(),
+      capturedAt: capturedAt ?? DateTime.now().toIso8601String(), // 🔖 Added for Historical Upload Permission
     );
 
     await DatabaseModeService.ref("${AppConstants.readingsPath}/$id")

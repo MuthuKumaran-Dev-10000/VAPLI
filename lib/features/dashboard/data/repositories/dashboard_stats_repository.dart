@@ -137,6 +137,7 @@ class DashboardStatsRepository {
       lastCapturedBy: reading.capturedByName,
       lastReading: Map<String, dynamic>.from(reading.inspectionValues),
       paramStats: updatedStats,
+      lastDuplicateReason: reading.inspectionValues['duplicate_reason']?.toString(), // 🔖 Added for Duplicate Reading Validation
     );
 
     await _ref(tank.id).set(updated.toMap());

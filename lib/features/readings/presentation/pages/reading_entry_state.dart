@@ -55,9 +55,15 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   // ── Track grouped parameters to skip flat rendering ──────────────────
   final Set<String> _groupedParamIds = {};
 
+  // ── Active alerts for this tank ──────────────────────────────────────────
+  List<AlertModel> _activeAlerts = []; // 🔖 Added for Alert Lifecycle Bug Fix
+  StreamSubscription? _activeAlertsSub; // 🔖 Added for Alert Lifecycle Bug Fix
+
   // ── Deep copy of inspection properties ────────────────────────────────
   late final List<Map<String, dynamic>> _props;
-  late final String _capturedAtStart;
+  late String _capturedAtStart;
+  late String _capturedAtCustom; // 🔖 Added for Historical Upload Permission
+  String _duplicateReason = ''; // 🔖 Added for Duplicate Reading Validation
 
   // ── Which autofill params depend on which param ids ───────────────────
   // autofillParamId → Set<dependencyParamId>
@@ -68,12 +74,19 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         DateTime.parse(_capturedAtStart),
       );
 
+  String get _endLabel =>
+      DateFormat('dd MMM yyyy, HH:mm:ss').format(
+        DateTime.parse(_capturedAtCustom),
+      ); // 🔖 Added for Historical Upload Permission
+
   // ── lifecycle ──────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
     _capturedAtStart = DateTime.now().toIso8601String();
+    _capturedAtCustom = _capturedAtStart; // 🔖 Added for Historical Upload Permission
+    _duplicateReason = widget.duplicateReason ?? ''; // 🔖 Added for Duplicate Reading Validation
 
     _props = widget.tank.inspectionProperties.map((p) {
       return Map<String, dynamic>.from(p.map((k, v) {
@@ -151,10 +164,39 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
 
     _manualCaptures.add(_ManualCaptureEntry());
+
+    // 🔖 Subscribe to active alerts for this tank in Firebase (Alert Lifecycle Bug Fix)
+    _activeAlertsSub = _ref('alerts')
+        .orderByChild('tank_id')
+        .equalTo(widget.tank.id)
+        .onValue
+        .listen((event) {
+      if (!mounted) return;
+      if (!event.snapshot.exists || event.snapshot.value == null) {
+        setState(() {
+          _activeAlerts = [];
+        });
+        return;
+      }
+      final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+      final list = raw.entries
+          .map((e) => AlertModel.fromMap(
+                e.key.toString(),
+                Map<dynamic, dynamic>.from(e.value as Map),
+              ))
+          // Filter out completed and acknowledged alerts
+          .where((a) => !a.resolved && a.status.toLowerCase() != 'completed')
+          .toList()
+        ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+      setState(() {
+        _activeAlerts = list;
+      });
+    });
   }
 
   @override
   void dispose() {
+    _activeAlertsSub?.cancel(); // 🔖 Cancel active alerts sub (Alert Lifecycle Bug Fix)
     _textCtrl.values.forEach((c) => c.dispose());
     _dualLeft.values.forEach((c) => c.dispose());
     _dualRight.values.forEach((c) => c.dispose());
@@ -732,6 +774,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       'timestamp': DateTime.now().toIso8601String(),
       'acknowledged': false,
       'live': true,
+      'status': 'active', // 🔖 Added for Alert Lifecycle Bug Fix
     };
 
     try {
@@ -1090,6 +1133,9 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
     try {
       final inspVals = _collectValues();
+      if (_duplicateReason.isNotEmpty) {
+        inspVals['duplicate_reason'] = _duplicateReason;
+      } // 🔖 Added for Duplicate Reading Validation
 
       for (final e in _paramPhotoUrl.entries) {
         if (e.value != null) inspVals['${e.key}__image_url'] = e.value!;
@@ -1148,6 +1194,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         capturedBy: widget.currentUser.id,
         capturedByName: widget.currentUser.fullName,
         capturedAtStart: _capturedAtStart,
+        capturedAt: _capturedAtCustom, // 🔖 Added for Historical Upload Permission
         imageUrl: primaryImageUrl,
         inspectionValues: inspVals,
       );
@@ -1192,8 +1239,27 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         _saving = false;
         _saved = true;
       });
+
+      // 🔖 Navigation Sequence & Delay (Reading Capture Flow Refactor)
+      final siblings = widget.siblingTanks;
+      final currentIndex = widget.currentTankIndex;
+
       Future.delayed(const Duration(seconds: 3), () {
-        if (mounted) Navigator.pop(context);
+        if (!mounted) return;
+        if (siblings != null && currentIndex != null && currentIndex < siblings.length - 1) {
+          // There are more tanks in the folder sequence! Pop back and request to select the next tank.
+          final nextIndex = currentIndex + 1;
+          final nextTank = siblings[nextIndex];
+          Navigator.pop(context, {
+            'action': 'select_tank',
+            'tank_id': nextTank.id,
+          });
+        } else {
+          // No more tanks, or not part of a folder sequence. Return to the previous screen.
+          Navigator.pop(context, {
+            'action': 'clear_selection',
+          });
+        }
       });
     } catch (e) {
       setState(() {
@@ -1230,6 +1296,72 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         summary: 'Saved reading for ${widget.tank.tankName}',
       );
     } catch (_) {}
+  }
+
+
+
+  Future<DateTime?> _pickDateTime(DateTime initial) async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: _kCopper,
+              onPrimary: _kBg,
+              surface: _kCard,
+              onSurface: _kText,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (date == null || !mounted) return null;
+
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(initial),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.dark(
+              primary: _kCopper,
+              onPrimary: _kBg,
+              surface: _kCard,
+              onSurface: _kText,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (time == null || !mounted) return null;
+
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  Future<void> _editStartDate() async {
+    final parsed = DateTime.tryParse(_capturedAtStart) ?? DateTime.now();
+    final chosen = await _pickDateTime(parsed);
+    if (chosen != null && mounted) {
+      setState(() {
+        _capturedAtStart = chosen.toIso8601String();
+      });
+    }
+  }
+
+  Future<void> _editEndDate() async {
+    final parsed = DateTime.tryParse(_capturedAtCustom) ?? DateTime.now();
+    final chosen = await _pickDateTime(parsed);
+    if (chosen != null && mounted) {
+      setState(() {
+        _capturedAtCustom = chosen.toIso8601String();
+      });
+    }
   }
 
   void _snack(String msg, Color bg) {
@@ -1304,7 +1436,108 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               tank: widget.tank,
               currentUser: widget.currentUser,
               nowLabel: _nowLabel,
+              endLabel: _endLabel,
+              onStartTap: AccessControlService.can(widget.currentUser, AccessControlService.pHistoricalUpload)
+                  ? _editStartDate
+                  : null,
+              onEndTap: AccessControlService.can(widget.currentUser, AccessControlService.pHistoricalUpload)
+                  ? _editEndDate
+                  : null,
             ),
+
+            if (_activeAlerts.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Container(
+                decoration: BoxDecoration(
+                  color: _kCard,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _kBorder),
+                ),
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded, color: _kWarn, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'ACTIVE ALERTS FOR THIS ASSET',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: _kWarn,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ..._activeAlerts.map((alert) {
+                      final timeStr = DateFormat('dd MMM yyyy, HH:mm').format(
+                        DateTime.tryParse(alert.capturedAt) ?? DateTime.now(),
+                      );
+                      final sevColor = _severityColor(alert.constraintSeverity);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              margin: const EdgeInsets.only(top: 2),
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: sevColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          alert.alertTitle,
+                                          style: GoogleFonts.dmSans(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: _kText,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        timeStr,
+                                        style: GoogleFonts.dmSans(
+                                          fontSize: 11,
+                                          color: _kSub,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    alert.message,
+                                    style: GoogleFonts.dmSans(
+                                      fontSize: 12,
+                                      color: _kSub,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                ),
+              ),
+            ], // 🔖 Added for Alert Lifecycle Bug Fix
 
             if (_props.isNotEmpty) ...[
               const SizedBox(height: 28),

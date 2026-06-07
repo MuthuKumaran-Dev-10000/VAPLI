@@ -99,6 +99,8 @@ class _TrendsScreenState extends State<TrendsScreen> {
       '-';
 
   String _alertStatus(Map<dynamic, dynamic> m) {
+    final statusVal = m['status']?.toString().toLowerCase();
+    if (statusVal == 'completed') return 'Completed'; // 🔖 Added for Alert Lifecycle Bug Fix
     if (m['resolved'] == true) return 'Resolved';
     if (m['acknowledged'] == true) return 'Acknowledged';
     return 'Open';

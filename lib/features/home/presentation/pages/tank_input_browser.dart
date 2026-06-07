@@ -34,6 +34,7 @@ import 'package:lubrication_indicator/features/auth/data/models/user_model.dart'
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_tree_repository.dart';
 import 'package:lubrication_indicator/features/readings/presentation/pages/reading_entry_screen.dart';
+import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette — matches the rest of the app (obsidian industrial)
@@ -548,13 +549,215 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                     child: CircularProgressIndicator(color: _kCopper))
                 : _selectedLeaf != null
                     // ── Leaf detail view ───────────────────────────────────
-                    ? _LeafDetail(
-                        leaf: _selectedLeaf!,
-                        tank: _selectedTank,
-                        currentUser: widget.currentUser,
-                        rootTitleOverride: widget.rootTitleOverride,
-                        onBack: _clearLeafSelection,
-                      )
+                    ? () {
+                        final leafNodes = _nodes.where((n) => n.isLeaf && n.tankId != null).toList();
+                        final siblingTanks = leafNodes
+                            .map((n) => _tankCache[n.tankId])
+                            .whereType<TankModel>()
+                            .toList();
+                        final currentTankIndex = _selectedTank != null
+                            ? siblingTanks.indexWhere((t) => t.id == _selectedTank!.id)
+                            : -1;
+                        return _LeafDetail(
+                          leaf: _selectedLeaf!,
+                          tank: _selectedTank,
+                          currentUser: widget.currentUser,
+                          rootTitleOverride: widget.rootTitleOverride,
+                          onBack: _clearLeafSelection,
+                          siblingTanks: siblingTanks.isNotEmpty ? siblingTanks : null,
+                          currentTankIndex: currentTankIndex >= 0 ? currentTankIndex : null,
+                          onTakeReading: () async {
+                            final now = DateTime.now();
+                            final from = now.subtract(const Duration(minutes: 30));
+                            String duplicateReason = '';
+                            
+                            try {
+                              final existing = await ReadingRepository().getReadingsInRange(
+                                tankId: _selectedTank!.id,
+                                from: from,
+                                to: now,
+                              );
+                              if (existing.isNotEmpty && context.mounted) {
+                                final proceed = await showDialog<bool>(
+                                  context: context,
+                                  barrierDismissible: false,
+                                  builder: (context) => AlertDialog(
+                                    backgroundColor: _kCard,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                    title: Text(
+                                      'Duplicate Reading Alert',
+                                      style: GoogleFonts.dmSans(
+                                        color: _kText,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    content: Text(
+                                      'Do you really want to take a reading for ${_selectedTank!.tankName}? A recent reading already exists.',
+                                      style: GoogleFonts.dmSans(color: _kSub, fontSize: 14),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.of(context).pop(false),
+                                        child: Text(
+                                          'NO',
+                                          style: GoogleFonts.dmSans(
+                                            color: _kSub,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                      ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: _kCopper,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                        ),
+                                        onPressed: () => Navigator.of(context).pop(true),
+                                        child: Text(
+                                          'YES',
+                                          style: GoogleFonts.dmSans(
+                                            color: _kBg,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+
+                                if (proceed != true) {
+                                  return; // Comeback to the LeafDetail page
+                                }
+
+                                final reason = await showDialog<String>(
+                                  context: context,
+                                  barrierDismissible: false,
+                                  builder: (context) {
+                                    final controller = TextEditingController();
+                                    final formKey = GlobalKey<FormState>();
+                                    return AlertDialog(
+                                      backgroundColor: _kCard,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                      title: Text(
+                                        'Enter Duplicate Reason',
+                                        style: GoogleFonts.dmSans(
+                                          color: _kText,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                        ),
+                                      ),
+                                      content: Form(
+                                        key: formKey,
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              'Please provide a mandatory reason for this duplicate reading.',
+                                              style: GoogleFonts.dmSans(color: _kSub, fontSize: 13),
+                                            ),
+                                            const SizedBox(height: 12),
+                                            TextFormField(
+                                              controller: controller,
+                                              maxLines: 2,
+                                              style: GoogleFonts.dmSans(color: _kText, fontSize: 14),
+                                              decoration: InputDecoration(
+                                                hintText: 'Reason...',
+                                                hintStyle: GoogleFonts.dmSans(color: _kSub.withOpacity(0.5)),
+                                                filled: true,
+                                                fillColor: _kSurface,
+                                                border: OutlineInputBorder(
+                                                  borderRadius: BorderRadius.circular(8),
+                                                  borderSide: const BorderSide(color: _kBorder),
+                                                ),
+                                                focusedBorder: OutlineInputBorder(
+                                                  borderRadius: BorderRadius.circular(8),
+                                                  borderSide: const BorderSide(color: _kCopper),
+                                                ),
+                                              ),
+                                              validator: (value) {
+                                                if (value == null || value.trim().isEmpty) {
+                                                  return 'Reason cannot be empty';
+                                                }
+                                                return null;
+                                              },
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.of(context).pop(),
+                                          child: Text(
+                                            'Cancel',
+                                            style: GoogleFonts.dmSans(
+                                              color: _kSub,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                        ElevatedButton(
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: _kCopper,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                          ),
+                                          onPressed: () {
+                                            if (formKey.currentState?.validate() ?? false) {
+                                              Navigator.of(context).pop(controller.text.trim());
+                                            }
+                                          },
+                                          child: Text(
+                                            'Submit',
+                                            style: GoogleFonts.dmSans(
+                                              color: _kBg,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                );
+
+                                if (reason == null || reason.isEmpty) {
+                                  return; // Comeback to the LeafDetail page
+                                }
+                                duplicateReason = reason;
+                              }
+                            } catch (e) {
+                              debugPrint('[DuplicateCheck] Error: $e');
+                            }
+
+                            if (!context.mounted) return;
+
+                            final result = await Navigator.push<Map<String, dynamic>>(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ReadingEntryScreen(
+                                  tank: _selectedTank!,
+                                  currentUser: widget.currentUser!,
+                                  siblingTanks: siblingTanks.isNotEmpty ? siblingTanks : null,
+                                  currentTankIndex: currentTankIndex >= 0 ? currentTankIndex : null,
+                                  duplicateReason: duplicateReason.isNotEmpty ? duplicateReason : null,
+                                ),
+                              ),
+                            );
+                            if (result != null && result['action'] == 'select_tank') {
+                              final targetTankId = result['tank_id'];
+                              final targetNode = _nodes.firstWhere(
+                                (n) => n.isLeaf && n.tankId == targetTankId,
+                                orElse: () => _selectedLeaf!,
+                              );
+                              _selectLeaf(targetNode);
+                            } else if (result != null && result['action'] == 'clear_selection') {
+                              _clearLeafSelection();
+                            }
+                          },
+                        );
+                      }()
                     : isSearching
                         // ── Search results ─────────────────────────────────
                         ? searchResult.isEmpty
@@ -928,6 +1131,9 @@ class _LeafDetail extends StatelessWidget {
   final UserModel? currentUser;
   final String rootTitleOverride;
   final VoidCallback onBack;
+  final List<TankModel>? siblingTanks; // 🔖 Added for Reading Capture Flow Refactor
+  final int? currentTankIndex; // 🔖 Added for Reading Capture Flow Refactor
+  final VoidCallback onTakeReading; // 🔖 Added for Reading Capture Flow Refactor
 
   const _LeafDetail({
     required this.leaf,
@@ -935,6 +1141,9 @@ class _LeafDetail extends StatelessWidget {
     required this.currentUser,
     required this.rootTitleOverride,
     required this.onBack,
+    this.siblingTanks, // 🔖 Added for Reading Capture Flow Refactor
+    this.currentTankIndex, // 🔖 Added for Reading Capture Flow Refactor
+    required this.onTakeReading, // 🔖 Added for Reading Capture Flow Refactor
   });
 
   String get _qrData {
@@ -1007,7 +1216,6 @@ class _LeafDetail extends StatelessWidget {
                       : rootTitleOverride,
                   style: GoogleFonts.spaceGrotesk(
                       color: _kSubL, fontSize: 11, letterSpacing: 0.3),
-                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ]),
@@ -1162,17 +1370,7 @@ class _LeafDetail extends StatelessWidget {
             ),
           ] else ...[
             _TakeReadingButton(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ReadingEntryScreen(
-                      tank: tank!,
-                      currentUser: currentUser!,
-                    ),
-                  ),
-                );
-              },
+              onTap: onTakeReading,
             ),
             const SizedBox(height: 10),
             Center(
@@ -1239,19 +1437,23 @@ class _PathLabel extends StatelessWidget {
   final String path;
   const _PathLabel({required this.path});
   @override
-  Widget build(BuildContext context) => Row(children: [
-        const Icon(Icons.folder_outlined, size: 10, color: _kSubL),
-        const SizedBox(width: 3),
-        Flexible(
-          child: Text(
-            path.replaceAll('/', ' › '),
-            style: GoogleFonts.spaceGrotesk(
-                color: _kSubL, fontSize: 10, letterSpacing: 0.2),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+  Widget build(BuildContext context) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: const Icon(Icons.folder_outlined, size: 10, color: _kSubL),
           ),
-        ),
-      ]);
+          const SizedBox(width: 3),
+          Expanded(
+            child: Text(
+              path.replaceAll('/', ' › '),
+              style: GoogleFonts.spaceGrotesk(
+                  color: _kSubL, fontSize: 10, letterSpacing: 0.2),
+            ),
+          ),
+        ],
+      );
 }
 
 class _InfoRow extends StatelessWidget {

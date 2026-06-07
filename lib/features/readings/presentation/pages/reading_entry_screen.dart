@@ -20,6 +20,7 @@
 //   ✅ NEW: Sound + vibration fixed using AudioPlayer with asset fallback
 // ══════════════════════════════════════════════════════════════════════════════
 
+import 'dart:async'; // 🔖 Added for Alert Lifecycle Bug Fix
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
@@ -37,6 +38,7 @@ import 'package:intl/intl.dart';
 import 'package:mime/mime.dart';
 
 import 'package:lubrication_indicator/core/constants/app_constants.dart';
+import 'package:lubrication_indicator/core/services/access_control_service.dart';
 import 'package:lubrication_indicator/core/services/audit_log_service.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/services/expression_engine.dart';
@@ -45,6 +47,7 @@ import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart
 import 'package:lubrication_indicator/features/auth/data/models/user_model.dart';
 import 'package:lubrication_indicator/features/dashboard/data/repositories/dashboard_stats_repository.dart';
 import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
+import 'package:lubrication_indicator/features/alerts/data/models/alert_model.dart'; // 🔖 Added for Alert Lifecycle Bug Fix
 import 'image_marker_screen.dart';
 part 'reading_entry_state.dart';
 part 'reading_entry_models/_autofill_result.dart';
@@ -120,11 +123,17 @@ IconData _severityIcon(String? s) {
 class ReadingEntryScreen extends StatefulWidget {
   final TankModel tank;
   final UserModel currentUser;
+  final List<TankModel>? siblingTanks; // 🔖 Added for Reading Capture Flow Refactor
+  final int? currentTankIndex; // 🔖 Added for Reading Capture Flow Refactor
+  final String? duplicateReason; // 🔖 Added for Duplicate Reading Validation
 
   const ReadingEntryScreen({
     super.key,
     required this.tank,
     required this.currentUser,
+    this.siblingTanks, // 🔖 Added for Reading Capture Flow Refactor
+    this.currentTankIndex, // 🔖 Added for Reading Capture Flow Refactor
+    this.duplicateReason, // 🔖 Added for Duplicate Reading Validation
   });
 
   @override
