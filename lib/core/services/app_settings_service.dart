@@ -27,5 +27,48 @@ class AppSettingsService {
       'updated_at': DateTime.now().toIso8601String(),
     });
   }
+
+  static Future<Map<String, bool>> getDashboardDisplaySettings() async {
+    try {
+      final snap = await DatabaseModeService.ref('settings/dashboard_display').get();
+      if (!snap.exists || snap.value == null) {
+        return {
+          'show_inspection_values': true,
+          'show_completed_alerts': true,
+          'show_active_alerts': true,
+          'show_inspection_compliance': true,
+        };
+      }
+      final data = Map<String, dynamic>.from(snap.value as Map);
+      return {
+        'show_inspection_values': data['show_inspection_values'] ?? true,
+        'show_completed_alerts': data['show_completed_alerts'] ?? true,
+        'show_active_alerts': data['show_active_alerts'] ?? true,
+        'show_inspection_compliance': data['show_inspection_compliance'] ?? true,
+      };
+    } catch (_) {
+      return {
+        'show_inspection_values': true,
+        'show_completed_alerts': true,
+        'show_active_alerts': true,
+        'show_inspection_compliance': true,
+      };
+    }
+  }
+
+  static Future<void> setDashboardDisplaySettings({
+    required bool showInspectionValues,
+    required bool showCompletedAlerts,
+    required bool showActiveAlerts,
+    required bool showInspectionCompliance,
+  }) async {
+    await DatabaseModeService.ref('settings/dashboard_display').set({
+      'show_inspection_values': showInspectionValues,
+      'show_completed_alerts': showCompletedAlerts,
+      'show_active_alerts': showActiveAlerts,
+      'show_inspection_compliance': showInspectionCompliance,
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+  }
 }
 

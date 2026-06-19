@@ -118,11 +118,84 @@ class _TrendsScreenState extends State<TrendsScreen> {
         final key = e.key.toString().toLowerCase();
         final value = e.value?.toString() ?? '';
         if (!value.startsWith('http')) continue;
-        if (key.contains('image_url') || key.contains('violation')) {
+        if (key.contains('image_url') || key.contains('violation') || key.contains('captured_image')) {
           urls.add(value);
         }
       }
     }
+    return urls.toList();
+  }
+
+  // 🔖 Helper to resolve manual and regular images for an alert by querying readings
+  List<String> _getAlertImagesForMap(Map<dynamic, dynamic> m, List<ReadingModel> allReadings) {
+    final urls = <String>{};
+    final top = m['image_url']?.toString() ?? '';
+    if (top.startsWith('http')) urls.add(top);
+
+    final readingId = m['reading_id']?.toString() ?? '';
+    final paramLabel = _alertParamLabel(m);
+    final paramId = m['param_id']?.toString() ?? '';
+
+    ReadingModel? reading;
+    if (readingId.isNotEmpty) {
+      reading = allReadings.firstWhere((r) => r.id == readingId, orElse: () => null as dynamic);
+    }
+    if (reading == null) {
+      final alertTimeStr = _alertTime(m);
+      final alertTime = DateTime.tryParse(alertTimeStr);
+      if (alertTime != null) {
+        reading = allReadings.firstWhere((r) {
+          final rt = DateTime.tryParse(r.capturedAt);
+          if (rt == null) return false;
+          return rt.difference(alertTime).abs().inMinutes < 5;
+        }, orElse: () => null as dynamic);
+      }
+    }
+
+    if (reading != null) {
+      final values = reading.inspectionValues;
+      if (paramId.isNotEmpty) {
+        final regImg = values['${paramId}__image_url']?.toString() ?? '';
+        if (regImg.startsWith('http')) urls.add(regImg);
+      }
+      final prefix = 'manual_${paramLabel}_captured_image';
+      for (final entry in values.entries) {
+        final key = entry.key.toString();
+        if (key == prefix || key.startsWith('${prefix}_')) {
+          final valStr = entry.value?.toString() ?? '';
+          if (valStr.startsWith('http')) {
+            urls.add(valStr);
+          }
+        }
+      }
+    }
+
+    final lastVals = m['last_inspection_values'];
+    if (lastVals is Map) {
+      final lv = Map<dynamic, dynamic>.from(lastVals);
+      for (final e in lv.entries) {
+        final key = e.key.toString().toLowerCase();
+        final value = e.value?.toString() ?? '';
+        if (!value.startsWith('http')) continue;
+        if (key.contains('image_url') || key.contains('violation') || key.contains('captured_image')) {
+          urls.add(value);
+        }
+      }
+    }
+
+    final snapVals = m['all_values_snapshot'];
+    if (snapVals is Map) {
+      final sv = Map<dynamic, dynamic>.from(snapVals);
+      for (final e in sv.entries) {
+        final key = e.key.toString().toLowerCase();
+        final value = e.value?.toString() ?? '';
+        if (!value.startsWith('http')) continue;
+        if (key.contains('image_url') || key.contains('violation') || key.contains('captured_image')) {
+          urls.add(value);
+        }
+      }
+    }
+
     return urls.toList();
   }
 
@@ -148,13 +221,15 @@ class _TrendsScreenState extends State<TrendsScreen> {
       final completed = <Map<String, dynamic>>[];
       final imageUrls = <String>{};
 
+      final allReadings = await _repo.getAllReadings();
+
       if (alertsSnap.exists && alertsSnap.value is Map) {
         final raw = Map<dynamic, dynamic>.from(alertsSnap.value as Map);
         for (final v in raw.values) {
           final m = Map<dynamic, dynamic>.from(v as Map);
           if (m['tank_id']?.toString() != _selectedTankId) continue;
           if (!_inRange(_alertTime(m), window)) continue;
-          imageUrls.addAll(_extractAlertImageUrls(m));
+          imageUrls.addAll(_getAlertImagesForMap(m, allReadings));
           alerts.add(m.map((k, val) => MapEntry(k.toString(), val)));
         }
       }
@@ -168,7 +243,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
               : <dynamic, dynamic>{};
           if (alertMap['tank_id']?.toString() != _selectedTankId) continue;
           if (!_inRange(m['completed_at']?.toString(), window)) continue;
-          imageUrls.addAll(_extractAlertImageUrls(alertMap));
+          imageUrls.addAll(_getAlertImagesForMap(alertMap, allReadings));
           completed.add({
             ...m.map((k, val) => MapEntry(k.toString(), val)),
             'alert': alertMap.map((k, val) => MapEntry(k.toString(), val)),
@@ -497,18 +572,6 @@ class _TrendsScreenState extends State<TrendsScreen> {
   //         'Lubrication_Report_${fromStr}_${toStr}_$suffix.xlsx';
 
   //     final dir  = await getTemporaryDirectory();
-  //     final file = File('${dir.path}/$fileName');
-  //     await file.writeAsBytes(excel.save()!);
-  //     debugPrint('[Trends] Excel saved → ${file.path}');
-  //     await Share.shareXFiles([XFile(file.path)], text: 'Lubrication Report');
-  //   } catch (e) {
-  //     _snack('Excel export failed: $e');
-  //     debugPrint('[Trends] Excel error: $e');
-  //   } finally {
-  //     if (mounted) setState(() => _exporting = false);
-  //   }
-  // }
-
   // ── Excel export ───────────────────────────────────────────────────────────
   Future<void> _exportExcel() async {
     // if (!_chartReady && _cache.isEmpty) {
@@ -544,39 +607,25 @@ class _TrendsScreenState extends State<TrendsScreen> {
         xl.TextCellValue('Inspection Date'),
         xl.TextCellValue('Inspection Time'),
         xl.TextCellValue('Captured By'),
+        xl.TextCellValue('Duplicate Reason'),
       ]);
 
-      // for (final tank in tanksToExport) {
-      //   for (final r in _filtered(tank.id)) {
-      //     final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
-      //     summarySheet.appendRow([
-      //       xl.TextCellValue(tank.tankCode),
-      //       xl.TextCellValue(tank.tankName),
-      //       xl.TextCellValue(
-      //           dt != null ? DateFormat('dd-MM-yyyy').format(dt) : '—'),
-      //       xl.TextCellValue(
-      //           dt != null ? DateFormat('HH:mm:ss').format(dt) : '—'),
-      //       xl.TextCellValue(r.capturedByName),
-      //     ]);
-      //   }
-      // }
-
-       for (final tank in tanksToExport) {
-
-  final allReadings = await _repo.getAllReadings();
-
-  final readings = allReadings.where((r) {
-    if (r.tankId != tank.id) return false;
-
-    final dt = DateTime.tryParse(r.capturedAt);
-    if (dt == null) return false;
-
-    return !dt.isBefore(_rangeFrom) &&
-           !dt.isAfter(_rangeTo);
-  }).toList();
-
-  for (final r in readings) {
+      for (final tank in tanksToExport) {
+        final allReadings = await _repo.getAllReadings();
+        final readings = allReadings.where((r) {
+          if (r.tankId != tank.id) return false;
           final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
+          if (dt == null) return false;
+          return !dt.isBefore(_rangeFrom) && !dt.isAfter(_rangeTo);
+        }).toList()
+          ..sort((a, b) =>
+              DateTime.parse(a.capturedAt).compareTo(DateTime.parse(b.capturedAt)));
+
+        for (final r in readings) {
+          final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
+          final dupReason = r.inspectionValues['duplicate_reason']?.toString() ??
+              r.inspectionValues['reason']?.toString() ??
+              '';
           summarySheet.appendRow([
             xl.TextCellValue(tank.tankCode),
             xl.TextCellValue(tank.tankName),
@@ -587,12 +636,51 @@ class _TrendsScreenState extends State<TrendsScreen> {
             xl.TextCellValue(
                 dt != null ? DateFormat('HH:mm:ss').format(dt) : '—'),
             xl.TextCellValue(r.capturedByName),
+            xl.TextCellValue(dupReason),
           ]);
         }
       }
 
       // ── Sheets 2..N: one per tank ─────────────────────────────────────────
       for (final tank in tanksToExport) {
+        // Build data rows and filter/sort them first so we can check for images
+        final allReadings = await _repo.getAllReadings();
+        final readings = allReadings.where((r) {
+          if (r.tankId != tank.id) return false;
+          final dt = DateTime.tryParse(r.capturedAt)?.toLocal();
+          if (dt == null) return false;
+          return !dt.isBefore(_rangeFrom) && !dt.isAfter(_rangeTo);
+        }).toList()
+          ..sort((a, b) =>
+              DateTime.parse(a.capturedAt).compareTo(DateTime.parse(b.capturedAt)));
+
+        // Find which parameters actually have at least one image (regular or manual) in these readings
+        final paramsWithImages = <String>{};
+        for (final r in readings) {
+          for (final p in tank.inspectionProperties) {
+            final label = p['label'] as String? ?? '';
+            final id = p['id'] as String? ?? '';
+            if (label.isEmpty) continue;
+
+            final regImg = r.inspectionValues['${id}__image_url']?.toString() ?? '';
+            if (regImg.isNotEmpty) {
+              paramsWithImages.add(label);
+              continue;
+            }
+
+            final prefix = 'manual_${label}_captured_image';
+            for (final key in r.inspectionValues.keys) {
+              if (key.toString().startsWith(prefix)) {
+                final url = r.inspectionValues[key]?.toString() ?? '';
+                if (url.isNotEmpty) {
+                  paramsWithImages.add(label);
+                  break;
+                }
+              }
+            }
+          }
+        }
+
         // Build column descriptors: each param may produce 1 or 2 columns
         // depending on whether it has capture_image == true.
         // Descriptor: { 'label': String, 'id': String, 'hasImage': bool }
@@ -621,8 +709,15 @@ class _TrendsScreenState extends State<TrendsScreen> {
             // Extra column immediately after the param value column
             headerCells.add(xl.TextCellValue('${col['label']} — Photo URL'));
           }
-          
         }
+
+        // Append image columns only for parameters that actually have images in the period
+        final activeImageParams = colDescs.where((col) => paramsWithImages.contains(col['label'])).toList();
+        for (final col in activeImageParams) {
+          headerCells.add(xl.TextCellValue('${col['label']}_image'));
+        }
+        // Append Duplicate Reason column at the end
+        headerCells.add(xl.TextCellValue('Duplicate Reason'));
 
         final sheetName =
             tank.tankName.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
@@ -630,22 +725,7 @@ class _TrendsScreenState extends State<TrendsScreen> {
             sheetName.length > 31 ? sheetName.substring(0, 31) : sheetName];
         sheet.appendRow(headerCells);
 
-        // Build data rows
-        // Build data rows
-
-final allReadings = await _repo.getAllReadings();
-
-final readings = allReadings.where((r) {
-  if (r.tankId != tank.id) return false;
-
-  final dt = DateTime.tryParse(r.capturedAt);
-  if (dt == null) return false;
-
-  return !dt.isBefore(_rangeFrom) &&
-         !dt.isAfter(_rangeTo);
-}).toList();
-
-for (final r in readings) {
+        for (final r in readings) {
           final dataCells = <xl.CellValue>[
             xl.TextCellValue(tank.tankCode),
             xl.TextCellValue(tank.tankName),
@@ -659,8 +739,8 @@ for (final r in readings) {
             final id = col['id'] as String;
             final hasImage = col['hasImage'] as bool;
             debugPrint(
-  'LOOKUP => label=$label value=${r.inspectionValues[label]} keys=${r.inspectionValues.keys.toList()}',
-);
+              'LOOKUP => label=$label value=${r.inspectionValues[label]} keys=${r.inspectionValues.keys.toList()}',
+            );
             // Param value cell
             final v = r.inspectionValues[label];
             if (v is Map) {
@@ -680,6 +760,39 @@ for (final r in readings) {
             debugPrint('COLUMN => ${col['label']}');
             debugPrint('VALUES => ${r.inspectionValues}');
           }
+
+          // Append parameter image columns (regular + manual combined) only for active image parameters
+          for (final col in activeImageParams) {
+            final label = col['label'] as String;
+            final id = col['id'] as String;
+
+            // Gather regular image URL
+            final regImg = r.inspectionValues['${id}__image_url']?.toString() ?? '';
+
+            // Gather manual image URLs
+            final manualImgs = <String>[];
+            final prefix = 'manual_${label}_captured_image';
+            for (final key in r.inspectionValues.keys) {
+              if (key.toString().startsWith(prefix)) {
+                final url = r.inspectionValues[key]?.toString() ?? '';
+                if (url.isNotEmpty) {
+                  manualImgs.add(url);
+                }
+              }
+            }
+
+            final allImgs = <String>[];
+            if (regImg.isNotEmpty) allImgs.add(regImg);
+            allImgs.addAll(manualImgs);
+
+            dataCells.add(xl.TextCellValue(allImgs.join(', ')));
+          }
+
+          // Append duplicate reason at the very end
+          final dupReason = r.inspectionValues['duplicate_reason']?.toString() ??
+              r.inspectionValues['reason']?.toString() ??
+              '';
+          dataCells.add(xl.TextCellValue(dupReason));
 
           sheet.appendRow(dataCells);
         }

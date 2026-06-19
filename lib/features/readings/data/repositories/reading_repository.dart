@@ -79,8 +79,9 @@ class ReadingRepository {
     final readings = map.values
         .map((v) => ReadingModel.fromMap(Map<String, dynamic>.from(v as Map)))
         .where((r) {
-      final t = DateTime.parse(r.capturedAt);
-      return !t.isBefore(from) && !t.isAfter(to);
+      final t = DateTime.tryParse(r.capturedAt);
+      if (t == null) return false;
+      return !t.toLocal().isBefore(from.toLocal()) && !t.toLocal().isAfter(to.toLocal());
     }).toList();
 
     readings.sort((a, b) => a.capturedAt.compareTo(b.capturedAt));

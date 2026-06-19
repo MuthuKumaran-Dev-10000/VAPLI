@@ -11,6 +11,7 @@ This document provides a detailed specification of the screens, services, data m
    - [Client & Tenant Selector (`ClientSelectorPage`)](#client--tenant-selector-clientselectorpage)
    - [Application Shell & Navigation (`HomeScreen`)](#application-shell--navigation-homescreen)
    - [Asset/Tank Tree Browser (`TankBrowserScreen`)](#assettank-tree-browser-tankbrowserscreen)
+   - [Tank Input Browser (`TankInputBrowser`)](#tank-input-browser-tankinputbrowser)
    - [Inspection Parameter Config Builder (`PropertyBuilderPage`)](#inspection-parameter-config-builder-propertybuilderpage)
    - [Inspection Entry & Reading Form (`ReadingEntryScreen`)](#inspection-entry--reading-form-readingentryscreen)
    - [Visual Hotspot Verification (`ImageMarkerScreen`)](#visual-hotspot-verification-imagemarkerscreen)
@@ -98,6 +99,16 @@ This document provides a detailed specification of the screens, services, data m
   * **Actions Menu**:
     * Clicking a folder expands/collapses its child assets.
     * Clicking a leaf asset shows options: **Capture Reading** (opens reading entry), **Property Builder** (configure inspection parameters), or **Delete Asset**.
+
+### Tank Input Browser (`TankInputBrowser`)
+* **File Location**: [tank_input_browser.dart](file:///c:/Users/muthu/Freelance/vapli/lib/features/home/presentation/pages/tank_input_browser.dart)
+* **What it does**: Provides a folder-browser interface for operators to search/scan tanks and see details before taking a reading.
+* **How it works**:
+  * **Breadcrumb Navigation**: Shows folder hierarchies in Windows-style paths. Tapping path nodes drills down or navigates up.
+  * **QR / Barcode Search**: Tapping the scanner button resolves a scanned tank ID and automatically navigates the tree to select the tank leaf node.
+  * **Leaf Detail Page**: Shows tank metadata, a "Take Reading" button, and an active alerts banner if the tank has open alerts.
+  * **Active Alert Warnings**: Real-time Firebase streams check for active alerts when selecting a tank leaf. If alerts exist, triggers a default sound (`assets/sounds/alert.mp3` or system beep) and heavy haptic vibration, displaying a non-dismissible warning popup.
+  * **Skip Tank (Sequential Auto-Routing)**: In the warning popup, if the operator selects "No, Skip Tank", the app automatically routes the inspector to the next sibling tank in the folder sequence. If it is the last tank in the folder, the selection is cleared.
 
 ### Inspection Parameter Config Builder (`PropertyBuilderPage`)
 * **File Locations**: [property_builder_page.dart](file:///c:/Users/muthu/Freelance/vapli/lib/features/tanks/presentation/pages/property_builder_page.dart) & [property_builder_page_state.dart](file:///c:/Users/muthu/Freelance/vapli/lib/features/tanks/presentation/pages/property_builder_page_state.dart)
@@ -253,9 +264,10 @@ sequenceDiagram
   * Creates spreadsheet tabs named after folders (limited to 31 characters).
   * Lists out-of-bounds parameter logs, image links, and inspection duplicate reasons in a rotated row/column grid.
 * **Inspection Report PDF**:
-  * **Section 1**: Summary cover displaying assets, inspection percentages, and operational ranges.
-  * **Section 2**: Completed inspection details including dates, parameter entries, image links, and inspector details.
-  * **Section 3**: Pending asset checks displaying expected inspection frequencies and last check dates.
+  * Generated in Portrait layout (A4 format).
+  * **Page 1 (Summary Cover)**: Displays report range, compliance rates, folder structure, operating ranges, and latest captured inspections. Metric count values are formatted as blue underlined hyperlinks that navigate directly to target sections.
+  * **Asset Inspection Detailed List (Page 2 onwards)**: A unified, folder-sequenced table of all tanks (both inspected and pending). Assets are grouped by folder alphabetically, and sorted by name. Pending inspection rows are highlighted in light cyan-blue.
+  * **Active Unresolved Alerts (Final Page)**: Appends a list of open unresolved alerts at the end of the report.
 
 ---
 

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lubrication_indicator/core/services/app_settings_service.dart';
 import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
+import 'report_format_config_screen.dart';
 
 class AdminSettingsPage extends StatefulWidget {
   final Future<void> Function({
@@ -28,6 +29,11 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
   List<TankModel> _tanks = [];
   final _tankRepo = TankRepository();
 
+  bool _showInspectionValues = true;
+  bool _showCompletedAlerts = true;
+  bool _showActiveAlerts = true;
+  bool _showInspectionCompliance = true;
+
   @override
   void initState() {
     super.initState();
@@ -37,11 +43,16 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
   Future<void> _load() async {
     final timeout = await AppSettingsService.getSessionTimeout();
     final tanks = await _tankRepo.getAllTanks();
+    final dashSettings = await AppSettingsService.getDashboardDisplaySettings();
     if (!mounted) return;
     setState(() {
       _noTimeout = timeout == null;
       _minutes = timeout?.inMinutes ?? 60;
       _tanks = tanks;
+      _showInspectionValues = dashSettings['show_inspection_values'] ?? true;
+      _showCompletedAlerts = dashSettings['show_completed_alerts'] ?? true;
+      _showActiveAlerts = dashSettings['show_active_alerts'] ?? true;
+      _showInspectionCompliance = dashSettings['show_inspection_compliance'] ?? true;
       _loading = false;
     });
   }
@@ -96,6 +107,12 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
       noTimeout: _noTimeout,
       minutes: _minutes,
     );
+    await AppSettingsService.setDashboardDisplaySettings(
+      showInspectionValues: _showInspectionValues,
+      showCompletedAlerts: _showCompletedAlerts,
+      showActiveAlerts: _showActiveAlerts,
+      showInspectionCompliance: _showInspectionCompliance,
+    );
     await widget.onSettingsSaved?.call(
       noTimeout: _noTimeout,
       minutes: _minutes,
@@ -145,6 +162,64 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
                 border: OutlineInputBorder(),
               ),
             ),
+          const SizedBox(height: 16),
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text(
+            'Dashboard Display Settings',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          SwitchListTile(
+            title: const Text('Show Inspection Averages & Last Values'),
+            subtitle: const Text('Populates AVG strip and tank stats cards'),
+            value: _showInspectionValues,
+            onChanged: widget.canEdit
+                ? (v) => setState(() => _showInspectionValues = v)
+                : null,
+          ),
+          SwitchListTile(
+            title: const Text('Display Alerts (Not Completed)'),
+            subtitle: const Text('Populates Active Alerts section'),
+            value: _showActiveAlerts,
+            onChanged: widget.canEdit
+                ? (v) => setState(() => _showActiveAlerts = v)
+                : null,
+          ),
+          SwitchListTile(
+            title: const Text('Display Alerts (Completed)'),
+            subtitle: const Text('Populates Completed Tasks section'),
+            value: _showCompletedAlerts,
+            onChanged: widget.canEdit
+                ? (v) => setState(() => _showCompletedAlerts = v)
+                : null,
+          ),
+          SwitchListTile(
+            title: const Text('Display Inspection Compliance'),
+            subtitle: const Text('Populates compliance checklist'),
+            value: _showInspectionCompliance,
+            onChanged: widget.canEdit
+                ? (v) => setState(() => _showInspectionCompliance = v)
+                : null,
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ReportFormatConfigScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.edit_document),
+            label: const Text('Modify Report Format'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFCB8C3E),
+              side: const BorderSide(color: Color(0xFFCB8C3E)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+          ),
           const SizedBox(height: 16),
           FilledButton.icon(
             onPressed: (widget.canEdit && !_saving) ? _save : null,

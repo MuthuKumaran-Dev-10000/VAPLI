@@ -22,11 +22,16 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:intl/intl.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';
 import 'package:lubrication_indicator/features/tanks/data/models/tank_node_model.dart';
@@ -35,6 +40,12 @@ import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repo
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_tree_repository.dart';
 import 'package:lubrication_indicator/features/readings/presentation/pages/reading_entry_screen.dart';
 import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
+import 'package:lubrication_indicator/features/dashboard/data/repositories/dashboard_stats_repository.dart';
+import 'package:lubrication_indicator/features/dashboard/data/models/dashboard_stats_model.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:lubrication_indicator/core/services/database_mode_service.dart';
+import 'package:lubrication_indicator/features/alerts/data/models/alert_model.dart';
+import 'home_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette — matches the rest of the app (obsidian industrial)
@@ -53,6 +64,33 @@ const _kSubL = Color(0xFF6B7280);
 const _kSuccess = Color(0xFF22C55E);
 const _kWarn = Color(0xFFF59E0B);
 const _kDanger = Color(0xFFEF4444);
+const _kInfo = Color(0xFF60A5FA);
+
+Color _severityColor(String? s) {
+  switch (s?.toLowerCase()) {
+    case 'critical':
+      return _kDanger;
+    case 'warning':
+      return _kWarn;
+    case 'info':
+      return _kInfo;
+    default:
+      return _kWarn;
+  }
+}
+
+IconData _severityIcon(String? s) {
+  switch (s?.toLowerCase()) {
+    case 'critical':
+      return Icons.dangerous_rounded;
+    case 'warning':
+      return Icons.warning_amber_rounded;
+    case 'info':
+      return Icons.info_outline_rounded;
+    default:
+      return Icons.warning_amber_rounded;
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TankInputBrowser
@@ -98,6 +136,13 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
   TankNode? _selectedLeaf = null;
   TankModel? _selectedTank = null;
 
+  // ── Active alerts for selected tank ──────────────────────────────────────
+  StreamSubscription? _activeAlertsSub;
+  List<AlertModel> _activeAlerts = [];
+  Map<String, String> _activeAlertImages = {};
+  bool _hasShownInitialAlertPopup = false;
+  final AudioPlayer _audioPlayer = AudioPlayer();
+
   // ── All nodes cache (for deep search + QR path resolution) ────────────────
   List<TankNode> _allNodes = [];
   bool _allNodesFetched = false;
@@ -137,6 +182,8 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
 
   @override
   void dispose() {
+    _activeAlertsSub?.cancel();
+    _audioPlayer.dispose();
     _sub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
@@ -226,6 +273,7 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
 
   void _navigateToBreadcrumb(int stackIdx) {
     if (stackIdx >= _pathStack.length - 1) return;
+    _activeAlertsSub?.cancel();
     setState(() {
       _pathStack.removeRange(stackIdx + 1, _pathStack.length);
       _nodes = [];
@@ -233,6 +281,9 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
       _searchCtrl.clear();
       _selectedLeaf = null;
       _selectedTank = null;
+      _activeAlerts = [];
+      _activeAlertImages = {};
+      _hasShownInitialAlertPopup = false;
     });
     _subscribeToCurrentFolder();
   }
@@ -252,15 +303,427 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
       setState(() {
         _selectedLeaf = leaf;
         _selectedTank = tank;
+        _activeAlerts = [];
+        _activeAlertImages = {};
+        _hasShownInitialAlertPopup = false;
       });
+      if (leaf.tankId != null) {
+        _subscribeToActiveAlerts(leaf.tankId!);
+      }
     }
   }
 
   void _clearLeafSelection() {
+    _activeAlertsSub?.cancel();
     setState(() {
       _selectedLeaf = null;
       _selectedTank = null;
+      _activeAlerts = [];
+      _activeAlertImages = {};
+      _hasShownInitialAlertPopup = false;
     });
+  }
+
+  DatabaseReference _ref(String path) => DatabaseModeService.ref(path);
+
+  void _subscribeToActiveAlerts(String tankId) {
+    _activeAlertsSub?.cancel();
+    _activeAlertsSub = _ref('alerts')
+        .orderByChild('tank_id')
+        .equalTo(tankId)
+        .onValue
+        .listen((event) {
+      if (!mounted) return;
+      if (!event.snapshot.exists || event.snapshot.value == null) {
+        setState(() {
+          _activeAlerts = [];
+          _activeAlertImages = {};
+        });
+        return;
+      }
+      final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
+      final list = <AlertModel>[];
+      final images = <String, String>{};
+
+      for (final e in raw.entries) {
+        final alertId = e.key.toString();
+        final alertMap = Map<dynamic, dynamic>.from(e.value as Map);
+        final alert = AlertModel.fromMap(alertId, alertMap);
+
+        if (!alert.resolved && alert.status.toLowerCase() != 'completed') {
+          list.add(alert);
+          final imgUrl = alertMap['image_url']?.toString() ?? '';
+          if (imgUrl.isNotEmpty) {
+            images[alertId] = imgUrl;
+          }
+        }
+      }
+
+      list.sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+
+      setState(() {
+        _activeAlerts = list;
+        _activeAlertImages = images;
+      });
+
+      if (list.isNotEmpty && !_hasShownInitialAlertPopup) {
+        _hasShownInitialAlertPopup = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _playWarningSoundAndVibration();
+          _showActiveAlertsWarningDialog(list);
+        });
+      }
+    });
+  }
+
+  Future<void> _playWarningSoundAndVibration() async {
+    try {
+      await _audioPlayer.stop();
+      try {
+        await _audioPlayer.play(AssetSource('sounds/alert.mp3'));
+      } catch (_) {
+        await SystemSound.play(SystemSoundType.alert);
+      }
+    } catch (_) {
+      try {
+        await SystemSound.play(SystemSoundType.alert);
+      } catch (_) {}
+    }
+
+    try {
+      await HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 150));
+      await HapticFeedback.heavyImpact();
+      await Future.delayed(const Duration(milliseconds: 150));
+      await HapticFeedback.heavyImpact();
+    } catch (_) {
+      try {
+        await HapticFeedback.vibrate();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _showActiveAlertsWarningDialog(List<AlertModel> alerts) async {
+    if (alerts.isEmpty || !mounted) return;
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: _kSurface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _kBorder, width: 1.5),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: _kDanger, size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Active Asset Alerts!',
+                  style: GoogleFonts.spaceGrotesk(
+                    color: _kText,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: math.min(MediaQuery.of(context).size.width * 0.9, 450.0),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'This tank has ${alerts.length} active alert${alerts.length > 1 ? "s" : ""}. Please review the details below:',
+                    style: GoogleFonts.dmSans(
+                      color: _kSub,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ...alerts.map((a) {
+                    final isCritical = a.constraintSeverity.toLowerCase() == 'critical';
+                    final isWarning = a.constraintSeverity.toLowerCase() == 'warning';
+                    final sevColor = isCritical ? _kDanger : (isWarning ? _kWarn : _kInfo);
+                    final timeStr = DateFormat('dd MMM yyyy, HH:mm').format(
+                      DateTime.tryParse(a.capturedAt) ?? DateTime.now(),
+                    );
+                    final alertImgUrl = _activeAlertImages[a.id];
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: _kCard,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: sevColor.withOpacity(0.35)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: sevColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: sevColor.withOpacity(0.35)),
+                                ),
+                                child: Text(
+                                  a.constraintSeverity.toUpperCase(),
+                                  style: GoogleFonts.spaceGrotesk(
+                                    color: sevColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                timeStr,
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: _kSub,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            a.alertTitle,
+                            style: GoogleFonts.dmSans(
+                              color: _kText,
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            a.message,
+                            style: GoogleFonts.dmSans(
+                              color: _kSub,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          const Divider(color: _kBorder, height: 1),
+                          const SizedBox(height: 10),
+                          _popupDetailRow('Tank Name', '${a.tankName} (${a.tankCode})'),
+                          _popupDetailRow('Captured By', a.capturedByName),
+
+                          // If there's an image, show thumbnail
+                          if (alertImgUrl != null && alertImgUrl.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Image Captured:',
+                              style: GoogleFonts.dmSans(
+                                color: _kSub,
+                                fontSize: 11,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            GestureDetector(
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => Scaffold(
+                                      backgroundColor: Colors.black,
+                                      appBar: AppBar(
+                                        backgroundColor: Colors.black,
+                                        iconTheme: const IconThemeData(color: Colors.white),
+                                        title: Text(
+                                          a.alertTitle,
+                                          style: GoogleFonts.dmSans(color: Colors.white),
+                                        ),
+                                      ),
+                                      body: Center(
+                                        child: InteractiveViewer(
+                                          minScale: 0.5,
+                                          maxScale: 4.0,
+                                          child: CachedNetworkImage(
+                                            imageUrl: alertImgUrl,
+                                            fit: BoxFit.contain,
+                                            placeholder: (_, __) => const Center(
+                                              child: CircularProgressIndicator(color: Colors.white),
+                                            ),
+                                            errorWidget: (_, __, ___) => const Icon(
+                                              Icons.broken_image_outlined,
+                                              color: Colors.white54,
+                                              size: 40,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: Container(
+                                width: 72,
+                                height: 72,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: _kBorderH),
+                                ),
+                                clipBehavior: Clip.antiAlias,
+                                child: CachedNetworkImage(
+                                  imageUrl: alertImgUrl,
+                                  fit: BoxFit.cover,
+                                  placeholder: (_, __) => Container(
+                                    color: _kSurface,
+                                    child: const Center(
+                                      child: SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: _kCopper,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  errorWidget: (_, __, ___) => Container(
+                                    color: _kSurface,
+                                    child: const Icon(
+                                      Icons.broken_image_outlined,
+                                      color: _kSub,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Do you want to continue recording reading for this tank?',
+                    style: GoogleFonts.dmSans(
+                      color: _kText,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      backgroundColor: _kBorder,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop(false); // NO
+                    },
+                    child: Text(
+                      'No, Skip Tank',
+                      style: GoogleFonts.dmSans(
+                        color: _kText,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      backgroundColor: _kCopper,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      elevation: 0,
+                    ),
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop(true); // YES
+                    },
+                    child: Text(
+                      'Yes, Continue',
+                      style: GoogleFonts.dmSans(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+
+    if (proceed == false) {
+      _navigateToNextTankOrClear();
+    }
+  }
+
+  Widget _popupDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(
+              label,
+              style: GoogleFonts.dmSans(
+                color: _kSub,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: GoogleFonts.dmSans(
+                color: _kText,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _navigateToNextTankOrClear() {
+    if (_selectedLeaf == null) return;
+    final siblingLeafs = _nodes.where((n) => n.isLeaf && n.tankId != null).toList();
+    final currentIndex = siblingLeafs.indexWhere((n) => n.tankId == _selectedLeaf!.tankId);
+
+    if (currentIndex >= 0 && currentIndex < siblingLeafs.length - 1) {
+      final nextLeaf = siblingLeafs[currentIndex + 1];
+      _selectLeaf(nextLeaf);
+    } else {
+      _clearLeafSelection(); // Last tank: go back to folder list
+    }
   }
 
   // ── QR Scan ────────────────────────────────────────────────────────────────
@@ -566,18 +1029,46 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                           onBack: _clearLeafSelection,
                           siblingTanks: siblingTanks.isNotEmpty ? siblingTanks : null,
                           currentTankIndex: currentTankIndex >= 0 ? currentTankIndex : null,
+                          activeAlerts: _activeAlerts,
                           onTakeReading: () async {
                             final now = DateTime.now();
                             final from = now.subtract(const Duration(minutes: 30));
                             String duplicateReason = '';
+                            bool isDuplicate = false;
                             
                             try {
-                              final existing = await ReadingRepository().getReadingsInRange(
-                                tankId: _selectedTank!.id,
-                                from: from,
-                                to: now,
-                              );
-                              if (existing.isNotEmpty && context.mounted) {
+                              final stats = await DashboardStatsRepository().getStats(_selectedTank!.id);
+                              if (stats.lastCapturedAt != null) {
+                                final lastTime = DateTime.tryParse(stats.lastCapturedAt!);
+                                if (lastTime != null) {
+                                  final diff = now.difference(lastTime.toLocal()).inMinutes.abs();
+                                  debugPrint('[DuplicateCheck Stats] lastCapturedAt: ${stats.lastCapturedAt}, diffMinutes: $diff');
+                                  if (diff < 30) {
+                                    isDuplicate = true;
+                                  }
+                                }
+                              }
+                            } catch (e) {
+                              debugPrint('[DuplicateCheck Stats] Error: $e');
+                            }
+
+                            if (!isDuplicate) {
+                              try {
+                                final existing = await ReadingRepository().getReadingsInRange(
+                                  tankId: _selectedTank!.id,
+                                  from: from,
+                                  to: now,
+                                );
+                                if (existing.isNotEmpty) {
+                                  isDuplicate = true;
+                                }
+                              } catch (e) {
+                                debugPrint('[DuplicateCheck Readings] Error: $e');
+                              }
+                            }
+
+                            try {
+                              if (isDuplicate && context.mounted) {
                                 final proceed = await showDialog<bool>(
                                   context: context,
                                   barrierDismissible: false,
@@ -628,7 +1119,8 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                                 );
 
                                 if (proceed != true) {
-                                  return; // Comeback to the LeafDetail page
+                                  _clearLeafSelection(); // 🔖 Navigate back to folder list on cancel
+                                  return;
                                 }
 
                                 final reason = await showDialog<String>(
@@ -723,7 +1215,8 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                                 );
 
                                 if (reason == null || reason.isEmpty) {
-                                  return; // Comeback to the LeafDetail page
+                                  _clearLeafSelection(); // 🔖 Navigate back to folder list on cancel
+                                  return;
                                 }
                                 duplicateReason = reason;
                               }
@@ -754,6 +1247,9 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
                               _selectLeaf(targetNode);
                             } else if (result != null && result['action'] == 'clear_selection') {
                               _clearLeafSelection();
+                            } else if (result != null && result['action'] == 'go_to_dashboard') {
+                              _clearLeafSelection();
+                              SwitchTabNotification(2).dispatch(context);
                             }
                           },
                         );
@@ -1134,6 +1630,7 @@ class _LeafDetail extends StatelessWidget {
   final List<TankModel>? siblingTanks; // 🔖 Added for Reading Capture Flow Refactor
   final int? currentTankIndex; // 🔖 Added for Reading Capture Flow Refactor
   final VoidCallback onTakeReading; // 🔖 Added for Reading Capture Flow Refactor
+  final List<AlertModel> activeAlerts;
 
   const _LeafDetail({
     required this.leaf,
@@ -1144,6 +1641,7 @@ class _LeafDetail extends StatelessWidget {
     this.siblingTanks, // 🔖 Added for Reading Capture Flow Refactor
     this.currentTankIndex, // 🔖 Added for Reading Capture Flow Refactor
     required this.onTakeReading, // 🔖 Added for Reading Capture Flow Refactor
+    required this.activeAlerts,
   });
 
   String get _qrData {
@@ -1221,6 +1719,124 @@ class _LeafDetail extends StatelessWidget {
             ]),
           ),
           const SizedBox(height: 16),
+
+          // ── Active alerts banner (rendered dynamically) ──────────────────
+          if (activeAlerts.isNotEmpty) ...[
+            (() {
+              // Determine highest severity
+              String highestSeverity = 'info';
+              for (final alert in activeAlerts) {
+                final sev = alert.constraintSeverity.toLowerCase();
+                if (sev == 'critical') {
+                  highestSeverity = 'critical';
+                  break;
+                } else if (sev == 'warning') {
+                  highestSeverity = 'warning';
+                }
+              }
+              final sevColor = _severityColor(highestSeverity);
+              final sevIcon = _severityIcon(highestSeverity);
+
+              return Container(
+                decoration: BoxDecoration(
+                  color: _kCard,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: sevColor.withOpacity(0.4)),
+                  boxShadow: [
+                    BoxShadow(
+                      color: sevColor.withOpacity(0.06),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
+                    )
+                  ],
+                ),
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(sevIcon, color: sevColor, size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          'ACTIVE ALERTS FOR THIS ASSET',
+                          style: GoogleFonts.dmSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: sevColor,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ...activeAlerts.map((alert) {
+                      final timeStr = DateFormat('dd MMM yyyy, HH:mm').format(
+                        DateTime.tryParse(alert.capturedAt) ?? DateTime.now(),
+                      );
+                      final individualColor = _severityColor(alert.constraintSeverity);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              margin: const EdgeInsets.only(top: 4),
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: individualColor,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          alert.alertTitle,
+                                          style: GoogleFonts.dmSans(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: _kText,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        timeStr,
+                                        style: GoogleFonts.dmSans(
+                                          fontSize: 11,
+                                          color: _kSub,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    alert.message,
+                                    style: GoogleFonts.dmSans(
+                                      fontSize: 12,
+                                      color: _kSub,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ],
+                ),
+              );
+            }()),
+            const SizedBox(height: 16),
+          ],
 
           // ── Tank info card ────────────────────────────────────────────
           Container(

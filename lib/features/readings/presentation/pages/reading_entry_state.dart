@@ -57,6 +57,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Active alerts for this tank ──────────────────────────────────────────
   List<AlertModel> _activeAlerts = []; // 🔖 Added for Alert Lifecycle Bug Fix
+  Map<String, String> _activeAlertImages = {}; // 🔖 Alert image URL mapping from raw DB
+  bool _hasShownInitialAlertPopup = false; // 🔖 Track if initial warning popup was shown
   StreamSubscription? _activeAlertsSub; // 🔖 Added for Alert Lifecycle Bug Fix
 
   // ── Deep copy of inspection properties ────────────────────────────────
@@ -175,22 +177,37 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       if (!event.snapshot.exists || event.snapshot.value == null) {
         setState(() {
           _activeAlerts = [];
+          _activeAlertImages = {};
         });
         return;
       }
       final raw = Map<dynamic, dynamic>.from(event.snapshot.value as Map);
-      final list = raw.entries
-          .map((e) => AlertModel.fromMap(
-                e.key.toString(),
-                Map<dynamic, dynamic>.from(e.value as Map),
-              ))
-          // Filter out completed and acknowledged alerts
-          .where((a) => !a.resolved && a.status.toLowerCase() != 'completed')
-          .toList()
-        ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+      final list = <AlertModel>[];
+      final images = <String, String>{};
+
+      for (final e in raw.entries) {
+        final alertId = e.key.toString();
+        final alertMap = Map<dynamic, dynamic>.from(e.value as Map);
+        final alert = AlertModel.fromMap(alertId, alertMap);
+
+        if (!alert.resolved && alert.status.toLowerCase() != 'completed') {
+          list.add(alert);
+          final imgUrl = alertMap['image_url']?.toString() ?? '';
+          if (imgUrl.isNotEmpty) {
+            images[alertId] = imgUrl;
+          }
+        }
+      }
+
+      list.sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+
       setState(() {
         _activeAlerts = list;
+        _activeAlertImages = images;
       });
+
+      // 🔖 Popup warnings disabled here; moved to Leaf Details panel in tank_input_browser.dart
+      _hasShownInitialAlertPopup = true;
     });
   }
 
@@ -202,6 +219,411 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     _dualRight.values.forEach((c) => c.dispose());
     _audioPlayer.dispose();
     super.dispose();
+  }
+
+  // ── Active Alert Warning Dialog ───────────────────────────────────────
+
+  Future<void> _showActiveAlertsWarningDialog(List<AlertModel> alerts) async {
+    if (alerts.isEmpty || !mounted) return;
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: _kSurface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: _kBorder, width: 1.5),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: _kDanger, size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Active Asset Alerts!',
+                  style: GoogleFonts.spaceGrotesk(
+                    color: _kText,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: math.min(MediaQuery.of(context).size.width * 0.9, 450.0),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'This tank has ${alerts.length} active alert${alerts.length > 1 ? "s" : ""}. Please review the details below:',
+                    style: GoogleFonts.dmSans(
+                      color: _kSub,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ...alerts.map((a) {
+                    final isCritical = a.constraintSeverity.toLowerCase() == 'critical';
+                    final isWarning = a.constraintSeverity.toLowerCase() == 'warning';
+                    final sevColor = isCritical ? _kDanger : (isWarning ? _kWarn : _kInfo);
+                    final timeStr = DateFormat('dd MMM yyyy, HH:mm').format(
+                      DateTime.tryParse(a.capturedAt) ?? DateTime.now(),
+                    );
+                    final alertImgUrl = _activeAlertImages[a.id];
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: _kCard,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: sevColor.withOpacity(0.35)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: sevColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: sevColor.withOpacity(0.35)),
+                                ),
+                                child: Text(
+                                  a.constraintSeverity.toUpperCase(),
+                                  style: GoogleFonts.spaceGrotesk(
+                                    color: sevColor,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                timeStr,
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: _kSub,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Text(
+                            a.alertTitle,
+                            style: GoogleFonts.dmSans(
+                              color: _kText,
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            a.message,
+                            style: GoogleFonts.dmSans(
+                              color: _kSub,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          const Divider(color: _kBorder, height: 1),
+                          const SizedBox(height: 10),
+                          _popupDetailRow('Tank Name', '${a.tankName} (${a.tankCode})'),
+                          _popupDetailRow('Captured By', a.capturedByName),
+
+                          // If there's an image, show thumbnail
+                          if (alertImgUrl != null && alertImgUrl.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                              Text(
+                                'Image Captured:',
+                                style: GoogleFonts.dmSans(
+                                  color: _kSub,
+                                  fontSize: 11,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              GestureDetector(
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => Scaffold(
+                                        backgroundColor: Colors.black,
+                                        appBar: AppBar(
+                                          backgroundColor: Colors.black,
+                                          iconTheme: const IconThemeData(color: Colors.white),
+                                          title: Text(
+                                            a.alertTitle,
+                                            style: GoogleFonts.dmSans(color: Colors.white),
+                                          ),
+                                        ),
+                                        body: Center(
+                                          child: InteractiveViewer(
+                                            minScale: 0.5,
+                                            maxScale: 4.0,
+                                            child: CachedNetworkImage(
+                                              imageUrl: alertImgUrl,
+                                              fit: BoxFit.contain,
+                                              placeholder: (_, __) => const Center(
+                                                child: CircularProgressIndicator(color: Colors.white),
+                                              ),
+                                              errorWidget: (_, __, ___) => const Icon(
+                                                Icons.broken_image_outlined,
+                                                color: Colors.white54,
+                                                size: 40,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                                child: Container(
+                                  width: 72,
+                                  height: 72,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: _kBorderH),
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: CachedNetworkImage(
+                                    imageUrl: alertImgUrl,
+                                    fit: BoxFit.cover,
+                                    placeholder: (_, __) => Container(
+                                      color: _kSurface,
+                                      child: const Center(
+                                        child: SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            color: _kCopper,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    errorWidget: (_, __, ___) => Container(
+                                      color: _kSurface,
+                                      child: const Icon(
+                                        Icons.broken_image_outlined,
+                                        color: _kSub,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Do you want to continue recording reading for this tank?',
+                    style: GoogleFonts.dmSans(
+                      color: _kText,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      backgroundColor: _kBorder,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop(false); // NO
+                    },
+                    child: Text(
+                      'No, Go to Dashboard',
+                      style: GoogleFonts.dmSans(
+                        color: _kText,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      backgroundColor: _kCopper,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      elevation: 0,
+                    ),
+                    onPressed: () {
+                      Navigator.of(dialogContext).pop(true); // YES
+                    },
+                    child: Text(
+                      'Yes, Continue',
+                      style: GoogleFonts.dmSans(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+
+    if (proceed == false) {
+      if (mounted) {
+        Navigator.pop(context, {
+          'action': 'go_to_dashboard',
+        });
+      }
+    }
+  }
+
+  Widget _popupDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(
+              label,
+              style: GoogleFonts.dmSans(
+                color: _kSub,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              value,
+              style: GoogleFonts.dmSans(
+                color: _kText,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showViolationBottomSheet(_Violation violation) {
+    final color = _severityColor(violation.severity);
+    final icon = _severityIcon(violation.severity);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _kBg,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, color: color, size: 28),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        violation.alertTitle,
+                        style: GoogleFonts.spaceGrotesk(
+                          color: _kText,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: color.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        violation.severity.toUpperCase(),
+                        style: GoogleFonts.spaceGrotesk(
+                          color: color,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 10,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  violation.message,
+                  style: GoogleFonts.dmSans(
+                    color: _kText.withOpacity(0.9),
+                    fontSize: 14,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: color,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(sheetContext),
+                    child: Text(
+                      'Acknowledge',
+                      style: GoogleFonts.spaceGrotesk(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   // ── Sound + Vibration (fixed) ──────────────────────────────────────────
@@ -844,8 +1266,12 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final rawList = p['constraints'];
     if (rawList is! List) return fired;
 
+    if (value == null || value.toString().trim() == 'null' || value.toString().trim().isEmpty) {
+      return fired;
+    }
+
     final actual = value.toString().trim();
-    if (actual.isEmpty) return fired;
+
 
     for (final c in rawList) {
       if (c is! Map) continue;
@@ -969,9 +1395,13 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       await _playViolationSound();
     }
 
+    // Show Bottom Sheet violation popup from below based on alert severity
+    _showViolationBottomSheet(violation);
+
     await _writeLiveAlertWithPhoto(
         paramId: paramId, constraintId: violation.constraintId);
   }
+
 
   Future<void> _updateLiveAlert({
     required String paramId,
@@ -1083,17 +1513,33 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       final type = p['type'] as String? ?? 'text';
       if (type == 'group') continue;
       final label = p['label'] as String? ?? id;
+      final isReq = p['required'] == true;
 
       switch (type) {
         case 'number':
-          out[label] = double.tryParse(_textCtrl[id]?.text.trim() ?? '') ?? 0.0;
+          final rawText = _textCtrl[id]?.text.trim() ?? '';
+          if (rawText.isEmpty) {
+            out[label] = isReq ? 0.0 : null;
+          } else {
+            out[label] = double.tryParse(rawText) ?? 0.0;
+          }
           break;
         case 'text':
         case 'multiline':
-          out[label] = _textCtrl[id]?.text.trim() ?? '';
+          final rawText = _textCtrl[id]?.text.trim() ?? '';
+          if (rawText.isEmpty) {
+            out[label] = isReq ? '' : null;
+          } else {
+            out[label] = rawText;
+          }
           break;
         case 'dropdown':
-          out[label] = _dropdownVal[id] ?? '';
+          final rawVal = _dropdownVal[id];
+          if (rawVal == null || rawVal.trim().isEmpty) {
+            out[label] = isReq ? '' : null;
+          } else {
+            out[label] = rawVal;
+          }
           break;
         case 'slider':
           out[label] = _sliderVal[id] ?? ((p['min'] ?? 0) as num).toDouble();
@@ -1101,15 +1547,20 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         case 'dual_text':
           final leftRaw = _dualLeft[id]?.text.trim() ?? '';
           final rightRaw = _dualRight[id]?.text.trim() ?? '';
-          out[label] = {
-            'left': double.tryParse(leftRaw) ?? leftRaw,
-            'right': double.tryParse(rightRaw) ?? rightRaw,
-          };
+          if (leftRaw.isEmpty && rightRaw.isEmpty) {
+            out[label] = isReq ? {'left': '', 'right': ''} : null;
+          } else {
+            out[label] = {
+              'left': double.tryParse(leftRaw) ?? leftRaw,
+              'right': double.tryParse(rightRaw) ?? rightRaw,
+            };
+          }
           break;
       }
     }
     return out;
   }
+
 
   // ── Save ───────────────────────────────────────────────────────────────
 
@@ -1447,96 +1898,119 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
             if (_activeAlerts.isNotEmpty) ...[
               const SizedBox(height: 16),
-              Container(
-                decoration: BoxDecoration(
-                  color: _kCard,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _kBorder),
-                ),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.warning_amber_rounded, color: _kWarn, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'ACTIVE ALERTS FOR THIS ASSET',
-                          style: GoogleFonts.dmSans(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: _kWarn,
-                            letterSpacing: 1.1,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    ..._activeAlerts.map((alert) {
-                      final timeStr = DateFormat('dd MMM yyyy, HH:mm').format(
-                        DateTime.tryParse(alert.capturedAt) ?? DateTime.now(),
-                      );
-                      final sevColor = _severityColor(alert.constraintSeverity);
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              margin: const EdgeInsets.only(top: 2),
-                              width: 8,
-                              height: 8,
-                              decoration: BoxDecoration(
-                                color: sevColor,
-                                shape: BoxShape.circle,
-                              ),
+              (() {
+                // Determine highest severity
+                String highestSeverity = 'info';
+                for (final alert in _activeAlerts) {
+                  final sev = alert.constraintSeverity.toLowerCase();
+                  if (sev == 'critical') {
+                    highestSeverity = 'critical';
+                    break;
+                  } else if (sev == 'warning') {
+                    highestSeverity = 'warning';
+                  }
+                }
+                final sevColor = _severityColor(highestSeverity);
+                final sevIcon = _severityIcon(highestSeverity);
+
+                return Container(
+                  decoration: BoxDecoration(
+                    color: _kCard,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: sevColor.withOpacity(0.4)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: sevColor.withOpacity(0.06),
+                        blurRadius: 6,
+                        offset: const Offset(0, 2),
+                      )
+                    ],
+                  ),
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(sevIcon, color: sevColor, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'ACTIVE ALERTS FOR THIS ASSET',
+                            style: GoogleFonts.dmSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: sevColor,
+                              letterSpacing: 1.1,
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          alert.alertTitle,
-                                          style: GoogleFonts.dmSans(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.w600,
-                                            color: _kText,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      ..._activeAlerts.map((alert) {
+                        final timeStr = DateFormat('dd MMM yyyy, HH:mm').format(
+                          DateTime.tryParse(alert.capturedAt) ?? DateTime.now(),
+                        );
+                        final individualColor = _severityColor(alert.constraintSeverity);
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                margin: const EdgeInsets.only(top: 4),
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: individualColor,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            alert.alertTitle,
+                                            style: GoogleFonts.dmSans(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: _kText,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      Text(
-                                        timeStr,
-                                        style: GoogleFonts.dmSans(
-                                          fontSize: 11,
-                                          color: _kSub,
+                                        Text(
+                                          timeStr,
+                                          style: GoogleFonts.dmSans(
+                                            fontSize: 11,
+                                            color: _kSub,
+                                          ),
                                         ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    alert.message,
-                                    style: GoogleFonts.dmSans(
-                                      fontSize: 12,
-                                      color: _kSub,
+                                      ],
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      alert.message,
+                                      style: GoogleFonts.dmSans(
+                                        fontSize: 12,
+                                        color: _kSub,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }).toList(),
-                  ],
-                ),
-              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                  ),
+                );
+              }()),
             ], // 🔖 Added for Alert Lifecycle Bug Fix
 
             if (_props.isNotEmpty) ...[

@@ -29,6 +29,7 @@ class DatabaseModeService {
     'dashboard_stats',
     'reading_feedback',
     'sync_logs',
+    'settings',
   };
 
   static Future<void> init() async {

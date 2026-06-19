@@ -19,6 +19,7 @@ import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repo
 import 'package:lubrication_indicator/features/auth/presentation/pages/login_screen.dart';
 import 'package:lubrication_indicator/features/admin/presentation/pages/admin_screen_not_used.dart';
 import 'package:lubrication_indicator/features/readings/presentation/pages/reading_entry_screen.dart';
+import 'package:lubrication_indicator/features/dashboard/data/repositories/dashboard_stats_repository.dart';
 import 'package:lubrication_indicator/features/reports/presentation/pages/trends_screen.dart';
 import 'package:lubrication_indicator/features/home/presentation/pages/qr_scan_screen.dart';
 import 'dart:convert';
@@ -500,37 +501,45 @@ class _HomeScreenState extends State<HomeScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tabCtrl,
-        children: [
-          // _InputTab(
-          //   tanks: _tanks,
-          //   selectedTank: _selectedTank,
-          //   loadingTanks: _loadingTanks,
-          //   currentUser: _currentUser,
-          //   onTankSelected: (t) {
-          //     setState(() {
-          //       _selectedTank = t;
-          //     });
-          //   },
-          //   onScanQr: _scanQr,
-          // ),
-          TankInputBrowser(
-            key: ValueKey('input-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
-            currentUser: _currentUser,
-            rootTitleOverride: _activeClient?.name ?? 'Client',
-            // clientNameOverride: _activeClient?.name,
-            rootFolderIdOverride: _activeClient?.rootFolderId,
-            onRootTap: _openClientPicker,
-          ),
-          TrendsScreen(
-            key: ValueKey('trends-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
-            tanks: _tanks,
-          ),
-          DashboardTab(
-            key: ValueKey('dash-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
-          ),
-        ],
+      body: NotificationListener<SwitchTabNotification>(
+        onNotification: (notification) {
+          if (mounted) {
+            _tabCtrl.animateTo(notification.index);
+          }
+          return true; // Stop bubbling
+        },
+        child: TabBarView(
+          controller: _tabCtrl,
+          children: [
+            // _InputTab(
+            //   tanks: _tanks,
+            //   selectedTank: _selectedTank,
+            //   loadingTanks: _loadingTanks,
+            //   currentUser: _currentUser,
+            //   onTankSelected: (t) {
+            //     setState(() {
+            //       _selectedTank = t;
+            //     });
+            //   },
+            //   onScanQr: _scanQr,
+            // ),
+            TankInputBrowser(
+              key: ValueKey('input-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
+              currentUser: _currentUser,
+              rootTitleOverride: _activeClient?.name ?? 'Client',
+              // clientNameOverride: _activeClient?.name,
+              rootFolderIdOverride: _activeClient?.rootFolderId,
+              onRootTap: _openClientPicker,
+            ),
+            TrendsScreen(
+              key: ValueKey('trends-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
+              tanks: _tanks,
+            ),
+            DashboardTab(
+              key: ValueKey('dash-$_tabRefreshTick-${_activeClient?.id ?? 'none'}'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -661,13 +670,205 @@ class _InputTab extends StatelessWidget {
                   enabled: selectedTank != null,
                   onPressed: selectedTank == null
                       ? null
-                      : () {
+                      : () async {
+                          final now = DateTime.now();
+                          final from = now.subtract(const Duration(minutes: 30));
+                          String duplicateReason = '';
+                          bool isDuplicate = false;
+                          
+                          try {
+                            final stats = await DashboardStatsRepository().getStats(selectedTank!.id);
+                            if (stats.lastCapturedAt != null) {
+                              final lastTime = DateTime.tryParse(stats.lastCapturedAt!);
+                              if (lastTime != null) {
+                                final diff = now.difference(lastTime.toLocal()).inMinutes.abs();
+                                debugPrint('[DuplicateCheck Stats home] lastCapturedAt: ${stats.lastCapturedAt}, diffMinutes: $diff');
+                                if (diff < 30) {
+                                  isDuplicate = true;
+                                }
+                              }
+                            }
+                          } catch (e) {
+                            debugPrint('[DuplicateCheck Stats home] Error: $e');
+                          }
+
+                          if (!isDuplicate) {
+                            try {
+                              final existing = await ReadingRepository().getReadingsInRange(
+                                tankId: selectedTank!.id,
+                                from: from,
+                                to: now,
+                              );
+                              if (existing.isNotEmpty) {
+                                isDuplicate = true;
+                              }
+                            } catch (e) {
+                              debugPrint('[DuplicateCheck Readings home] Error: $e');
+                            }
+                          }
+
+                          if (isDuplicate && context.mounted) {
+                            final proceed = await showDialog<bool>(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (context) => AlertDialog(
+                                backgroundColor: AppColors.surface,
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                title: Text(
+                                  'Duplicate Reading Alert',
+                                  style: GoogleFonts.inter(
+                                    color: AppColors.textPrimary,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                                content: Text(
+                                  'Do you really want to take a reading for ${selectedTank!.tankName}? A recent reading already exists.',
+                                  style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 14),
+                                ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.of(context).pop(false),
+                                    child: Text(
+                                      'NO',
+                                      style: GoogleFonts.inter(
+                                        color: AppColors.textSecondary,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                  ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.primary,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    onPressed: () => Navigator.of(context).pop(true),
+                                    child: Text(
+                                      'YES',
+                                      style: GoogleFonts.inter(
+                                        color: AppColors.background,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+
+                            if (proceed != true) {
+                              onTankSelected(null);
+                              return;
+                            }
+
+                            final reason = await showDialog<String>(
+                              context: context,
+                              barrierDismissible: false,
+                              builder: (context) {
+                                final controller = TextEditingController();
+                                final formKey = GlobalKey<FormState>();
+                                return AlertDialog(
+                                  backgroundColor: AppColors.surface,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  title: Text(
+                                    'Enter Duplicate Reason',
+                                    style: GoogleFonts.inter(
+                                      color: AppColors.textPrimary,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  content: Form(
+                                    key: formKey,
+                                    child: Column(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          'Please provide a mandatory reason for this duplicate reading.',
+                                          style: GoogleFonts.inter(color: AppColors.textSecondary, fontSize: 13),
+                                        ),
+                                        const SizedBox(height: 12),
+                                        TextFormField(
+                                          controller: controller,
+                                          maxLines: 2,
+                                          style: GoogleFonts.inter(color: AppColors.textPrimary, fontSize: 14),
+                                          decoration: InputDecoration(
+                                            hintText: 'Reason...',
+                                            hintStyle: GoogleFonts.inter(color: AppColors.textSecondary.withOpacity(0.5)),
+                                            filled: true,
+                                            fillColor: AppColors.background,
+                                            border: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                              borderSide: const BorderSide(color: AppColors.border),
+                                            ),
+                                            focusedBorder: OutlineInputBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                              borderSide: const BorderSide(color: AppColors.primary),
+                                            ),
+                                          ),
+                                          validator: (value) {
+                                            if (value == null || value.trim().isEmpty) {
+                                              return 'Reason cannot be empty';
+                                            }
+                                            return null;
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(context).pop(),
+                                      child: Text(
+                                        'Cancel',
+                                        style: GoogleFonts.inter(
+                                          color: AppColors.textSecondary,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: AppColors.primary,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                      ),
+                                      onPressed: () {
+                                        if (formKey.currentState?.validate() ?? false) {
+                                          Navigator.of(context).pop(controller.text.trim());
+                                        }
+                                      },
+                                      child: Text(
+                                        'Submit',
+                                        style: GoogleFonts.inter(
+                                          color: AppColors.background,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            );
+
+                            if (reason == null || reason.isEmpty) {
+                              onTankSelected(null);
+                              return;
+                            }
+                            duplicateReason = reason;
+                          }
+
+                          if (!context.mounted) return;
+
                           Navigator.push(
                             context,
                             MaterialPageRoute(
                               builder: (_) => ReadingEntryScreen(
                                 tank: selectedTank!,
                                 currentUser: currentUser!,
+                                duplicateReason: duplicateReason.isNotEmpty ? duplicateReason : null,
                               ),
                             ),
                           );
@@ -1050,3 +1251,8 @@ class _MainActionButton extends StatelessWidget {
 //     );
 //   }
 // }
+
+class SwitchTabNotification extends Notification {
+  final int index;
+  SwitchTabNotification(this.index);
+}
