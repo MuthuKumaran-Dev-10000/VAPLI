@@ -50,6 +50,8 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
   bool _autoFillExpanded = false;
   bool _rawExprVisible = false; // toggle to show raw token expression
 
+  bool get _hasThenWorkflow => _constraints.any((c) => c['then_workflow_enabled'] == true);
+
   int _rows = 1;
   int _cols = 1;
   final _rowsCtrl = TextEditingController(text: '1');
@@ -579,6 +581,10 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
 
     String selectedOp = existing?['op']?.toString() ?? ops.first.value;
     String severity = existing?['severity']?.toString() ?? 'warning';
+
+    final isDepthLimitReached = (widget.ancestorScopeIds ?? []).length >= 2;
+    bool thenWorkflowEnabled = existing?['then_workflow_enabled'] == true;
+    List<Map<String, dynamic>> thenProperties = List<Map<String, dynamic>>.from(existing?['then_properties'] ?? []);
     final valueCtrl =
         TextEditingController(text: existing?['value']?.toString() ?? '');
     final errorMsgCtrl =
@@ -857,6 +863,174 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                             activeColor: _kSevCritical,
                             onChanged: (v) =>
                                 setDlg(() => blockSubmission = v ?? false)),
+                        if (!isDepthLimitReached) ...[
+                          checkTile(
+                              value: thenWorkflowEnabled,
+                              label: 'Enable IF THEN Workflow',
+                              sub: 'Reveal nested parameters when met',
+                              icon: Icons.alt_route_outlined,
+                              activeColor: const Color(0xFF9B7FE0),
+                              onChanged: (v) =>
+                                  setDlg(() => thenWorkflowEnabled = v ?? false)),
+                          if (thenWorkflowEnabled) ...[
+                            const SizedBox(height: 8),
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: _kSurface,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: const Color(0xFF9B7FE0).withOpacity(0.35)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        'THEN PARAMETERS (${thenProperties.length})',
+                                        style: GoogleFonts.dmSans(
+                                          color: _kText,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                      if (thenProperties.isNotEmpty)
+                                        TextButton(
+                                          onPressed: () {
+                                            showDialog<void>(
+                                              context: context,
+                                              builder: (confCtx) => AlertDialog(
+                                                backgroundColor: _kCard,
+                                                title: const Text('Delete THEN parameters', style: TextStyle(color: _kText)),
+                                                content: const Text('Are you sure you want to delete all parameters inside this nested block?'),
+                                                actions: [
+                                                  TextButton(
+                                                    onPressed: () => Navigator.pop(confCtx),
+                                                    child: const Text('Cancel', style: TextStyle(color: _kSub)),
+                                                  ),
+                                                  TextButton(
+                                                    onPressed: () {
+                                                      setDlg(() {
+                                                        thenProperties.clear();
+                                                      });
+                                                      Navigator.pop(confCtx);
+                                                    },
+                                                    child: const Text('Delete', style: TextStyle(color: _kDanger)),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                          child: const Text('Clear All', style: TextStyle(color: _kDanger, fontSize: 11)),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  if (thenProperties.isEmpty)
+                                    SizedBox(
+                                      width: double.infinity,
+                                      child: ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF9B7FE0),
+                                          foregroundColor: Colors.white,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                        icon: const Icon(Icons.add, size: 16),
+                                        label: const Text('Configure THEN Parameters', style: TextStyle(fontSize: 12)),
+                                        onPressed: () async {
+                                          final constraintId = existing?['id'] ?? 'c_${DateTime.now().millisecondsSinceEpoch}';
+                                          final childScope = '${widget.scopeId}_then_$constraintId';
+                                          final result = await Navigator.push<List<Map<String, dynamic>>>(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => ThenParametersManagerPage(
+                                                initialParameters: thenProperties,
+                                                scopeId: childScope,
+                                                ancestorScopeIds: [...(widget.ancestorScopeIds ?? []), widget.scopeId],
+                                              ),
+                                            ),
+                                          );
+                                          if (result != null) {
+                                            setDlg(() {
+                                              thenProperties = result;
+                                            });
+                                          }
+                                        },
+                                      ),
+                                    )
+                                  else
+                                    Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        ...thenProperties.map((p) => Padding(
+                                          padding: const EdgeInsets.only(bottom: 4),
+                                          child: Row(
+                                            children: [
+                                              const Icon(Icons.subdirectory_arrow_right, size: 14, color: Color(0xFF9B7FE0)),
+                                              const SizedBox(width: 6),
+                                              Expanded(
+                                                child: Text(
+                                                  p['label']?.toString() ?? 'Untitled',
+                                                  style: GoogleFonts.dmSans(color: _kSub, fontSize: 12),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                                decoration: BoxDecoration(
+                                                  color: _kAccent.withOpacity(0.15),
+                                                  borderRadius: BorderRadius.circular(4),
+                                                ),
+                                                child: Text(
+                                                  p['type']?.toString() ?? '',
+                                                  style: const TextStyle(fontSize: 8, color: _kAccent, fontWeight: FontWeight.bold),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        )),
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: OutlinedButton.icon(
+                                                style: OutlinedButton.styleFrom(
+                                                  side: const BorderSide(color: Color(0xFF9B7FE0)),
+                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                                ),
+                                                icon: const Icon(Icons.edit, size: 14, color: Color(0xFF9B7FE0)),
+                                                label: const Text('Edit Parameters', style: TextStyle(color: Color(0xFF9B7FE0), fontSize: 12)),
+                                                onPressed: () async {
+                                                  final constraintId = existing?['id'] ?? 'c_${DateTime.now().millisecondsSinceEpoch}';
+                                                  final childScope = '${widget.scopeId}_then_$constraintId';
+                                                  final result = await Navigator.push<List<Map<String, dynamic>>>(
+                                                    context,
+                                                    MaterialPageRoute(
+                                                      builder: (_) => ThenParametersManagerPage(
+                                                        initialParameters: thenProperties,
+                                                        scopeId: childScope,
+                                                        ancestorScopeIds: [...(widget.ancestorScopeIds ?? []), widget.scopeId],
+                                                      ),
+                                                    ),
+                                                  );
+                                                  if (result != null) {
+                                                    setDlg(() {
+                                                      thenProperties = result;
+                                                    });
+                                                  }
+                                                },
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ],
                       ],
                     ),
                   ),
@@ -894,11 +1068,16 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                               'play_sound_on_violation': playSound,
                               'capture_image_on_violation': captureOnViolation,
                               'block_submission': blockSubmission,
+                              'then_workflow_enabled': thenWorkflowEnabled,
+                              'then_properties': thenProperties,
                             };
                             setState(() {
                               idx != null
                                   ? _constraints[idx] = c
                                   : _constraints.add(c);
+                              if (thenWorkflowEnabled) {
+                                _required = true;
+                              }
                             });
                             Navigator.pop(ctx);
                           },
@@ -1206,14 +1385,16 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                               fontSize: 14,
                               color: _kText)),
                       subtitle: Text(
-                        _required
-                            ? 'Inspector must fill this in'
-                            : 'Optional – can be skipped',
+                        _hasThenWorkflow
+                            ? 'Inspector must fill this in (locked by IF-THEN workflow)'
+                            : _required
+                                ? 'Inspector must fill this in'
+                                : 'Optional – can be skipped',
                         style: const TextStyle(fontSize: 12, color: _kSub),
                       ),
                       activeColor: _kAccent,
                       value: _required,
-                      onChanged: _captureImage
+                      onChanged: (_captureImage || _hasThenWorkflow)
                           ? null
                           : (v) => setState(() => _required = v),
                     ),
@@ -2014,6 +2195,13 @@ class PropertyBuilderPageState extends State<PropertyBuilderPage> {
                             Icons.block_rounded,
                             _kSevCritical,
                             'Blocks'));
+                      if (c['then_workflow_enabled'] == true) {
+                        final count = (c['then_properties'] as List?)?.length ?? 0;
+                        flags.add(_ConstraintFlag(
+                            Icons.alt_route_outlined,
+                            const Color(0xFF9B7FE0),
+                            'IF-THEN ($count)'));
+                      }
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 10),

@@ -99,6 +99,7 @@ This document provides a detailed specification of the screens, services, data m
   * **Actions Menu**:
     * Clicking a folder expands/collapses its child assets.
     * Clicking a leaf asset shows options: **Capture Reading** (opens reading entry), **Property Builder** (configure inspection parameters), or **Delete Asset**.
+  * **Bulk Edit Switch**: A toggle switch "Bulk Edit" is rendered next to the breadcrumbs row (visible only if `canModify` privilege is true). When toggled ON, folder cards render a "Modify Params" button that navigates the user to the **Bulk Parameter Manager** (`BulkParameterManagerPage`) for that folder.
 
 ### Tank Input Browser (`TankInputBrowser`)
 * **File Location**: [tank_input_browser.dart](file:///c:/Users/muthu/Freelance/vapli/lib/features/home/presentation/pages/tank_input_browser.dart)
@@ -120,7 +121,11 @@ This document provides a detailed specification of the screens, services, data m
     * **Alarm Actions**: Sound alarm toggle, dashboard warning trigger, and photo capture requirement.
     * **Blocking**: Prevent submission if the constraint is violated.
     * **History**: Record violation in persistent database tables.
-  * **Calculation Rules**: Formulates calculations using `{param_id}` variables. Mark fields as read-only to dynamically evaluate their contents via the `ExpressionEngine`.
+    * **IF-THEN Conditional Workflow**: Enables adding nested child checklists (`then_properties`) that are dynamically revealed to inspectors in the entry form.
+      * *Nesting depth limit*: A maximum depth of exactly 2 levels is enforced (Root -> Level 1 -> Level 2). If a parameter is edited at Level 2, the "Enable IF THEN Workflow" switch is automatically hidden.
+      * *Mandatory configuration*: If a conditional workflow is enabled on any constraint, the parent parameter's "Required field" state is locked to `ON` (cannot be disabled).
+      * *Visual tags*: Parameters with configured nested parameters show an `IF-THEN (count)` tag on their constraint cards.
+  * **Calculation Rules**: Formulates calculations using `{param_id}` variables. Mark fields as read-only to dynamically evaluate their contents via the `ExpressionEngine`. Calculations at any depth of nesting correctly resolve dependencies by looking up both current and ancestor scope values.
 
 ### Inspection Entry & Reading Form (`ReadingEntryScreen`)
 * **File Locations**: [reading_entry_screen.dart](file:///c:/Users/muthu/Freelance/vapli/lib/features/readings/presentation/pages/reading_entry_screen.dart) & [reading_entry_state.dart](file:///c:/Users/muthu/Freelance/vapli/lib/features/readings/presentation/pages/reading_entry_state.dart)
@@ -136,6 +141,10 @@ This document provides a detailed specification of the screens, services, data m
     * Plays warning sounds and triggers haptic vibrations.
     * Dynamically creates a draft alert node in `/alerts/` and `/violations/`.
     * If the violation is resolved, the draft node is automatically removed.
+  * **Conditional Parameter Rendering (IF→THEN)**:
+    * Nested checklist parameters under a constraint are hidden by default. If the parent constraint triggers, the corresponding child parameters slide into view recursively with visual nesting indicators and indentation.
+    * Real-time activation checks (`_isParamActive(id)`) ensure that required validation, photo checks, blocking constraints, calculations, and data collection only target parameters that are currently active in the form.
+    * If a parent constraint is resolved or clears, any active child alert nodes in `/alerts/` and `/violations/` are recursively deleted, and child parameter values are reset (`_deactivateChildParametersRecursively`).
   * **Folder-Sequenced Navigation**: If accessed via the asset tree/folder browser, the screen receives a list of sibling tanks in that folder. On saving:
     * Displays a success state and waits 3 seconds.
     * Pops back to `TankInputBrowser` with a payload requesting to select the next leaf detail view so the inspector can verify info before taking a reading.
@@ -172,6 +181,11 @@ This document provides a detailed specification of the screens, services, data m
   * **User Management**: Onboards users, assigns roles (`super admin`, `client admin`, `inspector`), and sets tenant restrictions.
   * **Audit Log Viewer**: Displays system audit records with search and filter functionality.
   * **System Settings**: Configures application timeout settings, theme variables, and client configurations.
+  * **Bulk Parameter Manager (`BulkParameterManagerPage`)**: Allows administrative users to edit shared inspection parameters across multiple tanks within a folder in bulk.
+    * *Scanning*: Recursively crawls all leaf tanks under the selected folder node to retrieve, normalize, and group inspection properties by normalized label and type.
+    * *Safety Confirmation*: Renders target selection checkboxes for all affected tanks.
+    * *ID Stability*: Merges changes while preserving the existing stable parameter IDs for historical record integrity.
+    * *Firebase Batch Updates*: Applies modifications across selected tanks via a single high-performance update call, generating corresponding audit logs for each modified tank.
 
 ---
 
@@ -269,6 +283,18 @@ sequenceDiagram
   * **Asset Inspection Detailed List (Page 2 onwards)**: A unified, folder-sequenced table of all tanks (both inspected and pending). Assets are grouped by folder alphabetically, and sorted by name. Pending inspection rows are highlighted in light cyan-blue.
   * **Active Unresolved Alerts (Final Page)**: Appends a list of open unresolved alerts at the end of the report.
 
+### IF-THEN Conditional Parameters Workflow
+1. **Setup**: The administrator configures a constraint with `then_workflow_enabled: true` and defines child parameters inside it. The system automatically locks the parent parameter to "Required" and records `ancestorScopeIds` in the child scope metadata.
+2. **Form Render**: During reading capture, the form checks parent validation constraints in real-time as values are inputted.
+3. **Trigger**: If a parent constraint fails, the corresponding child parameters are immediately activated and rendered. If the parent constraint clears, the child parameters are deactivated, their values are reset, and any active draft alerts for those child parameters are cleaned up from the database recursively.
+4. **Validation & Save**: Submission is only allowed if all active parameters pass required, camera capture, and blocking constraint checks. The saved reading contains entries for all active parameters.
+
+### Bulk Parameter Manager Workflow
+1. **Entry**: An administrator toggles "Bulk Edit" in the tank browser screen and clicks "Modify Params" on a folder.
+2. **Scan & Match**: The system recursively crawls leaf tanks, groupings parameters by normalized name and type.
+3. **Update**: The user modifies a parameter group baseline. The system allows selecting a subset of tanks using checkboxes.
+4. **Batch Save**: On confirmation, the system updates matching parameters across all selected tanks while maintaining ID stability, commits a single update call to Firebase, and logs individual audit entries.
+
 ---
 
 ## 4. Database Schema Mapping (Firebase Realtime Database)
@@ -318,7 +344,17 @@ sequenceDiagram
           "play_sound_on_violation": true,
           "capture_image_on_violation": true,
           "block_submission": false,
-          "store_history": true
+          "store_history": true,
+          "then_workflow_enabled": true,
+          "then_properties": [
+            {
+              "id": "leakage_observed",
+              "label": "Is leakage observed?",
+              "type": "dropdown",
+              "required": true,
+              "options": ["Yes", "No"]
+            }
+          ]
         }
       ]
     }

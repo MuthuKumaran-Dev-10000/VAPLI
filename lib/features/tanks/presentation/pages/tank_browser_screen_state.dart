@@ -17,6 +17,7 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
   bool _isDragging = false;
 
   final Map<String, int> _childCountCache = {};
+  bool _showBulkParamManager = false;
 
   TankNode? get _currentFolder => _pathStack.last;
 
@@ -795,12 +796,41 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
                                 fontWeight: isLast
                                     ? FontWeight.w800
                                     : FontWeight.w600)),
-                      ),
+),
                     ]);
                   }),
                 ]),
               ),
             ),
+            if (widget.canModify) ...[
+              const SizedBox(width: 10),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Bulk Edit',
+                    style: GoogleFonts.raleway(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: _showBulkParamManager ? _kTeal : _kSub,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  SizedBox(
+                    height: 20,
+                    width: 32,
+                    child: FittedBox(
+                      fit: BoxFit.fill,
+                      child: Switch(
+                        value: _showBulkParamManager,
+                        activeColor: _kTeal,
+                        onChanged: (v) => setState(() => _showBulkParamManager = v),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (isTarget)
               Text('drop to move up',
                   style: GoogleFonts.raleway(fontSize: 10, color: _kTeal)),
@@ -989,6 +1019,18 @@ class _TankBrowserScreenState extends State<TankBrowserScreen>
               canModify: widget.canModify,
               canDelete: widget.canDelete,
               canDuplicate: widget.canCreate,
+              showModifyParameters: widget.canModify && _showBulkParamManager,
+              onModifyParameters: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => BulkParameterManagerPage(
+                      folderNode: node,
+                      onAudit: widget.onAudit,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         );

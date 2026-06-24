@@ -19,6 +19,7 @@ import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_tree_repository.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
 import 'package:lubrication_indicator/features/tanks/presentation/pages/create_tank_screen_main.dart';
+import 'package:lubrication_indicator/features/admin/presentation/pages/bulk_parameter_manager_page.dart';
 import 'package:lubrication_indicator/features/tanks/presentation/widgets/create_tank_qr.dart';
 part 'widgets/_fab_sheet.dart';
 part 'widgets/_folder_card_content.dart';

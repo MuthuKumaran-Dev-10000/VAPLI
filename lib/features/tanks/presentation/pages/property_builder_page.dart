@@ -45,8 +45,8 @@
 //
 // ══════════════════════════════════════════════════════════════════════════════
 
-import 'dart:convert';
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -58,6 +58,7 @@ import 'package:lubrication_indicator/core/services/audit_log_service.dart';
 import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/utils/session_manager.dart';
 import 'package:lubrication_indicator/core/services/expression_engine.dart';
+import 'package:lubrication_indicator/features/tanks/presentation/pages/then_parameters_manager_page.dart';
 
 import 'package:lubrication_indicator/features/tanks/presentation/widgets/create_tank_screen_helpers.dart';
 import 'package:lubrication_indicator/features/tanks/presentation/widgets/types_and_small_widgets.dart';
@@ -114,11 +115,13 @@ class PropertyBuilderPage extends StatefulWidget {
   final Map<String, dynamic>? existing;
   final void Function(Map<String, dynamic>) onSave;
   final String scopeId;
+  final List<String>? ancestorScopeIds;
 
   const PropertyBuilderPage({
     required this.onSave,
     required this.scopeId,
     this.existing,
+    this.ancestorScopeIds,
     super.key,
   });
 
@@ -128,4 +131,3 @@ class PropertyBuilderPage extends StatefulWidget {
   @override
   State<PropertyBuilderPage> createState() => PropertyBuilderPageState();
 }
-

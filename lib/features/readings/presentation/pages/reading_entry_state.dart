@@ -113,56 +113,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
 
     for (final p in _props) {
-      final id = p['id'] as String;
-      final type = p['type'] as String? ?? 'text';
-      final isAutofill = p['autofill'] == true;
-
-      // Set autofill mode: if autofill property exists and is true, start enabled
-      if (isAutofill) {
-        _autofillEnabled[id] = true;
-        _autofillResult[id] = null;
-        // Parse dependency IDs from expression
-        _autofillDeps[id] = _parseDependencyIds(
-            p['autofill_expression'] as String? ?? '');
-      }
-
-      switch (type) {
-        case 'number':
-        case 'text':
-        case 'multiline':
-          final ctrl = TextEditingController();
-          // Only add listener for non-autofill OR manual override
-          ctrl.addListener(() => _onValueChanged(id));
-          _textCtrl[id] = ctrl;
-          break;
-        case 'dropdown':
-          _dropdownVal[id] = null;
-          break;
-        case 'slider':
-          _sliderVal[id] = ((p['min'] ?? 0) as num).toDouble();
-          break;
-        case 'dual_text':
-          final l = TextEditingController();
-          final r = TextEditingController();
-          l.addListener(() => _onValueChanged(id));
-          r.addListener(() => _onValueChanged(id));
-          _dualLeft[id] = l;
-          _dualRight[id] = r;
-          break;
-      }
-
-      if (p['capture_image'] == true) {
-        _paramPhoto[id] = null;
-        _paramPhotoUrl[id] = null;
-        _paramUploading[id] = false;
-      }
-
-      _violations[id] = [];
-      _violationPhotos[id] = {};
-      _violationPhotoUrls[id] = {};
-      _violationUploading[id] = {};
-      _liveAlertIds[id] = {};
-      _alreadyFiredConstraints[id] = {};
+      _initParamRecursively(p);
     }
 
     _manualCaptures.add(_ManualCaptureEntry());
@@ -693,7 +644,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       pid = pid.substring(0, pid.length - '__last'.length);
     }
 
-    final p = _props.firstWhere((e) => e['id'] == pid, orElse: () => {});
+    final p = _getPropById(pid);
     if (p.isEmpty) return null;
     final type = p['type'] as String? ?? 'text';
 
@@ -750,7 +701,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     if (!_isLastTokenId(pid)) return true;
 
     pid = pid.substring(0, pid.length - '__last'.length);
-    final p = _props.firstWhere((e) => e['id'] == pid, orElse: () => {});
+    final p = _getPropById(pid);
     if (p.isEmpty) return false;
     if (p['keep_previous_capture'] != true) return false;
 
@@ -920,8 +871,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final status = <String, bool>{};
 
     for (final depId in deps) {
-      final p = _props.firstWhere((pp) => pp['id'] == depId,
-          orElse: () => <String, dynamic>{});
+      final p = _getPropById(depId);
       if (_isLastTokenId(depId)) {
         status[depId] = true;
         continue;
@@ -969,8 +919,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       // Only re-evaluate if autofill mode is active
       if (_autofillEnabled[autofillId] != true) continue;
 
-      final p = _props.firstWhere((pp) => pp['id'] == autofillId,
-          orElse: () => <String, dynamic>{});
+      final p = _getPropById(autofillId);
       if (p.isEmpty) continue;
 
       final expression = p['autofill_expression'] as String? ?? '';
@@ -1163,8 +1112,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         .firstWhere((x) => x?.constraintId == constraintId, orElse: () => null);
     if (v == null) return;
 
-    final p = _props.firstWhere((pp) => pp['id'] == paramId,
-        orElse: () => <String, dynamic>{});
+    final p = _getPropById(paramId);
     if (p.isEmpty) return;
     final type = p['type'] as String? ?? 'text';
     final label = p['label'] as String? ?? paramId;
@@ -1340,8 +1288,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   // ── Called on every value change ───────────────────────────────────────
 
   Future<void> _onValueChanged(String id) async {
-    final p = _props.firstWhere((e) => e['id'] == id,
-        orElse: () => <String, dynamic>{});
+    final p = _getPropById(id);
     if (p.isEmpty) return;
 
     final type = p['type'] as String? ?? 'text';
@@ -1357,6 +1304,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       _violationPhotoUrls[id]?.remove(clearedId);
       _alreadyFiredConstraints[id]?.remove(clearedId);
       _deleteLiveAlert(paramId: id, constraintId: clearedId);
+      _deactivateChildParametersRecursively(id, clearedId);
     }
 
     setState(() => _violations[id] = newViolations);
@@ -1426,7 +1374,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   // ── Required / block checks ────────────────────────────────────────────
 
   String? _requiredError() {
-    for (final p in _props) {
+    for (final p in _allActiveProps()) {
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
       if (type == 'group') continue;
@@ -1465,10 +1413,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   }
 
   bool get _hasBlockingViolation =>
-      _violations.values.any((list) => list.any((v) => v.blockSubmission));
+      _violations.keys.any((id) => _isParamActive(id) && (_violations[id]?.any((v) => v.blockSubmission) ?? false));
 
   bool get _hasMissingViolationPhoto {
-    for (final p in _props) {
+    for (final p in _allActiveProps()) {
       if (p['type'] == 'group') continue;
       final id = p['id'] as String;
       final vList = _violations[id] ?? [];
@@ -1495,7 +1443,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     if (_hasBlockingViolation) return false;
     if (_hasMissingViolationPhoto) return false;
     if (_hasUploadInProgress) return false;
-    for (final p in _props) {
+    for (final p in _allActiveProps()) {
       if (p['type'] == 'group') continue;
       if (p['capture_image'] == true) {
         if (_paramPhoto[p['id'] as String] == null) return false;
@@ -1508,7 +1456,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   Map<String, dynamic> _collectValues() {
     final out = <String, dynamic>{};
-    for (final p in _props) {
+    for (final p in _allActiveProps()) {
       final id = p['id'] as String;
       final type = p['type'] as String? ?? 'text';
       if (type == 'group') continue;
@@ -1604,11 +1552,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       for (int i = 0; i < _manualCaptures.length; i++) {
         final entry = _manualCaptures[i];
         if (entry.selectedParamId != null && entry.uploadedUrl != null) {
-          final paramLabel = _props.firstWhere(
-                      (p) => p['id'] == entry.selectedParamId,
-                      orElse: () => {'label': entry.selectedParamId})['label']
-                  as String? ??
-              entry.selectedParamId!;
+          final pSearch = _getPropById(entry.selectedParamId!);
+          final paramLabel = (pSearch.isNotEmpty ? pSearch['label'] : null) as String? ?? entry.selectedParamId!;
           final key = 'manual_${paramLabel}_captured_image';
           if (inspVals.containsKey(key)) {
             inspVals['manual_${paramLabel}_captured_image_$i'] =
@@ -1619,7 +1564,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
-      for (final p in _props) {
+      for (final p in _allActiveProps()) {
         final id = p['id'] as String;
         final type = p['type'] as String? ?? 'text';
         final label = p['label'] as String? ?? id;
@@ -1657,7 +1602,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
       await _auditReadingSave(reading, inspVals);
 
-      for (final p in _props) {
+      for (final p in _allActiveProps()) {
         if (p['keep_previous_capture'] != true) continue;
         final id = p['id'] as String;
         final type = p['type'] as String? ?? 'text';
@@ -2031,7 +1976,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             const SizedBox(height: 28),
 
             if (_hasBlockingViolation) ...[
-              _BlockBanner(violations: _violations, props: _props),
+              _BlockBanner(violations: _violations, props: _allPropsFlat()),
               const SizedBox(height: 16),
             ],
 
@@ -2061,7 +2006,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   // ── Manual Capture Section ─────────────────────────────────────────────
 
   Widget _buildManualCaptureSection() {
-    final paramOptions = _props
+    final paramOptions = _allActiveProps()
         .map((p) => MapEntry(
             p['id'] as String, p['label'] as String? ?? p['id'] as String))
         .toList();
@@ -2346,14 +2291,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Property field builder ─────────────────────────────────────────────
 
-  Map<String, dynamic>? _getPropById(String id) {
-    if (id.isEmpty) return null;
-    try {
-      return _props.firstWhere((p) => p['id'] == id);
-    } catch (_) {
-      return null;
-    }
-  }
+
 
   Widget _buildPropField(Map<String, dynamic> p, {bool isNested = false}) {
     final id = p['id'] as String;
@@ -2600,7 +2538,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
             const SizedBox(height: 8),
             _AutofillStatusSection(
               paramId: id,
-              props: _props,
+              props: _allPropsFlat(),
               depsStatus: _getDepsFillStatus(id),
               autofillResult: _autofillResult[id],
               isAutofillEnabled: _autofillEnabled[id] ?? true,
@@ -2640,6 +2578,51 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
               onCapture: () => _captureParamImage(id),
             ),
           ],
+
+          // ── THEN Nested Parameters ───────────────────────────────
+          ...p['constraints']?.map<Widget>((c) {
+            final cMap = _deepCast(c) as Map<String, dynamic>;
+            final constraintId = cMap['id']?.toString() ?? '';
+            final isViolated = vList.any((v) => v.constraintId == constraintId);
+            final condWorkflow = cMap['then_workflow_enabled'] == true;
+            final thenProps = cMap['then_properties'] as List?;
+            if (isViolated && condWorkflow && thenProps != null && thenProps.isNotEmpty) {
+              return Container(
+                margin: const EdgeInsets.only(top: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _kSurface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF9B7FE0).withOpacity(0.35), width: 1.5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.subdirectory_arrow_right, size: 14, color: Color(0xFF9B7FE0)),
+                        const SizedBox(width: 6),
+                        Text(
+                          'CONDITIONAL FORM (WHEN ${cMap['op']} ${cMap['value']})',
+                          style: GoogleFonts.dmSans(
+                            color: const Color(0xFF9B7FE0),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    ...thenProps.map((childProp) {
+                      return _buildPropField(_deepCast(childProp) as Map<String, dynamic>, isNested: true);
+                    }),
+                  ],
+                ),
+              );
+            }
+            return const SizedBox.shrink();
+          }) ?? const [],
         ],
       ),
     );
@@ -2898,6 +2881,214 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
       default:
         return const SizedBox.shrink();
+    }
+  }
+
+  // ── IF-THEN conditional fields and helpers ──────────────────────────────
+  final Map<String, Map<String, String>> _paramParents = {};
+
+  void _initParamRecursively(Map<String, dynamic> p, {String? parentId, String? parentConstraintId}) {
+    final id = p['id'] as String;
+    final type = p['type'] as String? ?? 'text';
+    final isAutofill = p['autofill'] == true;
+
+    if (parentId != null && parentConstraintId != null) {
+      _paramParents[id] = {
+        'parentParamId': parentId,
+        'constraintId': parentConstraintId,
+      };
+    }
+
+    if (isAutofill) {
+      _autofillEnabled[id] = true;
+      _autofillResult[id] = null;
+      _autofillDeps[id] = _parseDependencyIds(p['autofill_expression'] as String? ?? '');
+    }
+
+    switch (type) {
+      case 'number':
+      case 'text':
+      case 'multiline':
+        final ctrl = TextEditingController();
+        ctrl.addListener(() => _onValueChanged(id));
+        _textCtrl[id] = ctrl;
+        break;
+      case 'dropdown':
+        _dropdownVal[id] = null;
+        break;
+      case 'slider':
+        _sliderVal[id] = ((p['min'] ?? 0) as num).toDouble();
+        break;
+      case 'dual_text':
+        final l = TextEditingController();
+        final r = TextEditingController();
+        l.addListener(() => _onValueChanged(id));
+        r.addListener(() => _onValueChanged(id));
+        _dualLeft[id] = l;
+        _dualRight[id] = r;
+        break;
+    }
+
+    if (p['capture_image'] == true) {
+      _paramPhoto[id] = null;
+      _paramPhotoUrl[id] = null;
+      _paramUploading[id] = false;
+    }
+
+    _violations[id] = [];
+    _violationPhotos[id] = {};
+    _violationPhotoUrls[id] = {};
+    _violationUploading[id] = {};
+    _liveAlertIds[id] = {};
+    _alreadyFiredConstraints[id] = {};
+
+    // Recursively initialize THEN parameters
+    final constraints = p['constraints'] as List?;
+    if (constraints != null) {
+      for (final c in constraints) {
+        final cMap = _deepCast(c) as Map<String, dynamic>;
+        if (cMap['then_workflow_enabled'] == true) {
+          final thenProps = cMap['then_properties'] as List?;
+          if (thenProps != null) {
+            for (final childProp in thenProps) {
+              final childMap = _deepCast(childProp) as Map<String, dynamic>;
+              _initParamRecursively(childMap, parentId: id, parentConstraintId: cMap['id']?.toString());
+            }
+          }
+        }
+      }
+    }
+  }
+
+  dynamic _deepCast(dynamic value) {
+    if (value is Map) {
+      return Map<String, dynamic>.from(
+        value.map((k, v) => MapEntry(k.toString(), _deepCast(v)))
+      );
+    }
+    if (value is List) {
+      return value.map(_deepCast).toList();
+    }
+    return value;
+  }
+
+  Map<String, dynamic> _getPropById(String id) {
+    Map<String, dynamic>? search(List<dynamic> list) {
+      for (final p in list) {
+        final pMap = _deepCast(p) as Map<String, dynamic>;
+        if (pMap['id'] == id) return pMap;
+        final constraints = pMap['constraints'] as List?;
+        if (constraints != null) {
+          for (final c in constraints) {
+            final cMap = _deepCast(c) as Map<String, dynamic>;
+            if (cMap['then_workflow_enabled'] == true) {
+              final thenProps = cMap['then_properties'] as List?;
+              if (thenProps != null) {
+                final found = search(thenProps);
+                if (found != null) return found;
+              }
+            }
+          }
+        }
+      }
+      return null;
+    }
+    return search(_props) ?? <String, dynamic>{};
+  }
+
+  bool _isParamActive(String id) {
+    final parentInfo = _paramParents[id];
+    if (parentInfo == null) {
+      return !_groupedParamIds.contains(id);
+    }
+    final parentId = parentInfo['parentParamId']!;
+    final constraintId = parentInfo['constraintId']!;
+    if (!_isParamActive(parentId)) return false;
+    final parentViolations = _violations[parentId] ?? [];
+    return parentViolations.any((v) => v.constraintId == constraintId);
+  }
+
+  List<Map<String, dynamic>> _allActiveProps() {
+    final activeList = <Map<String, dynamic>>[];
+    void collect(List<dynamic> list) {
+      for (final p in list) {
+        final pMap = _deepCast(p) as Map<String, dynamic>;
+        final id = pMap['id'] as String;
+        if (_isParamActive(id)) {
+          activeList.add(pMap);
+          final constraints = pMap['constraints'] as List?;
+          if (constraints != null) {
+            for (final c in constraints) {
+              final cMap = _deepCast(c) as Map<String, dynamic>;
+              if (cMap['then_workflow_enabled'] == true) {
+                final thenProps = cMap['then_properties'] as List?;
+                if (thenProps != null) {
+                  collect(thenProps);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    collect(_props);
+    return activeList;
+  }
+
+  List<Map<String, dynamic>> _allPropsFlat() {
+    final list = <Map<String, dynamic>>[];
+    void collect(List<dynamic> src) {
+      for (final p in src) {
+        final pMap = _deepCast(p) as Map<String, dynamic>;
+        list.add(pMap);
+        final constraints = pMap['constraints'] as List?;
+        if (constraints != null) {
+          for (final c in constraints) {
+            final cMap = _deepCast(c) as Map<String, dynamic>;
+            if (cMap['then_workflow_enabled'] == true) {
+              final thenProps = cMap['then_properties'] as List?;
+              if (thenProps != null) {
+                collect(thenProps);
+              }
+            }
+          }
+        }
+      }
+    }
+    collect(_props);
+    return list;
+  }
+
+  void _deactivateChildParametersRecursively(String parentId, String constraintId) {
+    final children = _paramParents.entries
+        .where((e) => e.value['parentParamId'] == parentId && e.value['constraintId'] == constraintId)
+        .map((e) => e.key)
+        .toList();
+
+    for (final childId in children) {
+      _violations[childId]?.clear();
+      _alreadyFiredConstraints[childId]?.clear();
+
+      _paramPhoto[childId] = null;
+      _paramPhotoUrl[childId] = null;
+      _paramUploading[childId] = false;
+
+      final childAlerts = Map<String, String>.from(_liveAlertIds[childId] ?? {});
+      for (final cid in childAlerts.keys) {
+        _deleteLiveAlert(paramId: childId, constraintId: cid);
+      }
+      _liveAlertIds[childId]?.clear();
+
+      final childProp = _getPropById(childId);
+      final constraints = childProp['constraints'] as List?;
+      if (constraints != null) {
+        for (final c in constraints) {
+          final cMap = _deepCast(c) as Map<String, dynamic>;
+          if (cMap['then_workflow_enabled'] == true) {
+            _deactivateChildParametersRecursively(childId, cMap['id']?.toString() ?? '');
+          }
+        }
+      }
     }
   }
 }

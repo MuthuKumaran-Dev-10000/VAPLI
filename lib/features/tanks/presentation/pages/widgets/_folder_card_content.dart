@@ -17,6 +17,8 @@ class _FolderCardContent extends StatelessWidget {
   final bool canModify;
   final bool canDelete;
   final bool canDuplicate;
+  final bool showModifyParameters;
+  final VoidCallback? onModifyParameters;
 
   const _FolderCardContent({
     required this.node,
@@ -31,6 +33,8 @@ class _FolderCardContent extends StatelessWidget {
     this.canModify = true,
     this.canDelete = true,
     this.canDuplicate = true,
+    this.showModifyParameters = false,
+    this.onModifyParameters,
   });
 
   @override
@@ -153,6 +157,14 @@ class _FolderCardContent extends StatelessWidget {
                 Text('hold to drag',
                     style: GoogleFonts.raleway(fontSize: 9, color: _kSubL)),
                 const Spacer(),
+                if (showModifyParameters && onModifyParameters != null) ...[
+                  _ActionChip(
+                      icon: Icons.settings_suggest_outlined,
+                      label: 'Modify Params',
+                      color: _kTeal,
+                      onTap: onModifyParameters!),
+                  const SizedBox(width: 6),
+                ],
                 if (canDuplicate)
                   _ActionChip(
                       icon: Icons.copy_outlined,
