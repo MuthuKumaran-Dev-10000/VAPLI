@@ -269,19 +269,33 @@ sequenceDiagram
 ```
 
 ### PDF & Excel Report Generation Engine
-* **Executive Summary PDF Report**:
-  * Fetches folder hierarchy data to group assets dynamically.
-  * Outputs assets as rows and parameters as columns on separate pages for each folder.
-  * Compares inspection averages against expected parameters and draws upward/downward trend arrows.
-  * Integrates captured verification images as clickable blue links.
-* **Abnormality Excel Report**:
-  * Creates spreadsheet tabs named after folders (limited to 31 characters).
-  * Lists out-of-bounds parameter logs, image links, and inspection duplicate reasons in a rotated row/column grid.
+* **Robust Native Storage & Media Indexing (`ReportStorageService`)**:
+  * Resolves storage location in priority order:
+    1. `/storage/emulated/0/Documents/VAPLI`
+    2. `/storage/emulated/0/Download/VAPLI`
+    3. `/storage/emulated/0/VAPLI`
+    4. App-private external directories (last resort)
+  * Automates folder structure setup: `Reports/PDF`, `Reports/Excel`, `Images/Annotated`, `Images/Original`, `Backups`, `Logs`.
+  * **Duplicate Filename Protection**: Automatically appends `(1)`, `(2)`, etc., to file names if they already exist in the target folder.
+  * **File Integrity Checks**: Flushes write buffers, verifies file existence, and checks `size > 0`. If integrity checks fail, the export is treated as failed and cleaned up.
+  * **MediaStore Scanner Connection**: Triggers `MediaScannerConnection.scanFile` via Android native `MethodChannel` after export.
+  * **Audit Log File**: Appends log entries to `Logs/export_logs.txt` with formatted timestamps, size, user, client, path, and export status.
+* **Smart Abbreviation Compression Engine**:
+  * Automatically activated on tables with more than 6 columns.
+  * Progressively resolves column label and cell value abbreviations to prevent collisions (e.g. `BT` -> `BoT` -> `BoiT` -> `BoilT`).
+  * Appends a detailed abbreviation legend at the bottom of the PDF page or Excel sheet.
+* **Conditional Inspection Tables (Normal vs. Violated)**:
+  * Splitting logic reads folder-specific `selected_params` and `violation_params` nodes.
+  * For both PDF and Excel reports, generates a clean "Normal" table showing standard parameters, followed by a separate "Violated" table showing custom violation columns.
+* **Conditional Duplicate Reason Column**:
+  * Automatically scans for duplicate readings inside folder tables. Appends a "Duplicate Reason" column to the end of the table only if duplicate entries exist.
 * **Inspection Report PDF**:
   * Generated in Portrait layout (A4 format).
   * **Page 1 (Summary Cover)**: Displays report range, compliance rates, folder structure, operating ranges, and latest captured inspections. Metric count values are formatted as blue underlined hyperlinks that navigate directly to target sections.
-  * **Asset Inspection Detailed List (Page 2 onwards)**: A unified, folder-sequenced table of all tanks (both inspected and pending). Assets are grouped by folder alphabetically, and sorted by name. Pending inspection rows are highlighted in light cyan-blue.
+  * **Asset Inspection Detailed List (Page 2 onwards)**: Sequential tables of assets grouped by folder and split by violation status.
   * **Active Unresolved Alerts (Final Page)**: Appends a list of open unresolved alerts at the end of the report.
+* **Inspection Report Excel**:
+  * Automatically builds multiple sheet tabs with daily and weekly folders. Call dynamic builders to structure normal and violated assets, apply abbreviation legends, and check duplicates.
 
 ### IF-THEN Conditional Parameters Workflow
 1. **Setup**: The administrator configures a constraint with `then_workflow_enabled: true` and defines child parameters inside it. The system automatically locks the parent parameter to "Required" and records `ancestorScopeIds` in the child scope metadata.

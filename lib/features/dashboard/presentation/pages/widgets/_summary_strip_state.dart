@@ -57,7 +57,7 @@ class _SummaryStripState extends State<_SummaryStrip> {
         Expanded(
             child: _KpiChip(
                 icon: Icons.storage_outlined,
-                label: 'Tanks',
+                label: 'Assets',
                 value: '${widget.tankCount}',
                 color: _kTeal)),
         const SizedBox(width: 10),

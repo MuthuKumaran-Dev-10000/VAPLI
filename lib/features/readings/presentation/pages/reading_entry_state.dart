@@ -6,6 +6,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   // ── Audio ──────────────────────────────────────────────────────────────
   final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isPlayingSound = false;
 
   // ── Save state ─────────────────────────────────────────────────────────
   bool _saving = false;
@@ -287,7 +288,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
                           const SizedBox(height: 12),
                           const Divider(color: _kBorder, height: 1),
                           const SizedBox(height: 10),
-                          _popupDetailRow('Tank Name', '${a.tankName} (${a.tankCode})'),
+                          _popupDetailRow('Asset Name', '${a.tankName} (${a.tankCode})'),
                           _popupDetailRow('Captured By', a.capturedByName),
 
                           // If there's an image, show thumbnail
@@ -580,6 +581,8 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
   // ── Sound + Vibration (fixed) ──────────────────────────────────────────
 
   Future<void> _playViolationSound() async {
+    if (_isPlayingSound) return;
+    _isPlayingSound = true;
     try {
       // Try to play a built-in alert sound via AudioPlayer
       // Uses the default system alert sound asset — add 'assets/sounds/alert.mp3'
@@ -588,14 +591,19 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       await _audioPlayer.stop();
       try {
         await _audioPlayer.play(AssetSource('sounds/alert.mp3'));
-      } catch (_) {
-        // Asset not found — use system sound as fallback
+      } catch (e) {
+        debugPrint('[AudioPlayer] Play failed: $e. Falling back to system sound.');
         await SystemSound.play(SystemSoundType.alert);
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('[AudioPlayer] Stop failed: $e. Falling back to system sound.');
       try {
         await SystemSound.play(SystemSoundType.alert);
       } catch (_) {}
+    } finally {
+      // Allow re-triggering sound only after a 500ms debounce window
+      await Future.delayed(const Duration(milliseconds: 500));
+      _isPlayingSound = false;
     }
 
     // Vibration: use HapticFeedback with heavy impact for better effect
@@ -1311,11 +1319,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
     // Newly fired constraints
     for (final v in newViolations) {
-      final alreadyFired =
-          _alreadyFiredConstraints[id]?.contains(v.constraintId) ?? false;
+      final constraintsSet = _alreadyFiredConstraints.putIfAbsent(id, () => <String>{});
+      final alreadyFired = constraintsSet.contains(v.constraintId);
 
       if (!alreadyFired) {
-        _alreadyFiredConstraints[id]?.add(v.constraintId);
+        constraintsSet.add(v.constraintId);
         _handleConstraintFired(paramId: id, param: p, value: val, violation: v);
       } else {
         _updateLiveAlert(

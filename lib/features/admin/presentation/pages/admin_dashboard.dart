@@ -1,6 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'package:intl/intl.dart';
+import 'package:open_filex/open_filex.dart';
+import 'package:flutter/services.dart';
+import 'package:lubrication_indicator/core/services/report_storage_service.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:firebase_database/firebase_database.dart';
@@ -73,7 +78,7 @@ class _AdminDashboardState extends State<AdminDashboard>
 
   List<_DashboardTabSpec> get _dashboardTabs {
     final tabs = <_DashboardTabSpec>[
-      const _DashboardTabSpec(key: 'tanks', label: 'Tanks'),
+      const _DashboardTabSpec(key: 'tanks', label: 'Assets'),
       if (_canViewTab(AccessControlService.pViewAdminClients))
         const _DashboardTabSpec(key: 'clients', label: 'Clients'),
       if (_canViewTab(AccessControlService.pViewAdminUsers))
@@ -114,7 +119,7 @@ class _AdminDashboardState extends State<AdminDashboard>
       case AccessControlService.pOpenAdminPage:
         return 'Can access admin module';
       case AccessControlService.pViewAdminTanks:
-        return 'Can view Tanks tab';
+        return 'Can view Assets tab';
       case AccessControlService.pViewAdminClients:
         return 'Can view Clients tab';
       case AccessControlService.pViewAdminUsers:
@@ -352,20 +357,302 @@ class _AdminDashboardState extends State<AdminDashboard>
         'tank_tree': treeSnap.value ?? <String, dynamic>{},
       };
       final jsonStr = const JsonEncoder.withIndent('  ').convert(payload);
-      final dir = await getApplicationDocumentsDirectory();
-      final file = File('${dir.path}/vapli_structure_${DateTime.now().millisecondsSinceEpoch}.json');
-      await file.writeAsString(jsonStr, flush: true);
-      await Share.shareXFiles([XFile(file.path)], text: 'VAPLI structure export');
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Structure exported successfully')),
+      final bytes = utf8.encode(jsonStr);
+
+      final clientName = widget.activeClient?.name?.replaceAll(RegExp(r'[^\w\-]'), '_') ?? 'All_Clients';
+      final ts = DateFormat('yyyy-MM-dd_HH-mm-ss').format(DateTime.now());
+      final fileName = '${clientName}_StructureBackup_$ts.json';
+
+      final file = await ReportStorageService.saveFile(
+        fileName: fileName,
+        bytes: bytes,
+        subPath: 'Backups',
+        exportType: 'Structure Backup',
+        username: widget.currentUser.username,
+        clientName: widget.activeClient?.name ?? 'All Clients',
       );
+
+      await _showSaveSuccessDialog(file, 'Structure Backup');
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Export failed: $e')),
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: const Color(0xFF141618),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF252830), width: 1.5),
+          ),
+          title: Row(
+            children: const [
+              Icon(Icons.error_outline_rounded, color: Color(0xFFEF4444), size: 28),
+              SizedBox(width: 12),
+              Text('Export Failed', style: TextStyle(color: Color(0xFFF0EEE9), fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: Text(
+            'Unable to save report. No writable storage location was found. The report was not lost. Please check device storage permissions and available disk space.\n\nDetails: $e',
+            style: const TextStyle(color: Color(0xFF8A8F9C), fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close', style: TextStyle(color: Color(0xFF8A8F9C))),
+            ),
+          ],
+        ),
       );
     }
+  }
+
+  Future<void> _showSaveSuccessDialog(File file, String exportType) async {
+    final size = await file.length();
+    final createdTime = await file.lastModified();
+    final sizeStr = _formatSize(size);
+    final timeStr = DateFormat('dd-MM-yyyy HH:mm:ss').format(createdTime);
+    final fileName = file.path.split('/').last.split('\\').last;
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF141618),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF252830), width: 1.5),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.check_circle_outline_rounded, color: Color(0xFF22C55E), size: 28),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Backup Saved Successfully',
+                  style: GoogleFonts.spaceGrotesk(
+                    color: const Color(0xFFF0EEE9),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _dialogDetailRow('File Name', fileName),
+                const SizedBox(height: 8),
+                _dialogDetailRow('Created Time', timeStr),
+                const SizedBox(height: 8),
+                _dialogDetailRow('File Size', sizeStr),
+                const SizedBox(height: 8),
+                const Divider(color: Color(0xFF252830), height: 16),
+                const SizedBox(height: 4),
+                Text(
+                  'Full Path',
+                  style: GoogleFonts.dmSans(
+                    color: const Color(0xFF8A8F9C),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0C0D0F),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFF252830)),
+                  ),
+                  child: SelectableText(
+                    file.path,
+                    style: GoogleFonts.spaceGrotesk(
+                      color: const Color(0xFFF0EEE9),
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          actions: [
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          backgroundColor: const Color(0xFFCB8C3E),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () async {
+                          try {
+                            await OpenFilex.open(file.path);
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Could not open file: $e')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                        label: Text(
+                          'Open',
+                          style: GoogleFonts.dmSans(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          backgroundColor: const Color(0xFF252830),
+                          foregroundColor: const Color(0xFFF0EEE9),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () async {
+                          final parentPath = file.parent.path;
+                          try {
+                            await Clipboard.setData(ClipboardData(text: parentPath));
+                            final result = await OpenFilex.open(parentPath);
+                            if (result.type != ResultType.done) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Folder path copied! Saved to: $parentPath'),
+                                  duration: const Duration(seconds: 4),
+                                ),
+                              );
+                            } else {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Opening folder and path copied!'),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            }
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Folder path copied! Saved to: $parentPath')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.folder_open_outlined, size: 16),
+                        label: Text(
+                          'Open Folder',
+                          style: GoogleFonts.dmSans(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          side: const BorderSide(color: Color(0xFF252830)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () async {
+                          try {
+                            await Share.shareXFiles([XFile(file.path)], text: exportType);
+                          } catch (e) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Could not share file: $e')),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.share_rounded, size: 16, color: Color(0xFF8A8F9C)),
+                        label: Text(
+                          'Share',
+                          style: GoogleFonts.dmSans(
+                            color: const Color(0xFFF0EEE9),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () => Navigator.pop(dialogContext),
+                        child: Text(
+                          'Close',
+                          style: GoogleFonts.dmSans(
+                            color: const Color(0xFF8A8F9C),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _dialogDetailRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 90,
+          child: Text(
+            label,
+            style: GoogleFonts.dmSans(color: const Color(0xFF8A8F9C), fontSize: 13),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            style: GoogleFonts.dmSans(color: const Color(0xFFF0EEE9), fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _formatSize(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(2)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(2)} MB';
   }
 
   Future<void> _createClient() async {

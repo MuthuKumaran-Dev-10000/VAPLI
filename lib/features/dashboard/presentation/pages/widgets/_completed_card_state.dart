@@ -66,7 +66,7 @@ class _CompletedCardState extends State<_CompletedCard> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _DetailRow('Message', a.message),
-                _DetailRow('Tank', '${a.tankName} (${a.tankCode})'),
+                _DetailRow('Asset', '${a.tankName} (${a.tankCode})'),
                 _DetailRow('Parameter', a.paramLabel),
                 _DetailRow('Value', a.paramValue),
                 _DetailRow('Captured By', a.capturedByName),

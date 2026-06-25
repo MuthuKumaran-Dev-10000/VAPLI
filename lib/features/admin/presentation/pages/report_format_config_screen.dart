@@ -54,7 +54,14 @@ class ParamItem {
 }
 
 class ReportFormatConfigScreen extends StatefulWidget {
-  const ReportFormatConfigScreen({super.key});
+  final bool isViolationMode;
+  final String? folderIdOverride;
+
+  const ReportFormatConfigScreen({
+    super.key,
+    this.isViolationMode = false,
+    this.folderIdOverride,
+  });
 
   @override
   State<ReportFormatConfigScreen> createState() => _ReportFormatConfigScreenState();
@@ -76,6 +83,8 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   bool _loading = true;
 
   final TextEditingController _stripTextCtrl = TextEditingController();
+  final TextEditingController _pdfThresholdCtrl = TextEditingController();
+  final TextEditingController _excelThresholdCtrl = TextEditingController();
   String _stripPosition = 'start';
   final Map<String, bool> _expandedParams = {};
   Timer? _debounceTimer;
@@ -90,6 +99,8 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   void dispose() {
     _debounceTimer?.cancel();
     _stripTextCtrl.dispose();
+    _pdfThresholdCtrl.dispose();
+    _excelThresholdCtrl.dispose();
     super.dispose();
   }
 
@@ -135,6 +146,15 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
         _allAlerts = alerts;
         _configsByFolder = configs;
         _statsByTank = statsByTank;
+        if (widget.folderIdOverride != null) {
+          final overrideNode = nodes.cast<TankNode?>().firstWhere(
+                (n) => n != null && n.id == widget.folderIdOverride,
+                orElse: () => null,
+              );
+          if (overrideNode != null) {
+            _pathStack = [null, overrideNode];
+          }
+        }
         _loading = false;
       });
 
@@ -150,6 +170,8 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
     final config = _configsByFolder[folderKey] ?? {};
     
     _stripTextCtrl.text = config['strip_text']?.toString() ?? '';
+    _pdfThresholdCtrl.text = (config['pdf_threshold']?.toString() ?? '6');
+    _excelThresholdCtrl.text = (config['excel_threshold']?.toString() ?? '12');
     _stripPosition = config['strip_position']?.toString() ?? 'start';
   }
 
@@ -179,7 +201,9 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   List<ParamItem> _getParamsList() {
     final folderKey = _currentFolder?.id ?? 'root';
     final config = _configsByFolder[folderKey] ?? {};
-    final selectedParams = config['selected_params'] as Map?;
+    final selectedParams = widget.isViolationMode
+        ? config['violation_params'] as Map?
+        : config['selected_params'] as Map?;
 
     final tanks = _getTanksInFolder(_currentFolder);
     final Map<String, ParamItem> discovered = {};
@@ -276,10 +300,11 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   // Toggling parameter selected status
   Future<void> _toggleParam(String paramKey, bool check) async {
     final folderKey = _currentFolder?.id ?? 'root';
-    final ref = DatabaseModeService.ref('settings/report_format/$folderKey/selected_params');
+    final paramPath = widget.isViolationMode ? 'violation_params' : 'selected_params';
+    final ref = DatabaseModeService.ref('settings/report_format/$folderKey/$paramPath');
     
     final config = _configsByFolder[folderKey] ?? {};
-    final selectedParams = Map<String, dynamic>.from(config['selected_params'] ?? {});
+    final selectedParams = Map<String, dynamic>.from(config[paramPath] ?? {});
 
     if (check) {
       int maxOrder = 0;
@@ -316,7 +341,7 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
     }
 
     setState(() {
-      config['selected_params'] = selectedParams;
+      config[paramPath] = selectedParams;
       _configsByFolder[folderKey] = config;
     });
 
@@ -326,10 +351,11 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   // Reorder index up/down swap
   Future<void> _reorderParam(String paramKey, bool up) async {
     final folderKey = _currentFolder?.id ?? 'root';
-    final ref = DatabaseModeService.ref('settings/report_format/$folderKey/selected_params');
+    final paramPath = widget.isViolationMode ? 'violation_params' : 'selected_params';
+    final ref = DatabaseModeService.ref('settings/report_format/$folderKey/$paramPath');
     
     final config = _configsByFolder[folderKey] ?? {};
-    final selectedParams = Map<String, dynamic>.from(config['selected_params'] ?? {});
+    final selectedParams = Map<String, dynamic>.from(config[paramPath] ?? {});
     
     final currentMap = selectedParams[paramKey] as Map?;
     if (currentMap == null || currentMap['selected'] != true) return;
@@ -359,7 +385,7 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
       };
       
       setState(() {
-        config['selected_params'] = selectedParams;
+        config[paramPath] = selectedParams;
         _configsByFolder[folderKey] = config;
       });
 
@@ -486,7 +512,9 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
         backgroundColor: _kSurface,
         foregroundColor: _kText,
         title: Text(
-          'Report Format Settings',
+          widget.isViolationMode
+              ? 'Violation Columns Configuration'
+              : 'Report Format Settings',
           style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 18),
         ),
       ),
@@ -513,11 +541,11 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
                               return Row(
                                 children: [
                                   GestureDetector(
-                                    onTap: () => _jumpToBreadcrumb(idx),
+                                    onTap: () => widget.isViolationMode ? null : _jumpToBreadcrumb(idx),
                                     child: Text(
                                       label,
                                       style: GoogleFonts.inter(
-                                        color: isLast ? _kText : _kCopper,
+                                        color: isLast ? _kText : (widget.isViolationMode ? _kSub : _kCopper),
                                         fontWeight: isLast ? FontWeight.bold : FontWeight.normal,
                                         fontSize: 13,
                                       ),
@@ -543,26 +571,36 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
                   child: ListView(
                     padding: const EdgeInsets.all(16),
                     children: [
-                      // 2. Folder Navigation List (Drill deeper)
-                      _buildFolderBrowsingList(),
+                      if (!widget.isViolationMode) ...[
+                        // 2. Folder Navigation List (Drill deeper)
+                        _buildFolderBrowsingList(),
 
-                      const SizedBox(height: 16),
-                      const Divider(color: _kBorder),
-                      const SizedBox(height: 8),
+                        const SizedBox(height: 16),
+                        const Divider(color: _kBorder),
+                        const SizedBox(height: 8),
 
-                      // 3. Name/Text Stripping Configuration
-                      _buildTextStrippingSection(),
+                        // 3. Name/Text Stripping Configuration
+                        _buildTextStrippingSection(),
 
-                      const SizedBox(height: 16),
-                      const Divider(color: _kBorder),
-                      const SizedBox(height: 8),
+                        const SizedBox(height: 16),
+                        const Divider(color: _kBorder),
+                        const SizedBox(height: 8),
 
-                      // General Settings (Include Timestamp Toggle)
-                      _buildGeneralSettingsSection(),
+                        // General Settings (Include Timestamp Toggle)
+                        _buildGeneralSettingsSection(),
 
-                      const SizedBox(height: 16),
-                      const Divider(color: _kBorder),
-                      const SizedBox(height: 8),
+                        const SizedBox(height: 16),
+                        const Divider(color: _kBorder),
+                        const SizedBox(height: 8),
+                      ] else ...[
+                        Text(
+                          'Configure the columns to be displayed when a constraint is violated in reports generated under this group.',
+                          style: GoogleFonts.inter(color: _kSub, fontSize: 13),
+                        ),
+                        const SizedBox(height: 16),
+                        const Divider(color: _kBorder),
+                        const SizedBox(height: 16),
+                      ],
 
                       // 4. Unique Parameters List for columns config
                       _buildParametersConfigSection(),
@@ -571,7 +609,8 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
                 ),
 
                 // 5. PDF Thumbnail Preview Panel at Bottom
-                _buildThumbnailPreviewPanel(),
+                if (!widget.isViolationMode)
+                  _buildThumbnailPreviewPanel(),
               ],
             ),
     );
@@ -682,6 +721,8 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
     final folderKey = _currentFolder?.id ?? 'root';
     final config = _configsByFolder[folderKey] ?? {};
     final includeTimestamp = config['include_timestamp'] == true;
+    final pdfAbbreviate = config['pdf_abbreviate'] != false;
+    final excelAbbreviate = config['excel_abbreviate'] != false;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -697,30 +738,163 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: _kBorder),
           ),
-          child: SwitchListTile(
-            title: Text(
-              'Include Timestamp in Cells',
-              style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
-            ),
-            subtitle: Text(
-              'Show reading time (HH:MM AM/PM in green) below values in table cells.',
-              style: GoogleFonts.inter(color: _kSub, fontSize: 11),
-            ),
-            value: includeTimestamp,
-            activeColor: _kCopper,
-            activeTrackColor: _kCopper.withOpacity(0.3),
-            inactiveThumbColor: _kSub,
-            inactiveTrackColor: _kBg,
-            onChanged: (val) async {
-              setState(() {
-                config['include_timestamp'] = val;
-                _configsByFolder[folderKey] = config;
-              });
-              final ref = DatabaseModeService.ref('settings/report_format/$folderKey/include_timestamp');
-              await ref.set(val);
-            },
+          child: Column(
+            children: [
+              SwitchListTile(
+                title: Text(
+                  'Include Timestamp in Cells',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Show reading time (HH:MM AM/PM in green) below values in table cells.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: includeTimestamp,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    config['include_timestamp'] = val;
+                    _configsByFolder[folderKey] = config;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/$folderKey/include_timestamp');
+                  await ref.set(val);
+                },
+              ),
+              const Divider(color: _kBorder, height: 1),
+              SwitchListTile(
+                title: Text(
+                  'Use Abbreviations in PDF if Cols exceed limit',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Use abbreviations for PDF tables when parameter columns exceed 6.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: pdfAbbreviate,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    config['pdf_abbreviate'] = val;
+                    _configsByFolder[folderKey] = config;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/$folderKey/pdf_abbreviate');
+                  await ref.set(val);
+                },
+              ),
+              // Compression Threshold Input for PDF
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: TextFormField(
+                  controller: _pdfThresholdCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'PDF Compression Threshold',
+                    hintText: 'Enter a number > 0',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onChanged: (val) async {
+                    final numVal = int.tryParse(val);
+                    if (numVal == null || numVal <= 0) {
+                      // ignore invalid input
+                      return;
+                    }
+                    setState(() {
+                      config['pdf_threshold'] = numVal;
+                      _configsByFolder[folderKey] = config;
+                    });
+                    final ref = DatabaseModeService.ref('settings/report_format/$folderKey/pdf_threshold');
+                    await ref.set(numVal);
+                  },
+                ),
+              ),
+              const Divider(color: _kBorder, height: 1),
+              SwitchListTile(
+                title: Text(
+                  'Use Abbreviations in Excel if Cols exceed limit',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Use abbreviations for Excel sheets when parameter columns exceed 6.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: excelAbbreviate,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    config['excel_abbreviate'] = val;
+                    _configsByFolder[folderKey] = config;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/$folderKey/excel_abbreviate');
+                  await ref.set(val);
+                },
+              ),
+              // Compression Threshold Input for Excel
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: TextFormField(
+                  controller: _excelThresholdCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Excel Compression Threshold',
+                    hintText: 'Enter a number > 0',
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  onChanged: (val) async {
+                    final numVal = int.tryParse(val);
+                    if (numVal == null || numVal <= 0) {
+                      return;
+                    }
+                    setState(() {
+                      config['excel_threshold'] = numVal;
+                      _configsByFolder[folderKey] = config;
+                    });
+                    final ref = DatabaseModeService.ref('settings/report_format/$folderKey/excel_threshold');
+                    await ref.set(numVal);
+                  },
+                ),
+              ),
+            ],
           ),
         ),
+        if (!widget.isViolationMode) ...[
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: _kCopper,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ReportFormatConfigScreen(
+                      isViolationMode: true,
+                      folderIdOverride: folderKey,
+                    ),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.settings_outlined, size: 16),
+              label: Text(
+                'Configure "If Constraint is Violated"',
+                style: GoogleFonts.inter(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
