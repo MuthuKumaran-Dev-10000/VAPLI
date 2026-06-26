@@ -20,6 +20,8 @@ class _AlertModel {
   final bool acknowledged;
   final bool isLive;
   final String status;
+  final String readingId; // 🔖 Added for lookup in reports
+  final String ifThen; // 🔖 Added for IF-THEN detail
 
   _AlertModel({
     required this.id,
@@ -41,6 +43,8 @@ class _AlertModel {
     required this.acknowledged,
     required this.isLive,
     required this.status,
+    this.readingId = '', // 🔖 Added for lookup in reports
+    this.ifThen = '', // 🔖 Added for IF-THEN detail
   });
 
   factory _AlertModel.fromMap(Map<dynamic, dynamic> m) => _AlertModel(
@@ -63,6 +67,8 @@ class _AlertModel {
         acknowledged: m['acknowledged'] == true,
         isLive: m['live'] == true,
         status: m['status']?.toString() ?? 'active',
+        readingId: m['reading_id']?.toString() ?? '', // 🔖 Added for lookup in reports
+        ifThen: m['if_then']?.toString() ?? '', // 🔖 Added for IF-THEN detail
       );
 }
 

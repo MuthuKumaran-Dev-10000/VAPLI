@@ -87,6 +87,7 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   final TextEditingController _excelThresholdCtrl = TextEditingController();
   String _stripPosition = 'start';
   final Map<String, bool> _expandedParams = {};
+  final ScrollController _scrollController = ScrollController();
   Timer? _debounceTimer;
 
   @override
@@ -101,6 +102,7 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
     _stripTextCtrl.dispose();
     _pdfThresholdCtrl.dispose();
     _excelThresholdCtrl.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -192,9 +194,7 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   String getParamUniqueKey(Map<String, dynamic> p) {
     final name = (p['label'] ?? p['name'] ?? '').toString().trim();
     final type = (p['type'] ?? 'text').toString().trim();
-    final options = List<String>.from(p['options'] ?? []);
-    options.sort();
-    return '${name}_${type}_${options.join(",")}';
+    return '${name}_${type}';
   }
 
   // Get sorted list of parameters for the current level
@@ -568,43 +568,48 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
                 const Divider(height: 1, color: _kBorder),
 
                 Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.all(16),
-                    children: [
-                      if (!widget.isViolationMode) ...[
-                        // 2. Folder Navigation List (Drill deeper)
-                        _buildFolderBrowsingList(),
+                  child: Scrollbar(
+                    controller: _scrollController,
+                    thumbVisibility: true,
+                    child: ListView(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        if (!widget.isViolationMode) ...[
+                          // 2. Folder Navigation List (Drill deeper)
+                          _buildFolderBrowsingList(),
 
-                        const SizedBox(height: 16),
-                        const Divider(color: _kBorder),
-                        const SizedBox(height: 8),
+                          const SizedBox(height: 16),
+                          const Divider(color: _kBorder),
+                          const SizedBox(height: 8),
 
-                        // 3. Name/Text Stripping Configuration
-                        _buildTextStrippingSection(),
+                          // 3. Name/Text Stripping Configuration
+                          _buildTextStrippingSection(),
 
-                        const SizedBox(height: 16),
-                        const Divider(color: _kBorder),
-                        const SizedBox(height: 8),
+                          const SizedBox(height: 16),
+                          const Divider(color: _kBorder),
+                          const SizedBox(height: 8),
 
-                        // General Settings (Include Timestamp Toggle)
-                        _buildGeneralSettingsSection(),
+                          // General Settings (Include Timestamp Toggle)
+                          _buildGeneralSettingsSection(),
 
-                        const SizedBox(height: 16),
-                        const Divider(color: _kBorder),
-                        const SizedBox(height: 8),
-                      ] else ...[
-                        Text(
-                          'Configure the columns to be displayed when a constraint is violated in reports generated under this group.',
-                          style: GoogleFonts.inter(color: _kSub, fontSize: 13),
-                        ),
-                        const SizedBox(height: 16),
-                        const Divider(color: _kBorder),
-                        const SizedBox(height: 16),
+                          const SizedBox(height: 16),
+                          const Divider(color: _kBorder),
+                          const SizedBox(height: 8),
+                        ] else ...[
+                          Text(
+                            'Configure the columns to be displayed when a constraint is violated in reports generated under this group.',
+                            style: GoogleFonts.inter(color: _kSub, fontSize: 13),
+                          ),
+                          const SizedBox(height: 16),
+                          const Divider(color: _kBorder),
+                          const SizedBox(height: 16),
+                        ],
+
+                        // 4. Unique Parameters List for columns config
+                        _buildParametersConfigSection(),
                       ],
-
-                      // 4. Unique Parameters List for columns config
-                      _buildParametersConfigSection(),
-                    ],
+                    ),
                   ),
                 ),
 
@@ -907,7 +912,7 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 30),
           child: Text(
-            'No inspection parameters found in this folder/subfolders.',
+            'no parameter exist',
             style: GoogleFonts.inter(color: _kSub, fontSize: 13),
           ),
         ),
@@ -1723,7 +1728,7 @@ class _ReportMockupPreviewModalState extends State<_ReportMockupPreviewModal> {
         final label = (prop['label'] ?? prop['name'] ?? '').toString();
         final options = List<String>.from(prop['options'] ?? []);
         options.sort();
-        final key = '${label.trim()}_${type.trim()}_${options.join(",")}';
+        final key = '${label.trim()}_${type.trim()}';
 
         if (!discovered.containsKey(key)) {
           discovered[key] = {

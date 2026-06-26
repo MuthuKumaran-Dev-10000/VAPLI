@@ -46,6 +46,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:lubrication_indicator/core/services/report_storage_service.dart';
 import 'package:lubrication_indicator/core/services/abbreviation_service.dart';
+import 'package:lubrication_indicator/core/utils/file_folder_opener.dart';
 
 import 'package:lubrication_indicator/features/dashboard/data/models/dashboard_stats_model.dart';
 import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';

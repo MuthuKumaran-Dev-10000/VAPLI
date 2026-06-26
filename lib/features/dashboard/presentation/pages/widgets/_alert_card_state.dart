@@ -130,6 +130,7 @@ class _AlertCardState extends State<_AlertCard> {
   '${a.paramLabel} ${a.op} ${a.paramValue} then ${a.message}',
 ),
                   if (a.imageUrl.isNotEmpty) _DetailRow('Image', a.imageUrl),
+                  if (a.ifThen.isNotEmpty) _DetailRow('IF-THEN Detail', a.ifThen),
                   _DetailRow('Alert ID', a.id),
 
                   const SizedBox(height: 14),

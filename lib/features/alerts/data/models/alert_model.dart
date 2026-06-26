@@ -69,6 +69,7 @@ class AlertModel {
   final String? resolvedAt;
   final String? resolvedBy;
   final String  status; // "active" | "COMPLETED"
+  final String? ifThen; // 🔖 Added for IF-THEN detail
 
   const AlertModel({
     required this.id,
@@ -98,6 +99,7 @@ class AlertModel {
     this.resolvedAt,
     this.resolvedBy,
     this.status = 'active',
+    this.ifThen, // 🔖 Added for IF-THEN detail
   });
 
   // ── Serialise ──────────────────────────────────────────────────────────────
@@ -130,6 +132,7 @@ class AlertModel {
     'resolved_at':               resolvedAt,
     'resolved_by':               resolvedBy,
     'status':                    status,
+    'if_then':                   ifThen, // 🔖 Added for IF-THEN detail
   };
 
   factory AlertModel.fromMap(String id, Map<dynamic, dynamic> m) {
@@ -165,6 +168,7 @@ class AlertModel {
       resolvedAt:                m['resolved_at']?.toString(),
       resolvedBy:                m['resolved_by']?.toString(),
       status:                    m['status']?.toString()              ?? 'active',
+      ifThen:                    m['if_then']?.toString(), // 🔖 Added for IF-THEN detail
     );
   }
 
@@ -173,6 +177,7 @@ class AlertModel {
     String?  resolvedAt,
     String?  resolvedBy,
     String?  status,
+    String?  ifThen, // 🔖 Added for IF-THEN detail
   }) => AlertModel(
     id:                        id,
     tankId:                    tankId,
@@ -201,5 +206,6 @@ class AlertModel {
     resolvedAt:                resolvedAt ?? this.resolvedAt,
     resolvedBy:                resolvedBy ?? this.resolvedBy,
     status:                    status ?? this.status,
+    ifThen:                    ifThen ?? this.ifThen, // 🔖 Added for IF-THEN detail
   );
 }

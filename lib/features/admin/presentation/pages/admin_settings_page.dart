@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:lubrication_indicator/core/services/database_mode_service.dart';
 import 'package:lubrication_indicator/core/services/app_settings_service.dart';
 import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repository.dart';
@@ -34,16 +36,50 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
   bool _showActiveAlerts = true;
   bool _showInspectionCompliance = true;
 
+  final _reportEmailsCtrl = TextEditingController();
+  final _alertsEmailsCtrl = TextEditingController();
+  final _missingTanksEmailsCtrl = TextEditingController();
+
   @override
   void initState() {
     super.initState();
     _load();
   }
 
+  @override
+  void dispose() {
+    _reportEmailsCtrl.dispose();
+    _alertsEmailsCtrl.dispose();
+    _missingTanksEmailsCtrl.dispose();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     final timeout = await AppSettingsService.getSessionTimeout();
     final tanks = await _tankRepo.getAllTanks();
     final dashSettings = await AppSettingsService.getDashboardDisplaySettings();
+
+    final reportEmailsSnap = await DatabaseModeService.ref('settings/Report_Recievers/Emailids').get();
+    final alertsEmailsSnap = await DatabaseModeService.ref('settings/Alerts_Recievers/Emailids').get();
+    final missingTanksEmailsSnap = await DatabaseModeService.ref('settings/Missing Tanks_Recievers/Emailids').get();
+
+    String parseEmails(DataSnapshot snap) {
+      if (!snap.exists || snap.value == null) return '';
+      if (snap.value is List) {
+        final list = List<dynamic>.from(snap.value as List);
+        return list.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).join(', ');
+      }
+      if (snap.value is Map) {
+        final map = Map<dynamic, dynamic>.from(snap.value as Map);
+        return map.values.map((e) => e.toString().trim()).where((e) => e.isNotEmpty).join(', ');
+      }
+      return snap.value.toString();
+    }
+
+    final reportEmailsStr = parseEmails(reportEmailsSnap);
+    final alertsEmailsStr = parseEmails(alertsEmailsSnap);
+    final missingTanksEmailsStr = parseEmails(missingTanksEmailsSnap);
+
     if (!mounted) return;
     setState(() {
       _noTimeout = timeout == null;
@@ -53,6 +89,9 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
       _showCompletedAlerts = dashSettings['show_completed_alerts'] ?? true;
       _showActiveAlerts = dashSettings['show_active_alerts'] ?? true;
       _showInspectionCompliance = dashSettings['show_inspection_compliance'] ?? true;
+      _reportEmailsCtrl.text = reportEmailsStr;
+      _alertsEmailsCtrl.text = alertsEmailsStr;
+      _missingTanksEmailsCtrl.text = missingTanksEmailsStr;
       _loading = false;
     });
   }
@@ -101,6 +140,140 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
     await _load();
   }
 
+  Future<void> _saveEmailsSilent(String path, String rawText) async {
+    final emails = rawText
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    try {
+      await DatabaseModeService.ref(path).set(emails);
+    } catch (_) {}
+  }
+
+  Future<void> _saveEmails(String path, String rawText) async {
+    final emails = rawText
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+    try {
+      await DatabaseModeService.ref(path).set(emails);
+      if (mounted) {
+        if (path == 'settings/Report_Recievers/Emailids') {
+          _reportEmailsCtrl.clear();
+        } else if (path == 'settings/Alerts_Recievers/Emailids') {
+          _alertsEmailsCtrl.clear();
+        } else if (path == 'settings/Missing Tanks_Recievers/Emailids') {
+          _missingTanksEmailsCtrl.clear();
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Emails saved successfully')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save emails: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _viewEmails(String title, String path) async {
+    final snap = await DatabaseModeService.ref(path).get();
+    List<String> emails = [];
+    if (snap.exists && snap.value != null) {
+      if (snap.value is List) {
+        emails = List<dynamic>.from(snap.value as List)
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      } else if (snap.value is Map) {
+        emails = Map<dynamic, dynamic>.from(snap.value as Map)
+            .values
+            .map((e) => e.toString().trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+      }
+    }
+
+    if (!mounted) return;
+
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: emails.isEmpty
+            ? const Text('No email addresses stored.')
+            : SizedBox(
+                width: double.maxFinite,
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: emails.length,
+                  itemBuilder: (ctx, idx) => ListTile(
+                    leading: const Icon(Icons.email_outlined, color: Color(0xFFCB8C3E)),
+                    title: Text(emails[idx]),
+                    dense: true,
+                  ),
+                ),
+              ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmailSettingsField({
+    required String label,
+    required TextEditingController controller,
+    required String path,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: controller,
+                maxLines: null,
+                keyboardType: TextInputType.multiline,
+                decoration: const InputDecoration(
+                  hintText: 'e.g. user1@email.com, user2@email.com',
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                ),
+                enabled: widget.canEdit,
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              icon: const Icon(Icons.visibility_outlined, color: Color(0xFFCB8C3E)),
+              tooltip: 'View Emails',
+              onPressed: () => _viewEmails(label, path),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              icon: const Icon(Icons.save_outlined, color: Colors.blue),
+              tooltip: 'Save',
+              onPressed: widget.canEdit ? () => _saveEmails(path, controller.text) : null,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
     await AppSettingsService.setSessionTimeout(
@@ -113,6 +286,16 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
       showActiveAlerts: _showActiveAlerts,
       showInspectionCompliance: _showInspectionCompliance,
     );
+
+    // Save the three email lists:
+    await _saveEmailsSilent('settings/Report_Recievers/Emailids', _reportEmailsCtrl.text);
+    await _saveEmailsSilent('settings/Alerts_Recievers/Emailids', _alertsEmailsCtrl.text);
+    await _saveEmailsSilent('settings/Missing Tanks_Recievers/Emailids', _missingTanksEmailsCtrl.text);
+
+    _reportEmailsCtrl.clear();
+    _alertsEmailsCtrl.clear();
+    _missingTanksEmailsCtrl.clear();
+
     await widget.onSettingsSaved?.call(
       noTimeout: _noTimeout,
       minutes: _minutes,
@@ -225,6 +408,36 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
             onPressed: (widget.canEdit && !_saving) ? _save : null,
             icon: const Icon(Icons.save_outlined),
             label: Text(_saving ? 'Saving...' : 'Save'),
+          ),
+          const SizedBox(height: 20),
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text(
+            'Email Automation Receivers',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Configure email addresses for automated reports, active alerts, and missing tank schedules (separated by commas).',
+            style: TextStyle(color: Colors.grey, fontSize: 12),
+          ),
+          const SizedBox(height: 16),
+          _buildEmailSettingsField(
+            label: 'Report Receivers',
+            controller: _reportEmailsCtrl,
+            path: 'settings/Report_Recievers/Emailids',
+          ),
+          const SizedBox(height: 16),
+          _buildEmailSettingsField(
+            label: 'Alerts Receivers',
+            controller: _alertsEmailsCtrl,
+            path: 'settings/Alerts_Recievers/Emailids',
+          ),
+          const SizedBox(height: 16),
+          _buildEmailSettingsField(
+            label: 'Missing Tanks Receivers',
+            controller: _missingTanksEmailsCtrl,
+            path: 'settings/Missing Tanks_Recievers/Emailids',
           ),
           const SizedBox(height: 20),
           const Divider(),

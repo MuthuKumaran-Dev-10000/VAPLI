@@ -1153,6 +1153,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       'acknowledged': false,
       'live': true,
       'status': 'active', // 🔖 Added for Alert Lifecycle Bug Fix
+      'if_then': _buildIfThenString(paramId, constraintId, _collectValues()), // 🔖 Added for IF-THEN detail
     };
 
     try {
@@ -1367,10 +1368,13 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final alertId = _liveAlertIds[paramId]?[constraintId];
     if (alertId == null) return;
     try {
+      final currentValues = _collectValues();
+      final ifThenStr = _buildIfThenString(paramId, constraintId, currentValues);
       final update = {
         'param_value': newValue.toString(),
         'timestamp': DateTime.now().toIso8601String(),
-        'all_values_snapshot': _collectValues(),
+        'all_values_snapshot': currentValues,
+        if (ifThenStr.isNotEmpty) 'if_then': ifThenStr,
       };
       await _ref('alerts/$alertId').update(update);
       await _ref('alerts_full/$alertId').update(update);
@@ -1587,6 +1591,24 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         }
       }
 
+      // 🔖 Store IF-THEN details inside inspection_values/if_then map
+      final Map<String, String> ifThenMap = {};
+      for (final p in _allActiveProps()) {
+        final id = p['id'] as String;
+        final label = p['label'] as String? ?? id;
+        final val = _currentValue(id, p['type'] as String? ?? 'text', p);
+        final violations = _evaluateAllConstraints(p, val);
+        for (final v in violations) {
+          final ifThenStr = _buildIfThenString(id, v.constraintId, inspVals);
+          if (ifThenStr.isNotEmpty) {
+            ifThenMap[label] = ifThenStr;
+          }
+        }
+      }
+      if (ifThenMap.isNotEmpty) {
+        inspVals['if_then'] = ifThenMap;
+      }
+
       final primaryImageUrl = _paramPhotoUrl.values
               .firstWhere((u) => u != null, orElse: () => null) ??
           '';
@@ -1624,16 +1646,27 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
         } catch (_) {}
       }
 
-      for (final paramMap in _liveAlertIds.values) {
-        for (final alertId in paramMap.values) {
+      for (final entry in _liveAlertIds.entries) {
+        final paramId = entry.key;
+        for (final item in entry.value.entries) {
+          final constraintId = item.key;
+          final alertId = item.value;
           try {
+            final ifThenStr = _buildIfThenString(paramId, constraintId, inspVals);
             await _ref('alerts/$alertId').update({
               'live': false,
               'reading_id': reading.id ?? '',
+              if (ifThenStr.isNotEmpty) 'if_then': ifThenStr,
+            });
+            await _ref('violations/$alertId').update({
+              'live': false,
+              'reading_id': reading.id ?? '',
+              if (ifThenStr.isNotEmpty) 'if_then': ifThenStr,
             });
             await _ref('alerts_full/$alertId').update({
               'live': false,
               'reading_id': reading.id ?? '',
+              if (ifThenStr.isNotEmpty) 'if_then': ifThenStr,
             });
           } catch (_) {}
         }
@@ -2978,6 +3011,50 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       return value.map(_deepCast).toList();
     }
     return value;
+  }
+
+  String _buildIfThenString(String paramId, String constraintId, Map<String, dynamic> currentValues) {
+    final p = _getPropById(paramId);
+    if (p.isEmpty) return '';
+    final label = p['label'] as String? ?? paramId;
+
+    final constraints = p['constraints'] as List?;
+    Map<String, dynamic>? cMap;
+    if (constraints != null) {
+      for (final c in constraints) {
+        if (c['id'] == constraintId) {
+          cMap = _deepCast(c) as Map<String, dynamic>;
+          break;
+        }
+      }
+    }
+    if (cMap == null) return '';
+
+    final op = cMap['op']?.toString() ?? '';
+    final threshold = cMap['value']?.toString() ?? '';
+    final condWorkflow = cMap['then_workflow_enabled'] == true;
+    final thenProps = cMap['then_properties'] as List?;
+
+    if (condWorkflow && thenProps != null && thenProps.isNotEmpty) {
+      final List<String> parts = [];
+      for (final childProp in thenProps) {
+        final childMap = _deepCast(childProp) as Map<String, dynamic>;
+        final childLabel = childMap['label'] as String? ?? childMap['id'] as String;
+        dynamic val = currentValues[childLabel];
+        if (val != null) {
+          if (val is Map) {
+            final left = val['left']?.toString().trim() ?? '';
+            final right = val['right']?.toString().trim() ?? '';
+            val = '$left / $right';
+          }
+          parts.add('$childLabel - $val');
+        }
+      }
+      if (parts.isNotEmpty) {
+        return 'IF $label $op $threshold THEN\n${parts.join(", ")}';
+      }
+    }
+    return '';
   }
 
   Map<String, dynamic> _getPropById(String id) {

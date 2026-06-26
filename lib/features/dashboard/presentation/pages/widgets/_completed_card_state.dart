@@ -73,6 +73,7 @@ class _CompletedCardState extends State<_CompletedCard> {
                 _DetailRow('Alert Time', _fmtTs(a.timestamp)),
                 _DetailRow('Completed By', widget.task.completedBy),
                 _DetailRow('Completed At', _fmtTs(widget.task.completedAt)),
+                if (a.ifThen.isNotEmpty) _DetailRow('IF-THEN Detail', a.ifThen),
                 _DetailRow('Alert ID', a.id),
               ],
             ),

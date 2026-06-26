@@ -1531,7 +1531,7 @@ class _DashboardTabState extends State<DashboardTab> {
         final label = (prop['label'] ?? prop['name'] ?? '').toString();
         final options = List<String>.from(prop['options'] ?? []);
         options.sort();
-        final key = '${label.trim()}_${type.trim()}_${options.join(",")}';
+        final key = '${label.trim()}_${type.trim()}';
 
         if (!discovered.containsKey(key)) {
           discovered[key] = {
@@ -1630,7 +1630,7 @@ class _DashboardTabState extends State<DashboardTab> {
         final label = (prop['label'] ?? prop['name'] ?? '').toString();
         final options = List<String>.from(prop['options'] ?? []);
         options.sort();
-        final key = '${label.trim()}_${type.trim()}_${options.join(",")}';
+        final key = '${label.trim()}_${type.trim()}';
 
         if (!discovered.containsKey(key)) {
           discovered[key] = {
@@ -3199,6 +3199,8 @@ class _DashboardTabState extends State<DashboardTab> {
         'acknowledged': true,
         'live': alert.isLive,
         'status': 'COMPLETED', // 🔖 Added for Alert Lifecycle Bug Fix
+        'if_then': alert.ifThen,
+        'reading_id': alert.readingId,
       },
     });
 
@@ -4163,7 +4165,7 @@ class _DashboardTabState extends State<DashboardTab> {
                         ),
                         onPressed: () async {
                           try {
-                            await OpenFilex.open(file.path);
+                            await FileFolderOpener.openFile(file.path);
                           } catch (e) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Could not open file: $e')),
@@ -4195,22 +4197,13 @@ class _DashboardTabState extends State<DashboardTab> {
                           final parentPath = file.parent.path;
                           try {
                             await Clipboard.setData(ClipboardData(text: parentPath));
-                            final result = await OpenFilex.open(parentPath);
-                            if (result.type != ResultType.done) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Folder path copied! Saved to: $parentPath'),
-                                  duration: const Duration(seconds: 4),
-                                ),
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Opening folder and path copied!'),
-                                  duration: const Duration(seconds: 2),
-                                ),
-                              );
-                            }
+                            await FileFolderOpener.openFolder(parentPath);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Opening folder and path copied!'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
                           } catch (e) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Folder path copied! Saved to: $parentPath')),
@@ -4317,6 +4310,33 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
+  String _getIfThenForTank(String tankId, String? capturedAt, ReadingModel? reading) {
+    for (final a in _allAlerts) {
+      if (a.tankId == tankId) {
+        bool match = false;
+        if (reading != null && reading.id != null && reading.id!.isNotEmpty && a.readingId == reading.id) {
+          match = true;
+        } else if (reading != null && a.timestamp == reading.capturedAt) {
+          match = true;
+        } else if (capturedAt != null) {
+          try {
+            final dtA = DateTime.parse(a.timestamp).toLocal();
+            final dtCap = DateTime.parse(capturedAt).toLocal();
+            if (dtA.year == dtCap.year && dtA.month == dtCap.month && dtA.day == dtCap.day) {
+              match = true;
+            }
+          } catch (_) {
+            if (a.timestamp == capturedAt) match = true;
+          }
+        }
+        if (match && a.ifThen.isNotEmpty) {
+          return a.ifThen;
+        }
+      }
+    }
+    return '';
+  }
+
   pw.Widget _buildPdfTable({
     required String title,
     required List<TankModel> tanks,
@@ -4329,8 +4349,20 @@ class _DashboardTabState extends State<DashboardTab> {
     required AbbreviationService abbrService,
     required String folderId,
   }) {
-    final int baseColumnsCount = 1 + params.length + 1; // Asset Name + params + Images
-    
+    // Check if any row has an IF-THEN alert value
+    bool hasIfThen = false;
+    if (isToday) {
+      hasIfThen = tanks.any((t) {
+        final stats = statsByTank[t.id];
+        if (stats == null || stats.lastCapturedAt == null) return false;
+        return _getIfThenForTank(t.id, stats.lastCapturedAt, null).isNotEmpty;
+      });
+    } else {
+      hasIfThen = readings.any((r) {
+        return _getIfThenForTank(r.tankId, r.capturedAt, r).isNotEmpty;
+      });
+    }
+
     bool hasDuplicateReason = false;
     if (isToday) {
       hasDuplicateReason = tanks.any((t) {
@@ -4344,7 +4376,7 @@ class _DashboardTabState extends State<DashboardTab> {
       });
     }
 
-    final int totalCols = baseColumnsCount + (hasDuplicateReason ? 1 : 0);
+    final int totalCols = 1 + params.length + (hasIfThen ? 1 : 0) + (hasDuplicateReason ? 1 : 0);
     final folderConfig = formatConfigs[folderId] as Map?;
     final pdfAbbreviate = folderConfig?['pdf_abbreviate'] != false;
     final int pdfThreshold = (folderConfig?['pdf_threshold'] as num?)?.toInt() ?? 6;
@@ -4355,7 +4387,9 @@ class _DashboardTabState extends State<DashboardTab> {
       final label = p['label'].toString();
       headers.add(compress ? abbrService.abbreviate(label, isHeader: true) : label);
     }
-    headers.add('Images');
+    if (hasIfThen) {
+      headers.add(compress ? abbrService.abbreviate('IF-THEN', isHeader: true) : 'IF-THEN');
+    }
     if (hasDuplicateReason) {
       headers.add(compress ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason');
     }
@@ -4443,11 +4477,12 @@ class _DashboardTabState extends State<DashboardTab> {
             );
           }
 
-          final allImages = <String>[];
-          if (stats.lastReading['image_url'] != null && stats.lastReading['image_url'].toString().isNotEmpty) {
-            allImages.add(stats.lastReading['image_url'].toString());
+
+
+          if (hasIfThen) {
+            final ifThenVal = _getIfThenForTank(tank.id, stats.lastCapturedAt, null);
+            cells.add(_pdfCell(ifThenVal.isNotEmpty ? ifThenVal : '-', fill: rowBg, fontSize: compress ? 6.0 : 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
           }
-          cells.add(_buildImagesCell(allImages, fill: rowBg));
 
           if (hasDuplicateReason) {
             var reason = stats.lastDuplicateReason ?? '-';
@@ -4542,15 +4577,12 @@ class _DashboardTabState extends State<DashboardTab> {
               );
             }
 
-            final allImages = <String>{};
-            if (r.imageUrl != null && r.imageUrl!.isNotEmpty) {
-              allImages.add(r.imageUrl!);
+
+
+            if (hasIfThen) {
+              final ifThenVal = _getIfThenForTank(r.tankId, r.capturedAt, r);
+              cells.add(_pdfCell(ifThenVal.isNotEmpty ? ifThenVal : '-', fill: rowBg, fontSize: compress ? 6.0 : 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
             }
-            for (final p in params) {
-              final paramImages = _getParamImages(r.inspectionValues, _getTankParamProp(tank, p['label'].toString()) ?? p);
-              allImages.addAll(paramImages);
-            }
-            cells.add(_buildImagesCell(allImages.toList(), fill: rowBg));
 
             if (hasDuplicateReason) {
               var reason = r.inspectionValues['duplicate_reason']?.toString() ?? '-';
@@ -4566,16 +4598,22 @@ class _DashboardTabState extends State<DashboardTab> {
       }
     }
 
-    final Map<int, pw.TableColumnWidth> colWidths = {
-      0: const pw.FlexColumnWidth(1.3),
-    };
-    for (int i = 1; i <= params.length; i++) {
-      colWidths[i] = const pw.FlexColumnWidth(1.0);
+    final List<pw.TableColumnWidth> colWidthList = [
+      const pw.FlexColumnWidth(1.3), // Asset Name
+    ];
+    for (int i = 0; i < params.length; i++) {
+      colWidthList.add(const pw.FlexColumnWidth(1.0)); // Params
     }
-    colWidths[params.length + 1] = const pw.FlexColumnWidth(0.8);
+    // if (hasImages) {
+    //   colWidthList.add(const pw.FlexColumnWidth(0.8)); // Images
+    // }
+    if (hasIfThen) {
+      colWidthList.add(const pw.FlexColumnWidth(1.5)); // IF-THEN
+    }
     if (hasDuplicateReason) {
-      colWidths[params.length + 2] = const pw.FlexColumnWidth(1.2);
+      colWidthList.add(const pw.FlexColumnWidth(1.2)); // Duplicate Reason
     }
+    final Map<int, pw.TableColumnWidth> colWidths = colWidthList.asMap();
 
     return pw.Table(
       defaultVerticalAlignment: pw.TableCellVerticalAlignment.full,
@@ -5053,6 +5091,19 @@ class _DashboardTabState extends State<DashboardTab> {
       sheet.appendRow([xl.TextCellValue(title)]);
       currentRow++;
 
+      bool hasIfThen = false;
+      if (isToday) {
+        hasIfThen = tanks.any((t) {
+          final stats = statsByTank[t.id];
+          if (stats == null || stats.lastCapturedAt == null) return false;
+          return _getIfThenForTank(t.id, stats.lastCapturedAt, null).isNotEmpty;
+        });
+      } else {
+        hasIfThen = tableReadings.any((r) {
+          return _getIfThenForTank(r.tankId, r.capturedAt, r).isNotEmpty;
+        });
+      }
+
       bool hasDuplicateReason = false;
       if (isToday) {
         hasDuplicateReason = tanks.any((t) {
@@ -5066,7 +5117,7 @@ class _DashboardTabState extends State<DashboardTab> {
         });
       }
 
-      final int totalCols = 1 + params.length + (hasDuplicateReason ? 1 : 0);
+      final int totalCols = 1 + params.length + (hasIfThen ? 1 : 0) + (hasDuplicateReason ? 1 : 0);
       final folderConfig = formatConfigs[folderNode.id] as Map?;
       final excelAbbreviate = folderConfig?['excel_abbreviate'] != false;
       final int excelThreshold = (folderConfig?['excel_threshold'] as num?)?.toInt() ?? 12;
@@ -5076,6 +5127,9 @@ class _DashboardTabState extends State<DashboardTab> {
         xl.TextCellValue('Asset Name'),
         ...params.map((p) => xl.TextCellValue(compress ? abbrService.abbreviate(p['label'].toString(), isHeader: true) : p['label'].toString())),
       ];
+      if (hasIfThen) {
+        headerCells.add(xl.TextCellValue(compress ? abbrService.abbreviate('IF-THEN', isHeader: true) : 'IF-THEN'));
+      }
       if (hasDuplicateReason) {
         headerCells.add(xl.TextCellValue(compress ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason'));
       }
@@ -5135,6 +5189,13 @@ class _DashboardTabState extends State<DashboardTab> {
                 return xl.TextCellValue(cellVal);
               }),
             ];
+
+
+
+            if (hasIfThen) {
+              final ifThenVal = _getIfThenForTank(tank.id, stats.lastCapturedAt, null);
+              rowCells.add(xl.TextCellValue(ifThenVal.isNotEmpty ? ifThenVal : '-'));
+            }
 
             if (hasDuplicateReason) {
               var reason = stats.lastDuplicateReason ?? '-';
@@ -5208,6 +5269,13 @@ class _DashboardTabState extends State<DashboardTab> {
                   return xl.TextCellValue(cellVal);
                 }),
               ];
+
+
+
+              if (hasIfThen) {
+                final ifThenVal = _getIfThenForTank(r.tankId, r.capturedAt, r);
+                rowCells.add(xl.TextCellValue(ifThenVal.isNotEmpty ? ifThenVal : '-'));
+              }
 
               if (hasDuplicateReason) {
                 var reason = r.inspectionValues['duplicate_reason']?.toString() ?? '-';

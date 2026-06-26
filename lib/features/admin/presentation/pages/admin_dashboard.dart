@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:async';
 import 'package:intl/intl.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:lubrication_indicator/core/utils/file_folder_opener.dart';
 import 'package:flutter/services.dart';
 import 'package:lubrication_indicator/core/services/report_storage_service.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -25,6 +26,10 @@ import 'package:lubrication_indicator/features/admin/presentation/pages/admin_se
 import 'package:lubrication_indicator/features/admin/presentation/pages/admin_audit_logs_page.dart';
 import 'package:lubrication_indicator/features/auth/data/models/user_model.dart';
 
+import 'package:excel/excel.dart' as xl;
+import 'package:lubrication_indicator/features/tanks/data/repositories/tank_tree_repository.dart';
+import 'package:lubrication_indicator/features/tanks/data/models/tank_node_model.dart';
+import 'package:lubrication_indicator/features/tanks/data/models/tank_model.dart';
 import 'package:lubrication_indicator/features/tanks/presentation/pages/tank_browser_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,6 +352,60 @@ class _AdminDashboardState extends State<AdminDashboard>
   }
 
   Future<void> _exportStructure() async {
+    final format = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF141618),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: const BorderSide(color: Color(0xFF252830), width: 1.5),
+        ),
+        title: Text(
+          'Export Tank Structure',
+          style: GoogleFonts.spaceGrotesk(
+            color: const Color(0xFFF0EEE9),
+            fontWeight: FontWeight.bold,
+            fontSize: 18,
+          ),
+        ),
+        content: Text(
+          'Select the format to export your asset hierarchy and parameter definitions:',
+          style: GoogleFonts.dmSans(color: const Color(0xFF8A8F9C), fontSize: 13),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF8A8F9C))),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, 'json'),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFF252830)),
+            ),
+            child: const Text('JSON', style: TextStyle(color: Color(0xFFCB8C3E))),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, 'excel'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFCB8C3E),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Excel Spreadsheet'),
+          ),
+        ],
+      ),
+    );
+
+    if (format == null) return;
+
+    if (format == 'json') {
+      await _exportStructureJson();
+    } else {
+      await _exportStructureExcel();
+    }
+  }
+
+  Future<void> _exportStructureJson() async {
     try {
       final tanksSnap = await DatabaseModeService.ref('tanks').get();
       final treeSnap = await DatabaseModeService.ref('tank_tree').get();
@@ -392,6 +451,648 @@ class _AdminDashboardState extends State<AdminDashboard>
           ),
           content: Text(
             'Unable to save report. No writable storage location was found. The report was not lost. Please check device storage permissions and available disk space.\n\nDetails: $e',
+            style: const TextStyle(color: Color(0xFF8A8F9C), fontSize: 13),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close', style: TextStyle(color: Color(0xFF8A8F9C))),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  Future<void> _exportStructureExcel() async {
+    try {
+      final excel = xl.Excel.createExcel();
+      
+      // Remove Sheet1
+      if (excel.tables.containsKey('Sheet1')) {
+        excel.delete('Sheet1');
+      }
+
+      final overviewSheet = excel['Structure_Overview'];
+      final explanationSheet = excel['Parameter_Explanation'];
+      final thenSheet = excel['THEN_Parameters'];
+
+      // 1. Fetch data from Firebase
+      final nodes = await TankTreeRepository().fetchAll();
+      final tanksSnap = await DatabaseModeService.ref('tanks').get();
+      final tanks = <String, TankModel>{};
+      if (tanksSnap.exists && tanksSnap.value is Map) {
+        final rawTanks = Map<dynamic, dynamic>.from(tanksSnap.value as Map);
+        rawTanks.forEach((k, v) {
+          if (v is Map) {
+            final m = Map<String, dynamic>.from(v);
+            if (!m.containsKey('id')) {
+              m['id'] = k.toString();
+            }
+            tanks[k.toString()] = TankModel.fromMap(m);
+          }
+        });
+      }
+
+      // 2. Separate helper functions for parent properties vs THEN (nested) properties
+      List<Map<String, dynamic>> getParentProperties(List<dynamic> props) {
+        final list = <Map<String, dynamic>>[];
+        for (final p in props) {
+          if (p is Map) {
+            list.add(Map<String, dynamic>.from(p));
+          }
+        }
+        return list;
+      }
+
+      List<Map<String, dynamic>> getThenProperties(List<dynamic> props) {
+        final list = <Map<String, dynamic>>[];
+        void collect(List<dynamic> parentProps) {
+          for (final p in parentProps) {
+            if (p is! Map) continue;
+            final constraints = p['constraints'] as List?;
+            if (constraints != null) {
+              for (final c in constraints) {
+                if (c is! Map) continue;
+                final thenProps = c['then_properties'] as List?;
+                if (thenProps != null) {
+                  for (final tp in thenProps) {
+                    if (tp is Map) {
+                      final tpMap = Map<String, dynamic>.from(tp);
+                      list.add(tpMap);
+                      collect([tpMap]);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        collect(props);
+        return list;
+      }
+
+      String getCanonicalKey(Map<String, dynamic> p) {
+        final name = p['label']?.toString() ?? '';
+        final type = p['type']?.toString() ?? '';
+        final required = p['required'] == true;
+        final hint = p['hint']?.toString() ?? '';
+        final options = (p['options'] as List?)?.map((e) => e.toString()).join(',') ?? '';
+        final autofill = p['autofill'] == true;
+        final expr = p['autofill_expression']?.toString() ?? '';
+        
+        final constraints = (p['constraints'] as List?)?.map((c) {
+          if (c is! Map) return c.toString();
+          final op = c['op']?.toString() ?? '';
+          final val = c['value']?.toString() ?? '';
+          final title = c['alert_title']?.toString() ?? '';
+          final sev = c['severity']?.toString() ?? '';
+          final thenWorkflow = c['then_workflow_enabled'] == true;
+          String thenPropsStr = '';
+          if (thenWorkflow && c['then_properties'] is List) {
+            thenPropsStr = (c['then_properties'] as List)
+                .map((tp) => getCanonicalKey(Map<String, dynamic>.from(tp as Map)))
+                .join('|');
+          }
+          return '$op:$val:$title:$sev:$thenWorkflow:$thenPropsStr';
+        }).join(';') ?? '';
+
+        return '$name|$type|$required|$hint|$options|$autofill|$expr|$constraints';
+      }
+
+      // Collect unique parent and THEN parameters separately, mapping them to first referenced asset
+      final Map<String, Map<String, dynamic>> uniqueParams = {};
+      final List<String> uniqueKeysInOrder = [];
+      final Map<String, String> keyToRefAssetName = {};
+      final Map<String, String> keyToRefAssetCode = {};
+
+      tanks.values.forEach((tank) {
+        final parentProps = getParentProperties(tank.inspectionProperties);
+        for (final p in parentProps) {
+          final key = getCanonicalKey(p);
+          if (!uniqueParams.containsKey(key)) {
+            uniqueParams[key] = p;
+            uniqueKeysInOrder.add(key);
+          }
+          if (!keyToRefAssetName.containsKey(key)) {
+            keyToRefAssetName[key] = tank.tankName;
+            keyToRefAssetCode[key] = tank.tankCode;
+          }
+        }
+      });
+
+      final Map<String, Map<String, dynamic>> uniqueThenParams = {};
+      final List<String> uniqueThenKeysInOrder = [];
+
+      tanks.values.forEach((tank) {
+        final thenProps = getThenProperties(tank.inspectionProperties);
+        for (final p in thenProps) {
+          final key = getCanonicalKey(p);
+          if (!uniqueThenParams.containsKey(key)) {
+            uniqueThenParams[key] = p;
+            uniqueThenKeysInOrder.add(key);
+          }
+          if (!keyToRefAssetName.containsKey(key)) {
+            keyToRefAssetName[key] = tank.tankName;
+            keyToRefAssetCode[key] = tank.tankCode;
+          }
+        }
+      });
+
+      // Map child THEN parameters to their parent parameter key
+      final Map<String, String> childKeyToParentKey = {};
+      uniqueParams.forEach((parentKey, parentParam) {
+        final constraints = parentParam['constraints'] as List?;
+        if (constraints != null) {
+          for (final c in constraints) {
+            if (c is! Map) continue;
+            final thenProps = c['then_properties'] as List?;
+            if (thenProps != null) {
+              for (final tp in thenProps) {
+                if (tp is Map) {
+                  final childKey = getCanonicalKey(Map<String, dynamic>.from(tp));
+                  childKeyToParentKey[childKey] = parentKey;
+                }
+              }
+            }
+          }
+        }
+      });
+
+      final List<String> softColors = [
+        '#D6E4F0', // Blue
+        '#D8EAD3', // Green
+        '#FFF2CC', // Yellow
+        '#FCE5CD', // Orange
+        '#E8D8F8', // Purple
+        '#FADBD8', // Pink
+        '#D1F2EB', // Teal
+        '#D5F5E3', // Mint
+        '#E8DAEF', // Lavender
+        '#FDEBD0', // Peach
+        '#EBF5FB', // Sky
+        '#FDEDEC', // Rose
+        '#D6DBDF', // Light Grey
+        '#FCF3CF', // Light Yellow
+        '#D5D8DC', // Darker Grey
+        '#EAECEE', // Cool Grey
+        '#F5EEF8', // Light Orchid
+        '#E8F8F5', // Pale Turquoise
+        '#FEF9E7', // Pale Cream
+        '#F4ECF7', // Pale Plum
+      ];
+
+      final Map<String, String> keyToColor = {};
+      int colorCounter = 0;
+      for (final key in uniqueKeysInOrder) {
+        keyToColor[key] = softColors[colorCounter % softColors.length];
+        colorCounter++;
+      }
+      for (final key in uniqueThenKeysInOrder) {
+        if (!keyToColor.containsKey(key)) {
+          keyToColor[key] = softColors[colorCounter % softColors.length];
+          colorCounter++;
+        }
+      }
+
+      final headerStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString('#AEB6BF'));
+
+      // 3. Build Sheet 3: "THEN_Parameters" first so we know their row numbers for hyperlinks
+      final Map<String, int> thenKeyToRow = {};
+      
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0)).value = xl.TextCellValue('Unique ID');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: 0)).value = xl.TextCellValue('Parameter Name');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: 0)).value = xl.TextCellValue('Type');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: 0)).value = xl.TextCellValue('Required');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: 0)).value = xl.TextCellValue('Autofill');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: 0)).value = xl.TextCellValue('Expression');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: 0)).value = xl.TextCellValue('Options');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: 0)).value = xl.TextCellValue('Constraints');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: 0)).value = xl.TextCellValue('Parent Parameter');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: 0)).value = xl.TextCellValue('Ref Asset Name');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: 0)).value = xl.TextCellValue('Ref Asset Code');
+      // Hidden columns
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: 0)).value = xl.TextCellValue('Backend_ParamID');
+      thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: 0)).value = xl.TextCellValue('Backend_ParentParamID');
+
+      for (int col = 0; col < 13; col++) {
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0)).cellStyle = headerStyle;
+      }
+      thenSheet.setColumnWidth(11, 0.0);
+      thenSheet.setColumnWidth(12, 0.0);
+
+      for (int i = 0; i < uniqueThenKeysInOrder.length; i++) {
+        final key = uniqueThenKeysInOrder[i];
+        final p = uniqueThenParams[key]!;
+        final rowIdx = i + 1;
+
+        final uniqueId = 'T${i + 1}';
+        final label = p['label']?.toString() ?? '';
+        final type = p['type']?.toString() ?? '';
+        final isReq = p['required'] == true ? 'YES' : 'NO';
+        final isAutofill = p['autofill'] == true ? 'YES' : 'NO';
+        final expr = p['autofill_expression']?.toString() ?? '';
+        final options = (p['options'] as List?)?.join(', ') ?? '';
+
+        final constraintsList = p['constraints'] as List?;
+        String constraintsStr = '';
+        if (constraintsList != null) {
+          constraintsStr = constraintsList.map((c) {
+            if (c is! Map) return c.toString();
+            final op = c['op'] ?? '';
+            final val = c['value'] ?? '';
+            final title = c['alert_title'] ?? '';
+            return '$op $val ("$title")';
+          }).join('; ');
+        }
+
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx)).value = xl.TextCellValue(label);
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx)).value = xl.TextCellValue(type);
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx)).value = xl.TextCellValue(isReq);
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx)).value = xl.TextCellValue(isAutofill);
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx)).value = xl.TextCellValue(expr);
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx)).value = xl.TextCellValue(options);
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIdx)).value = xl.TextCellValue(constraintsStr);
+        
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIdx)).value = xl.TextCellValue(keyToRefAssetName[key] ?? '');
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIdx)).value = xl.TextCellValue(keyToRefAssetCode[key] ?? '');
+        thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: rowIdx)).value = xl.TextCellValue(p['id']?.toString() ?? '');
+
+        thenKeyToRow[key] = rowIdx + 1; // 1-based row index in THEN_Parameters
+
+        final parentKey = childKeyToParentKey[key];
+        if (parentKey != null) {
+          final parentRow = uniqueKeysInOrder.indexOf(parentKey) + 2;
+          final parentP = uniqueParams[parentKey]!;
+          final parentName = parentP['label']?.toString() ?? '';
+          final parentUniqueId = 'P${uniqueKeysInOrder.indexOf(parentKey) + 1}';
+
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx)).value = 
+              xl.FormulaCellValue('HYPERLINK("#Parameter_Explanation!B$parentRow", "$uniqueId")');
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx)).value = 
+              xl.FormulaCellValue('HYPERLINK("#Parameter_Explanation!B$parentRow", "$parentUniqueId ($parentName)")');
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: rowIdx)).value = 
+              xl.TextCellValue(parentP['id']?.toString() ?? '');
+        } else {
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx)).value = xl.TextCellValue(uniqueId);
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx)).value = xl.TextCellValue('N/A');
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 12, rowIndex: rowIdx)).value = xl.TextCellValue('');
+        }
+
+        final colorHex = keyToColor[key]!;
+        final rowStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString(colorHex));
+        for (int col = 0; col < 13; col++) {
+          thenSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: rowIdx)).cellStyle = rowStyle;
+        }
+      }
+
+      // 4. Build Sheet 2: "Parameter_Explanation"
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: 0)).value = xl.TextCellValue('Unique ID');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: 0)).value = xl.TextCellValue('Parameter Name');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: 0)).value = xl.TextCellValue('Type');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: 0)).value = xl.TextCellValue('Required');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: 0)).value = xl.TextCellValue('Autofill');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: 0)).value = xl.TextCellValue('Expression');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: 0)).value = xl.TextCellValue('Options');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: 0)).value = xl.TextCellValue('Constraints');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: 0)).value = xl.TextCellValue('THEN Workflow Details');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: 0)).value = xl.TextCellValue('Ref Asset Name');
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: 0)).value = xl.TextCellValue('Ref Asset Code');
+      // Hidden columns
+      explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: 0)).value = xl.TextCellValue('Backend_ParamID');
+
+      for (int col = 0; col < 12; col++) {
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0)).cellStyle = headerStyle;
+      }
+      explanationSheet.setColumnWidth(11, 0.0);
+
+      final Map<String, int> keyToRowInExplanation = {};
+
+      for (int i = 0; i < uniqueKeysInOrder.length; i++) {
+        final key = uniqueKeysInOrder[i];
+        final p = uniqueParams[key]!;
+        final rowIdx = i + 1;
+
+        final uniqueId = 'P${i + 1}';
+        final label = p['label']?.toString() ?? '';
+        final type = p['type']?.toString() ?? '';
+        final isReq = p['required'] == true ? 'YES' : 'NO';
+        final isAutofill = p['autofill'] == true ? 'YES' : 'NO';
+        final expr = p['autofill_expression']?.toString() ?? '';
+        final options = (p['options'] as List?)?.join(', ') ?? '';
+
+        final constraintsList = p['constraints'] as List?;
+        String constraintsStr = '';
+        if (constraintsList != null) {
+          constraintsStr = constraintsList.map((c) {
+            if (c is! Map) return c.toString();
+            final op = c['op'] ?? '';
+            final val = c['value'] ?? '';
+            final title = c['alert_title'] ?? '';
+            return '$op $val ("$title")';
+          }).join('; ');
+        }
+
+        String thenWorkflowStr = '';
+        if (constraintsList != null) {
+          thenWorkflowStr = constraintsList.map((c) {
+            if (c is! Map || c['then_workflow_enabled'] != true) return '';
+            final thenProps = c['then_properties'] as List?;
+            final propNames = thenProps?.map((tp) => tp['label'] ?? '').join(', ') ?? '';
+            return 'IF ${c['op']} ${c['value']} THEN: $propNames';
+          }).where((s) => s.isNotEmpty).join('; ');
+        }
+
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: rowIdx)).value = xl.TextCellValue(label);
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: rowIdx)).value = xl.TextCellValue(type);
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: rowIdx)).value = xl.TextCellValue(isReq);
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 4, rowIndex: rowIdx)).value = xl.TextCellValue(isAutofill);
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 5, rowIndex: rowIdx)).value = xl.TextCellValue(expr);
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 6, rowIndex: rowIdx)).value = xl.TextCellValue(options);
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 7, rowIndex: rowIdx)).value = xl.TextCellValue(constraintsStr);
+        
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 9, rowIndex: rowIdx)).value = xl.TextCellValue(keyToRefAssetName[key] ?? '');
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 10, rowIndex: rowIdx)).value = xl.TextCellValue(keyToRefAssetCode[key] ?? '');
+        explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 11, rowIndex: rowIdx)).value = xl.TextCellValue(p['id']?.toString() ?? '');
+
+        // Resolve hyperlink to THEN_Parameters if parent has a conditional workflow
+        String firstChildKey = '';
+        if (constraintsList != null) {
+          for (final c in constraintsList) {
+            if (c is Map && c['then_workflow_enabled'] == true) {
+              final thenProps = c['then_properties'] as List?;
+              if (thenProps != null && thenProps.isNotEmpty) {
+                final firstTp = thenProps.first;
+                if (firstTp is Map) {
+                  firstChildKey = getCanonicalKey(Map<String, dynamic>.from(firstTp));
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        final thenRow = thenKeyToRow[firstChildKey];
+        if (thenRow != null && thenWorkflowStr.isNotEmpty) {
+          explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx)).value = 
+              xl.FormulaCellValue('HYPERLINK("#THEN_Parameters!B$thenRow", "$thenWorkflowStr")');
+        } else {
+          explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 8, rowIndex: rowIdx)).value = 
+              xl.TextCellValue(thenWorkflowStr.isEmpty ? 'N/A' : thenWorkflowStr);
+        }
+
+        keyToRowInExplanation[key] = rowIdx + 1; // 1-based row index: rowIdx=1 is Row 2
+
+        final colorHex = keyToColor[key]!;
+        final rowStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString(colorHex));
+        for (int col = 0; col < 12; col++) {
+          explanationSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: rowIdx)).cellStyle = rowStyle;
+        }
+      }
+
+      // 5. Build Sheet 1: "Structure_Overview"
+      int overviewRow = 0;
+
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue('CLIENT ASSETS & GROUP HIERARCHY');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).cellStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString('#AEB6BF'));
+      overviewRow++;
+      overviewRow++;
+
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue('Folder / Group');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: overviewRow)).value = xl.TextCellValue('Subfolder / Subgroup');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: overviewRow)).value = xl.TextCellValue('Asset Name');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: overviewRow)).value = xl.TextCellValue('Asset Code');
+      
+      // Backend headers at cols 80-85
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_NodeID');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_ParentID');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_TankID');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 83, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_NodeType');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 84, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_Order');
+      overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 85, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_IsActive');
+
+      for (int col = 0; col < 4; col++) {
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: overviewRow)).cellStyle = headerStyle;
+      }
+      overviewRow++;
+
+      final topFolders = nodes.where((n) => n.isFolder && n.parentId == null).toList()
+        ..sort((a, b) => a.order.compareTo(b.order));
+
+      for (final tf in topFolders) {
+        final subNodes = nodes.where((n) => n.parentId == tf.id).toList()
+          ..sort((a, b) => a.order.compareTo(b.order));
+        
+        if (subNodes.isEmpty) {
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue(tf.name);
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue(tf.id);
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue('');
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue('');
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 83, rowIndex: overviewRow)).value = xl.TextCellValue(tf.type);
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 84, rowIndex: overviewRow)).value = xl.TextCellValue(tf.order.toString());
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 85, rowIndex: overviewRow)).value = xl.TextCellValue('true');
+          overviewRow++;
+        }
+
+        for (final sn in subNodes) {
+          if (sn.isLeaf && sn.tankId != null) {
+            final t = tanks[sn.tankId!];
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue(tf.name);
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: overviewRow)).value = xl.TextCellValue(t?.tankName ?? sn.name);
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: overviewRow)).value = xl.TextCellValue(t?.tankCode ?? '');
+            
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue(sn.id);
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue(sn.parentId ?? '');
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue(sn.tankId ?? '');
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 83, rowIndex: overviewRow)).value = xl.TextCellValue(sn.type);
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 84, rowIndex: overviewRow)).value = xl.TextCellValue(sn.order.toString());
+            overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 85, rowIndex: overviewRow)).value = xl.TextCellValue((t?.isActive ?? true).toString());
+            overviewRow++;
+          } else if (sn.isFolder) {
+            final leaves = nodes.where((n) => n.parentId == sn.id && n.isLeaf).toList()
+              ..sort((a, b) => a.order.compareTo(b.order));
+            
+            if (leaves.isEmpty) {
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue(tf.name);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: overviewRow)).value = xl.TextCellValue(sn.name);
+              
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue(sn.id);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue(sn.parentId ?? '');
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue('');
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 83, rowIndex: overviewRow)).value = xl.TextCellValue(sn.type);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 84, rowIndex: overviewRow)).value = xl.TextCellValue(sn.order.toString());
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 85, rowIndex: overviewRow)).value = xl.TextCellValue('true');
+              overviewRow++;
+            }
+
+            for (final lv in leaves) {
+              final t = tanks[lv.tankId!];
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue(tf.name);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: overviewRow)).value = xl.TextCellValue(sn.name);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 2, rowIndex: overviewRow)).value = xl.TextCellValue(t?.tankName ?? lv.name);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 3, rowIndex: overviewRow)).value = xl.TextCellValue(t?.tankCode ?? '');
+              
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue(lv.id);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue(lv.parentId ?? '');
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue(lv.tankId ?? '');
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 83, rowIndex: overviewRow)).value = xl.TextCellValue(lv.type);
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 84, rowIndex: overviewRow)).value = xl.TextCellValue(lv.order.toString());
+              overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 85, rowIndex: overviewRow)).value = xl.TextCellValue((t?.isActive ?? true).toString());
+              overviewRow++;
+            }
+          }
+        }
+      }
+
+      overviewRow += 3;
+
+      List<TankModel> getTanksInGroup(String groupId) {
+        final result = <TankModel>[];
+        final queue = <String>[groupId];
+        while (queue.isNotEmpty) {
+          final current = queue.removeAt(0);
+          final children = nodes.where((n) => n.parentId == current);
+          for (final c in children) {
+            if (c.isLeaf && c.tankId != null) {
+              final t = tanks[c.tankId!];
+              if (t != null) result.add(t);
+            } else if (c.isFolder) {
+              queue.add(c.id);
+            }
+          }
+        }
+        return result;
+      }
+
+      final Map<String, String> keyToFirstRefCell = {};
+
+      for (final tf in topFolders) {
+        final groupTanks = getTanksInGroup(tf.id);
+        if (groupTanks.isEmpty) continue;
+
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue('GROUP DETAILS: ${tf.name.toUpperCase()}');
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).cellStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString('#D5F5E3'));
+        overviewRow++;
+        overviewRow++;
+
+        final groupParamLabels = <String>[];
+        for (final tank in groupTanks) {
+          final flatProps = getParentProperties(tank.inspectionProperties);
+          for (final p in flatProps) {
+            final label = p['label']?.toString() ?? '';
+            if (label.isNotEmpty && !groupParamLabels.contains(label)) {
+              groupParamLabels.add(label);
+            }
+          }
+        }
+
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue('Asset Name');
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: overviewRow)).value = xl.TextCellValue('Asset Code');
+        for (int col = 0; col < groupParamLabels.length; col++) {
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col + 2, rowIndex: overviewRow)).value = xl.TextCellValue(groupParamLabels[col]);
+        }
+        // Backend headers
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_TankID');
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_GroupID');
+        overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue('Backend_Order');
+
+        final groupHeaderStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString('#D5D8DC'));
+        for (int col = 0; col < groupParamLabels.length + 2; col++) {
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: col, rowIndex: overviewRow)).cellStyle = groupHeaderStyle;
+        }
+        overviewRow++;
+
+        for (final tank in groupTanks) {
+          final flatProps = getParentProperties(tank.inspectionProperties);
+          
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow)).value = xl.TextCellValue(tank.tankName);
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: overviewRow)).value = xl.TextCellValue(tank.tankCode);
+
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 80, rowIndex: overviewRow)).value = xl.TextCellValue(tank.id);
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 81, rowIndex: overviewRow)).value = xl.TextCellValue(tf.id);
+          final matchingNodes = nodes.where((n) => n.tankId == tank.id);
+          final nodeOrder = matchingNodes.isNotEmpty ? matchingNodes.first.order : 0;
+          overviewSheet.cell(xl.CellIndex.indexByColumnRow(columnIndex: 82, rowIndex: overviewRow)).value = xl.TextCellValue(nodeOrder.toString());
+
+          for (int j = 0; j < groupParamLabels.length; j++) {
+            final targetLabel = groupParamLabels[j];
+            final matchProps = flatProps.where((p) => p['label'] == targetLabel);
+            if (matchProps.isNotEmpty) {
+              final p = matchProps.first;
+              final key = getCanonicalKey(p);
+              final expRow = keyToRowInExplanation[key] ?? 2;
+              final colorHex = keyToColor[key]!;
+
+              final cellIndex = xl.CellIndex.indexByColumnRow(columnIndex: j + 2, rowIndex: overviewRow);
+              overviewSheet.cell(cellIndex).value = xl.FormulaCellValue('HYPERLINK("#Parameter_Explanation!B$expRow", "$targetLabel")');
+              overviewSheet.cell(cellIndex).cellStyle = xl.CellStyle(backgroundColorHex: xl.ExcelColor.fromHexString(colorHex));
+
+              if (!keyToFirstRefCell.containsKey(key)) {
+                keyToFirstRefCell[key] = xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: overviewRow).cellId;
+              }
+            }
+          }
+          overviewRow++;
+        }
+        overviewRow += 2;
+      }
+
+      // 5. Update back hyperlinks in Sheet 2 (Parameter_Explanation)
+      for (int i = 0; i < uniqueKeysInOrder.length; i++) {
+        final key = uniqueKeysInOrder[i];
+        final refCell = keyToFirstRefCell[key] ?? 'A1';
+        final rowIdx = i + 1; // row 1 is header, so rowIdx starts at 1
+        final cellIdx = xl.CellIndex.indexByColumnRow(columnIndex: 0, rowIndex: rowIdx);
+        
+        explanationSheet.cell(cellIdx).value = xl.FormulaCellValue('HYPERLINK("#Structure_Overview!$refCell", "P${i + 1}")');
+      }
+
+      // Hide backend columns 80 to 90
+      for (int c = 80; c <= 90; c++) {
+        overviewSheet.setColumnWidth(c, 0.0);
+      }
+
+      // Auto-fit columns
+      for (int c = 0; c <= 10; c++) {
+        overviewSheet.setColumnAutoFit(c);
+        explanationSheet.setColumnAutoFit(c);
+        thenSheet.setColumnAutoFit(c);
+      }
+
+      // Save Excel file
+      final clientName = widget.activeClient?.name?.replaceAll(RegExp(r'[^\w\-]'), '_') ?? 'All_Clients';
+      final ts = DateFormat('yyyy-MM-dd_HH-mm-ss').format(DateTime.now());
+      final fileName = '${clientName}_StructureBackup_$ts.xlsx';
+
+      final file = await ReportStorageService.saveFile(
+        fileName: fileName,
+        bytes: excel.save()!,
+        subPath: 'Backups',
+        exportType: 'Structure Backup',
+        username: widget.currentUser.username,
+        clientName: widget.activeClient?.name ?? 'All Clients',
+      );
+
+      await _showSaveSuccessDialog(file, 'Structure Backup');
+    } catch (e) {
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: const Color(0xFF141618),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: Color(0xFF252830), width: 1.5),
+          ),
+          title: Row(
+            children: const [
+              Icon(Icons.error_outline_rounded, color: Color(0xFFEF4444), size: 28),
+              SizedBox(width: 12),
+              Text('Export Failed', style: TextStyle(color: Color(0xFFF0EEE9), fontWeight: FontWeight.bold, fontSize: 18)),
+            ],
+          ),
+          content: Text(
+            'Unable to save Excel structure report.\n\nDetails: $e',
             style: const TextStyle(color: Color(0xFF8A8F9C), fontSize: 13),
           ),
           actions: [
@@ -499,7 +1200,7 @@ class _AdminDashboardState extends State<AdminDashboard>
                         ),
                         onPressed: () async {
                           try {
-                            await OpenFilex.open(file.path);
+                            await FileFolderOpener.openFile(file.path);
                           } catch (e) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Could not open file: $e')),
@@ -531,22 +1232,13 @@ class _AdminDashboardState extends State<AdminDashboard>
                           final parentPath = file.parent.path;
                           try {
                             await Clipboard.setData(ClipboardData(text: parentPath));
-                            final result = await OpenFilex.open(parentPath);
-                            if (result.type != ResultType.done) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Folder path copied! Saved to: $parentPath'),
-                                  duration: const Duration(seconds: 4),
-                                ),
-                              );
-                            } else {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Opening folder and path copied!'),
-                                  duration: const Duration(seconds: 2),
-                                ),
-                              );
-                            }
+                            await FileFolderOpener.openFolder(parentPath);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Opening folder and path copied!'),
+                                duration: const Duration(seconds: 2),
+                              ),
+                            );
                           } catch (e) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(content: Text('Folder path copied! Saved to: $parentPath')),
