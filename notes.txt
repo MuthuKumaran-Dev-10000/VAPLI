@@ -7,3 +7,6 @@
  & "C:\Users\muthu\AppData\Local\Android\Sdk\platform-tools\adb.exe" start-server
 
  & "C:\Users\muthu\AppData\Local\Android\Sdk\platform-tools\adb.exe" devices
+
+
+ #App password dummy-app-password

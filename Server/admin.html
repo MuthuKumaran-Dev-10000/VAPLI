@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VAPLI Control Center</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at top right, #1E1B4B 0%, #0F172A 70%, #020617 100%);
+            color: #F1F5F9;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 900px;
+            margin: 40px auto;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #CB8C3E 0%, #F59E0B 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin: 0;
+        }
+        .card {
+            background: rgba(30, 41, 59, 0.4);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+        }
+        .stat-title {
+            font-size: 12px;
+            color: #94A3B8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 6px;
+        }
+        .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #F8FAFC;
+        }
+        .form-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+            align-items: center;
+        }
+        .form-group {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .form-group label {
+            font-size: 13px;
+            color: #94A3B8;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        select, input, button {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: #F8FAFC;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 14px;
+            outline: none;
+            transition: all 0.2s;
+        }
+        select:focus, input:focus {
+            border-color: #CB8C3E;
+            box-shadow: 0 0 0 2px rgba(203, 140, 62, 0.2);
+        }
+        .btn {
+            background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
+            border: 1px solid rgba(255,255,255,0.08);
+            cursor: pointer;
+            font-weight: 600;
+            padding: 12px 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .btn:hover {
+            border-color: rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, #334155 0%, #1E293B 100%);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #CB8C3E 0%, #B45309 100%);
+            border: none;
+            color: #FFFFFF;
+            cursor: pointer;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.3);
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 0;
+            margin-bottom: 16px;
+            color: #F1F5F9;
+            border-left: 3px solid #CB8C3E;
+            padding-left: 10px;
+        }
+        .button-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .console-container {
+            background: #090D16;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 12px;
+            padding: 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            height: 200px;
+            overflow-y: auto;
+            color: #38BDF8;
+        }
+        .console-line {
+            margin-bottom: 6px;
+        }
+        .console-success { color: #4ADE80; }
+        .console-error { color: #F87171; }
+        .console-info { color: #38BDF8; }
+        .badge {
+            display: inline-block;
+            padding: 3px 6px;
+            font-size: 10px;
+            font-weight: 700;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-success { background: rgba(74, 222, 128, 0.2); color: #4ADE80; }
+        .badge-error { background: rgba(248, 113, 113, 0.2); color: #F87171; }
+        .badge-warning { background: rgba(245, 158, 11, 0.2); color: #FBBF24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>VAPLI Control Center</h1>
+            <div id="live-time" style="font-size:13px; color:#94A3B8;">Sydney Time: --:--:--</div>
+        </div>
+
+        <div class="grid-3">
+            <div class="stat-card">
+                <span class="stat-title">Client ID</span>
+                <span id="stat-client" class="stat-value">Loading...</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Database Mode</span>
+                <span id="stat-mode" class="stat-value">Loading...</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-title">Worker Connection</span>
+                <span id="stat-worker" class="stat-value">Loading...</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Context Configurations</div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="client-select">Change Client ID</label>
+                    <select id="client-select" onchange="updateClient(this.value)">
+                        <option value="">-- Fetching Clients --</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="mode-select">Database Mode</label>
+                    <select id="mode-select" onchange="updateMode(this.value)">
+                        <option value="production">PRODUCTION</option>
+                        <option value="development">DEVELOPMENT</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Manual Report Execution</div>
+            <div class="button-grid">
+                <button class="btn" onclick="triggerAction('test_smtp')">Test SMTP</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_daily')">Send Daily Reports</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_compliance')">Send Gaps Alert</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_active_alerts')">Send Active Alerts</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_weekly_inspection')">Send Weekly Telemetry</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_weekly_alerts')">Send Weekly Alerts</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Manual FCM Push Execution</div>
+            <div class="form-row" style="margin-bottom:12px;">
+                <div class="form-group" style="flex:2;">
+                    <label for="fcm-type-select">FCM Trigger Type</label>
+                    <select id="fcm-type-select" onchange="toggleFcmGroup(this.value)">
+                        <option value="1">📋 Daily Inspection Reminder</option>
+                        <option value="2">🚨 Alert Notification (With Image)</option>
+                        <option value="3">⚠️ Alert Notification (Without Image)</option>
+                        <option value="4">🔍 Group Reminder (Custom Target)</option>
+                    </select>
+                </div>
+                <div class="form-group" id="fcm-group-container" style="flex:2; display:none;">
+                    <label for="fcm-group-select">Target Group Name</label>
+                    <select id="fcm-group-select">
+                        <option value="">-- Loading Groups --</option>
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1; align-self:flex-end;">
+                    <button class="btn btn-primary" style="width:100%;" onclick="triggerFcm()">Push FCM</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Live Terminal Logs</div>
+            <div class="console-container" id="terminal">
+                <div class="console-line console-info">[+] Control panel initialized. Fetching database status...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const DB_BASE_URL = "https://dummy-firebase-project-id-default-rtdb.firebaseio.com";
+        let activeClientId = "";
+        let processedLogKeys = new Set();
+
+        async function fetchStatus() {
+            try {
+                // 1. Fetch Server state
+                const resState = await fetch(`${DB_BASE_URL}/server_state.json`);
+                const state = await resState.json();
+                
+                if (state) {
+                    activeClientId = state.client_id;
+                    document.getElementById('stat-client').innerText = state.client_id;
+                    document.getElementById('stat-mode').innerText = state.env_mode.toUpperCase();
+                    document.getElementById('live-time').innerText = 'Sydney Time: ' + state.sydney_time;
+
+                    // Calculate heartbeat connection (active within 15 seconds)
+                    const lastActive = new Date(state.last_active);
+                    const now = new Date();
+                    const diffSeconds = Math.abs(now - lastActive) / 1000;
+                    
+                    const workerBadge = diffSeconds < 15 
+                        ? '<span class="badge badge-success">ONLINE</span>' 
+                        : '<span class="badge badge-error">OFFLINE</span>';
+                    document.getElementById('stat-worker').innerHTML = workerBadge;
+                } else {
+                    document.getElementById('stat-worker').innerHTML = '<span class="badge badge-warning">NO WORKER</span>';
+                }
+
+                // 2. Fetch clients list
+                const resClients = await fetch(`${DB_BASE_URL}/clients.json`);
+                const clientsData = await resClients.json();
+                if (clientsData) {
+                    const clientSelect = document.getElementById('client-select');
+                    const optionsHtml = Object.keys(clientsData).map(k => {
+                        const name = clientsData[k].name || clientsData[k].db_key || k;
+                        const key = clientsData[k].db_key || k;
+                        return `<option value="${key}" ${key === activeClientId ? 'selected' : ''}>${name} (${key})</option>`;
+                    }).join('');
+                    
+                    // Only update if option list changed to prevent resetting selection
+                    if (clientSelect.options.length <= 1) {
+                        clientSelect.innerHTML = optionsHtml;
+                    }
+                }
+
+                // 3. Fetch groups for current client
+                if (activeClientId) {
+                    const resGroups = await fetch(`${DB_BASE_URL}/${activeClientId}/tank_tree.json`);
+                    const treeData = await resGroups.json();
+                    if (treeData) {
+                        const groups = Object.values(treeData)
+                            .filter(n => n && n.type === 'folder')
+                            .sort((a,b) => (a.order || 0) - (b.order || 0))
+                            .map(g => g.name);
+                        
+                        const groupSelect = document.getElementById('fcm-group-select');
+                        if (groups.length > 0) {
+                            groupSelect.innerHTML = groups.map(g => `<option value="${g}">${g}</option>`).join('');
+                        } else {
+                            groupSelect.innerHTML = '<option value="">-- No Groups Configured --</option>';
+                        }
+                    }
+                }
+
+                // 4. Fetch logs
+                const resLogs = await fetch(`${DB_BASE_URL}/server_logs.json?orderBy="timestamp"&limitToLast=20`);
+                const logsData = await resLogs.json();
+                if (logsData) {
+                    const sortedLogs = Object.keys(logsData).sort((a,b) => new Date(logsData[a].timestamp) - new Date(logsData[b].timestamp));
+                    sortedLogs.forEach(key => {
+                        if (!processedLogKeys.has(key)) {
+                            processedLogKeys.add(key);
+                            const entry = logsData[key];
+                            const tStr = new Date(entry.timestamp).toLocaleTimeString();
+                            logConsole(`[${tStr}] ${entry.message}`, entry.type);
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error("Error polling database: ", err);
+            }
+        }
+
+        function logConsole(message, type = 'info') {
+            const term = document.getElementById('terminal');
+            const cssClass = type === 'success' ? 'console-success' : (type === 'error' ? 'console-error' : 'console-info');
+            term.innerHTML += `<div class="console-line ${cssClass}">${message}</div>`;
+            term.scrollTop = term.scrollHeight;
+        }
+
+        async function triggerAction(actionName, params = {}) {
+            logConsole(`Requesting action: ${actionName}...`);
+            try {
+                // Generate a pending trigger key in triggers node
+                const triggerPayload = {
+                    action: actionName,
+                    params: params,
+                    status: "pending",
+                    timestamp: new Date().toISOString()
+                };
+                
+                const response = await fetch(`${DB_BASE_URL}/triggers.json`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(triggerPayload)
+                });
+                const res = await response.json();
+                if (res && res.name) {
+                    logConsole(`Trigger posted to DB. Awaiting local worker execution...`, 'info');
+                    monitorTriggerExecution(res.name);
+                } else {
+                    logConsole(`Failed to post trigger to DB.`, 'error');
+                }
+            } catch (err) {
+                logConsole(`Error: ${err.message}`, 'error');
+            }
+        }
+
+        async function monitorTriggerExecution(triggerId) {
+            let attempts = 0;
+            const interval = setInterval(async () => {
+                attempts++;
+                if (attempts > 15) {
+                    clearInterval(interval);
+                    logConsole(`Execution timeout: worker did not respond.`, 'error');
+                    return;
+                }
+                try {
+                    const response = await fetch(`${DB_BASE_URL}/triggers/${triggerId}.json`);
+                    const trigger = await response.json();
+                    if (trigger && (trigger.status === 'success' || trigger.status === 'failed')) {
+                        clearInterval(interval);
+                        if (trigger.status === 'success') {
+                            logConsole(`Worker complete: ${trigger.message || 'Success'}`, 'success');
+                        } else {
+                            logConsole(`Worker execution failed: ${trigger.message || 'Failed'}`, 'error');
+                        }
+                        // Delete processed trigger to keep triggers node clean
+                        await fetch(`${DB_BASE_URL}/triggers/${triggerId}.json`, { method: 'DELETE' });
+                    }
+                } catch (e) {
+                    console.error("Error monitoring trigger: ", e);
+                }
+            }, 2000);
+        }
+
+        async function updateClient(clientId) {
+            try {
+                await fetch(`${DB_BASE_URL}/server_state_override/client_id.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(clientId)
+                });
+                logConsole(`Requested client switch to: ${clientId}`);
+            } catch (e) {
+                logConsole(`Error updating client: ${e.message}`, 'error');
+            }
+        }
+
+        async function updateMode(mode) {
+            try {
+                await fetch(`${DB_BASE_URL}/server_state_override/env_mode.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(mode)
+                });
+                logConsole(`Requested database mode switch to: ${mode.toUpperCase()}`);
+            } catch (e) {
+                logConsole(`Error updating mode: ${e.message}`, 'error');
+            }
+        }
+
+        function toggleFcmGroup(val) {
+            const container = document.getElementById('fcm-group-container');
+            container.style.display = val === '4' ? 'flex' : 'none';
+        }
+
+        function triggerFcm() {
+            const fcmType = document.getElementById('fcm-type-select').value;
+            const params = { fcm_type: fcmType };
+            if (fcmType === '4') {
+                params.group_name = document.getElementById('fcm-group-select').value;
+            }
+            triggerAction('trigger_fcm', params);
+        }
+
+        setInterval(fetchStatus, 3000);
+        fetchStatus();
+    </script>
+</body>
+</html>

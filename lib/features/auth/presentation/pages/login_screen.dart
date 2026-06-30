@@ -13,6 +13,7 @@ import 'package:lubrication_indicator/features/auth/presentation/controllers/aut
 import 'package:lubrication_indicator/features/auth/presentation/widgets/auth_brand_header.dart';
 import 'package:lubrication_indicator/features/auth/presentation/widgets/login_error_banner.dart';
 import 'package:lubrication_indicator/features/home/presentation/pages/home_screen.dart';
+import 'package:lubrication_indicator/core/services/fcm_subscription_helper.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -170,6 +171,9 @@ class _LoginScreenState extends State<LoginScreen>
         username: _usernameCtrl.text,
         password: _passwordCtrl.text,
       );
+      try {
+        await FcmSubscriptionHelper.handleFcmTopicSubscription(_selectedClient!.dbKey);
+      } catch (_) {}
       if (mounted) {
         Navigator.pushReplacement(
           context,

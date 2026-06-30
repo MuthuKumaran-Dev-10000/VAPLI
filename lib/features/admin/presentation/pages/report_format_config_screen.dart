@@ -85,6 +85,12 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
   final TextEditingController _stripTextCtrl = TextEditingController();
   final TextEditingController _pdfThresholdCtrl = TextEditingController();
   final TextEditingController _excelThresholdCtrl = TextEditingController();
+  final TextEditingController _uncommonThresholdCtrl = TextEditingController();
+  final TextEditingController _groupCoverageThresholdCtrl = TextEditingController();
+  final TextEditingController _pendingAssetColsCtrl = TextEditingController();
+  final TextEditingController _maxGroupsPerRowCtrl = TextEditingController();
+  final TextEditingController _groupCardPaddingCtrl = TextEditingController();
+  final TextEditingController _reportNotesCtrl = TextEditingController();
   String _stripPosition = 'start';
   final Map<String, bool> _expandedParams = {};
   final ScrollController _scrollController = ScrollController();
@@ -102,6 +108,12 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
     _stripTextCtrl.dispose();
     _pdfThresholdCtrl.dispose();
     _excelThresholdCtrl.dispose();
+    _uncommonThresholdCtrl.dispose();
+    _groupCoverageThresholdCtrl.dispose();
+    _pendingAssetColsCtrl.dispose();
+    _maxGroupsPerRowCtrl.dispose();
+    _groupCardPaddingCtrl.dispose();
+    _reportNotesCtrl.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -128,7 +140,13 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
       Map<String, dynamic> configs = {};
       if (snap.exists && snap.value != null) {
         final rawMap = snap.value as Map;
-        configs = rawMap.map((key, val) => MapEntry(key.toString(), Map<String, dynamic>.from(val as Map)));
+        configs = rawMap.map((key, val) {
+          if (val is Map) {
+            return MapEntry(key.toString(), Map<String, dynamic>.from(val));
+          } else {
+            return MapEntry(key.toString(), val);
+          }
+        });
       }
 
       final statsSnap = await DatabaseModeService.ref('dashboard_stats').get();
@@ -175,6 +193,15 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
     _pdfThresholdCtrl.text = (config['pdf_threshold']?.toString() ?? '6');
     _excelThresholdCtrl.text = (config['excel_threshold']?.toString() ?? '12');
     _stripPosition = config['strip_position']?.toString() ?? 'start';
+    
+    final globalThreshold = _configsByFolder['uncommon_threshold'];
+    _uncommonThresholdCtrl.text = (globalThreshold?.toString() ?? '50');
+
+    _groupCoverageThresholdCtrl.text = (_configsByFolder['group_coverage_threshold'] ?? '50').toString();
+    _pendingAssetColsCtrl.text = (_configsByFolder['pending_asset_cols'] ?? '4').toString();
+    _maxGroupsPerRowCtrl.text = (_configsByFolder['max_groups_per_row'] ?? '2').toString();
+    _groupCardPaddingCtrl.text = (_configsByFolder['group_card_padding'] ?? '6.0').toString();
+    _reportNotesCtrl.text = _configsByFolder['report_notes']?.toString() ?? 'This inspection report summarizes current asset health and lubrication parameters.';
   }
 
   List<TankModel> _getTanksInFolder(TankNode? folder) {
@@ -596,6 +623,13 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
                           const SizedBox(height: 16),
                           const Divider(color: _kBorder),
                           const SizedBox(height: 8),
+
+                          // First Page Summary Settings
+                          _buildFirstPageSummarySection(),
+
+                          const SizedBox(height: 16),
+                          const Divider(color: _kBorder),
+                          const SizedBox(height: 8),
                         ] else ...[
                           Text(
                             'Configure the columns to be displayed when a constraint is violated in reports generated under this group.',
@@ -867,6 +901,119 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
                   },
                 ),
               ),
+              const Divider(color: _kBorder, height: 1),
+              SwitchListTile(
+                title: Text(
+                  'Consolidate Uncommon Parameters',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Group parameters used by few assets into a single "Other Parameters" column.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: _configsByFolder['consolidate_uncommon'] == true,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    _configsByFolder['consolidate_uncommon'] = val;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/consolidate_uncommon');
+                  await ref.set(val);
+                  final verRef = DatabaseModeService.ref('settings/report_format/version');
+                  await verRef.set(2);
+                },
+              ),
+              if (_configsByFolder['consolidate_uncommon'] == true)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: TextFormField(
+                    controller: _uncommonThresholdCtrl,
+                    keyboardType: TextInputType.number,
+                    style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Uncommon Parameter Threshold (%)',
+                      hintText: 'Enter value from 0 to 100',
+                      labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kCopper),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (val) async {
+                      var numVal = int.tryParse(val);
+                      if (numVal == null) return;
+                      if (numVal < 0) numVal = 0;
+                      if (numVal > 100) numVal = 100;
+                      
+                      if (numVal.toString() != val) {
+                        _uncommonThresholdCtrl.text = numVal.toString();
+                        _uncommonThresholdCtrl.selection = TextSelection.fromPosition(
+                          TextPosition(offset: _uncommonThresholdCtrl.text.length),
+                        );
+                      }
+                      
+                      setState(() {
+                        _configsByFolder['uncommon_threshold'] = numVal;
+                      });
+                      final ref = DatabaseModeService.ref('settings/report_format/uncommon_threshold');
+                      await ref.set(numVal);
+                      
+                      final verRef = DatabaseModeService.ref('settings/report_format/version');
+                      await verRef.set(2);
+                    },
+                  ),
+                ),
+              const Divider(color: _kBorder, height: 1),
+              SwitchListTile(
+                title: Text(
+                  'Enable Compaction Engine',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Reduce cell padding, row height, and font size in PDF reports to fit more on a single page.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: _configsByFolder['compaction_enabled'] == true,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    _configsByFolder['compaction_enabled'] = val;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/compaction_enabled');
+                  await ref.set(val);
+                },
+              ),
+              const Divider(color: _kBorder, height: 1),
+              SwitchListTile(
+                title: Text(
+                  'Abbreviate Column Titles',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Only abbreviate column titles if they do not fit in the cell. If disabled, title abbreviations are never used.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: _configsByFolder['abbr_titles_enabled'] == true,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    _configsByFolder['abbr_titles_enabled'] = val;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/abbr_titles_enabled');
+                  await ref.set(val);
+                },
+              ),
             ],
           ),
         ),
@@ -900,6 +1047,261 @@ class _ReportFormatConfigScreenState extends State<ReportFormatConfigScreen> {
             ),
           ),
         ],
+      ],
+    );
+  }
+
+  Widget _buildFirstPageSummarySection() {
+    final bool compactSummary = _configsByFolder['compact_group_summary'] != false;
+    final bool emptySpaceOpt = _configsByFolder['empty_space_optimization'] != false;
+    final String borderStyle = _configsByFolder['group_card_border_style'] ?? 'Solid Light';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'First Page Summary Settings',
+          style: GoogleFonts.inter(color: _kCopper, fontSize: 14, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          decoration: BoxDecoration(
+            color: _kSurface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: _kBorder),
+          ),
+          child: Column(
+            children: [
+              SwitchListTile(
+                title: Text(
+                  'Enable Compact Group Summary',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Show a compact group-based card layout on the first page instead of a flat list.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: compactSummary,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    _configsByFolder['compact_group_summary'] = val;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/compact_group_summary');
+                  await ref.set(val);
+                },
+              ),
+              if (compactSummary) ...[
+                const Divider(color: _kBorder, height: 1),
+                // Coverage Threshold Input
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: TextFormField(
+                    controller: _groupCoverageThresholdCtrl,
+                    keyboardType: TextInputType.number,
+                    style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Inspection Coverage Threshold (%)',
+                      labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kCopper),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (val) async {
+                      var numVal = int.tryParse(val);
+                      if (numVal == null) return;
+                      if (numVal < 0) numVal = 0;
+                      if (numVal > 100) numVal = 100;
+                      setState(() {
+                        _configsByFolder['group_coverage_threshold'] = numVal;
+                      });
+                      final ref = DatabaseModeService.ref('settings/report_format/group_coverage_threshold');
+                      await ref.set(numVal);
+                    },
+                  ),
+                ),
+                const Divider(color: _kBorder, height: 1),
+                // Pending Asset Columns Input
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: TextFormField(
+                    controller: _pendingAssetColsCtrl,
+                    keyboardType: TextInputType.number,
+                    style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Pending Asset Columns (2–6)',
+                      labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kCopper),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (val) async {
+                      var numVal = int.tryParse(val);
+                      if (numVal == null) return;
+                      if (numVal < 2) numVal = 2;
+                      if (numVal > 6) numVal = 6;
+                      setState(() {
+                        _configsByFolder['pending_asset_cols'] = numVal;
+                      });
+                      final ref = DatabaseModeService.ref('settings/report_format/pending_asset_cols');
+                      await ref.set(numVal);
+                    },
+                  ),
+                ),
+                const Divider(color: _kBorder, height: 1),
+                // Maximum Groups Per Row
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: TextFormField(
+                    controller: _maxGroupsPerRowCtrl,
+                    keyboardType: TextInputType.number,
+                    style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Maximum Groups Per Row',
+                      labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kCopper),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (val) async {
+                      var numVal = int.tryParse(val);
+                      if (numVal == null) return;
+                      if (numVal < 1) numVal = 1;
+                      if (numVal > 4) numVal = 4;
+                      setState(() {
+                        _configsByFolder['max_groups_per_row'] = numVal;
+                      });
+                      final ref = DatabaseModeService.ref('settings/report_format/max_groups_per_row');
+                      await ref.set(numVal);
+                    },
+                  ),
+                ),
+                const Divider(color: _kBorder, height: 1),
+                // Card Padding
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: TextFormField(
+                    controller: _groupCardPaddingCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Card Padding',
+                      labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kCopper),
+                      ),
+                      isDense: true,
+                    ),
+                    onChanged: (val) async {
+                      var dVal = double.tryParse(val);
+                      if (dVal == null) return;
+                      if (dVal < 2.0) dVal = 2.0;
+                      if (dVal > 24.0) dVal = 24.0;
+                      setState(() {
+                        _configsByFolder['group_card_padding'] = dVal;
+                      });
+                      final ref = DatabaseModeService.ref('settings/report_format/group_card_padding');
+                      await ref.set(dVal);
+                    },
+                  ),
+                ),
+                const Divider(color: _kBorder, height: 1),
+                // Card Border Style
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: DropdownButtonFormField<String>(
+                    dropdownColor: _kSurface,
+                    value: borderStyle,
+                    style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: 'Card Border Style',
+                      labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                      isDense: true,
+                    ),
+                    items: ['Solid Light', 'Dashed', 'Dotted', 'None'].map((String val) {
+                      return DropdownMenuItem<String>(
+                        value: val,
+                        child: Text(val, style: GoogleFonts.inter(color: _kText)),
+                      );
+                    }).toList(),
+                    onChanged: (val) async {
+                      if (val == null) return;
+                      setState(() {
+                        _configsByFolder['group_card_border_style'] = val;
+                      });
+                      final ref = DatabaseModeService.ref('settings/report_format/group_card_border_style');
+                      await ref.set(val);
+                    },
+                  ),
+                ),
+              ],
+              const Divider(color: _kBorder, height: 1),
+              SwitchListTile(
+                title: Text(
+                  'Enable Empty Space Optimization',
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text(
+                  'Place abbreviations and metadata on the first page if space is available to minimize page count.',
+                  style: GoogleFonts.inter(color: _kSub, fontSize: 11),
+                ),
+                value: emptySpaceOpt,
+                activeColor: _kCopper,
+                activeTrackColor: _kCopper.withOpacity(0.3),
+                inactiveThumbColor: _kSub,
+                inactiveTrackColor: _kBg,
+                onChanged: (val) async {
+                  setState(() {
+                    _configsByFolder['empty_space_optimization'] = val;
+                  });
+                  final ref = DatabaseModeService.ref('settings/report_format/empty_space_optimization');
+                  await ref.set(val);
+                },
+              ),
+              const Divider(color: _kBorder, height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: TextFormField(
+                  controller: _reportNotesCtrl,
+                  maxLines: 2,
+                  style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                  decoration: InputDecoration(
+                    labelText: 'Report Notes / Disclaimer',
+                    labelStyle: GoogleFonts.inter(color: _kSub, fontSize: 12),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: _kCopper),
+                    ),
+                    isDense: true,
+                  ),
+                  onChanged: (val) async {
+                    setState(() {
+                      _configsByFolder['report_notes'] = val;
+                    });
+                    final ref = DatabaseModeService.ref('settings/report_format/report_notes');
+                    await ref.set(val);
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -1947,7 +2349,33 @@ class _ReportMockupPreviewModalState extends State<_ReportMockupPreviewModal> {
                       pw.SizedBox(height: 2),
                       pw.Text('Preview Mode: ${_activeTab == 0 ? "Daily" : "Weekly"}', style: const pw.TextStyle(fontSize: 7.2)),
                       pw.Text('Date Range (Last 7 Days): ${DateFormat('dd MMM yyyy').format(start)} to ${DateFormat('dd MMM yyyy').format(end)}', style: const pw.TextStyle(fontSize: 7.2)),
-                      pw.Text('Compliance Rate: ${allTanksInPreview.isEmpty ? "0.0%" : "${(inspectedTanks.length / allTanksInPreview.length * 100).toStringAsFixed(1)}%"}', style: const pw.TextStyle(fontSize: 7.2)),
+                      pw.Row(
+                        children: [
+                          pw.Text('Compliance Rate: ${allTanksInPreview.isEmpty ? "0.0%" : "${(inspectedTanks.length / allTanksInPreview.length * 100).toStringAsFixed(1)}%"}', style: const pw.TextStyle(fontSize: 7.2)),
+                          pw.SizedBox(width: 8),
+                          pw.Container(
+                            height: 5,
+                            width: 60,
+                            decoration: const pw.BoxDecoration(
+                              color: pdf.PdfColors.grey300,
+                              borderRadius: pw.BorderRadius.all(pw.Radius.circular(2.5)),
+                            ),
+                            child: pw.Align(
+                              alignment: pw.Alignment.centerLeft,
+                              child: pw.Container(
+                                height: 5,
+                                width: 60 * (allTanksInPreview.isEmpty ? 0.0 : (inspectedTanks.length / allTanksInPreview.length)),
+                                decoration: pw.BoxDecoration(
+                                  color: (inspectedTanks.length / (allTanksInPreview.isEmpty ? 1 : allTanksInPreview.length)) >= 0.8
+                                      ? pdf.PdfColors.green
+                                      : ((inspectedTanks.length / (allTanksInPreview.isEmpty ? 1 : allTanksInPreview.length)) >= 0.5 ? pdf.PdfColors.orange : pdf.PdfColors.red),
+                                  borderRadius: const pw.BorderRadius.all(pw.Radius.circular(2.5)),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                       pw.SizedBox(height: 6),
                       pw.Text('Reading & Alert Statistics', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 9)),
                       pw.SizedBox(height: 3),

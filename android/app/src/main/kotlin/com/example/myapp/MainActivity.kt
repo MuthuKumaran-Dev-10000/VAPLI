@@ -36,7 +36,7 @@ class MainActivity : FlutterActivity() {
                     if (path != null) {
                         try {
                             val file = java.io.File(path)
-                            val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.fileprovider", file)
+                            val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.provider", file)
                             val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension) ?: "*/*"
                             val intent = Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(uri, mime)
@@ -56,12 +56,13 @@ class MainActivity : FlutterActivity() {
                     if (path != null) {
                         try {
                             val folder = java.io.File(path)
-                            val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.fileprovider", folder)
+                            val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.provider", folder)
                             val intent = Intent(Intent.ACTION_VIEW).apply {
-                                setDataAndType(uri, "resource/folder")
+                                setDataAndType(uri, "vnd.android.document/directory")
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            startActivity(Intent.createChooser(intent, "Open folder with"))
+                            startActivity(Intent.createChooser(intent, "Open folder"))
                             result.success(true)
                         } catch (e: Exception) {
                             result.error("OPEN_ERROR", e.localizedMessage, null)

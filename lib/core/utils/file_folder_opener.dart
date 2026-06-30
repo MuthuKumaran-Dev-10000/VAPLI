@@ -8,12 +8,23 @@ import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
 
 class FileFolderOpener {
-  static const _channel = MethodChannel('com.lubeindicator.vapli/open_folder');
+  static const _channel = MethodChannel('com.lubeindicator.vapli/open_file');
 
   /// Opens a file using default system viewer
   static Future<void> openFile(String filePath) async {
     if (Platform.isWindows) {
-      await Process.run('explorer.exe', [filePath]);
+      final normalized = filePath.replaceAll('/', '\\');
+      final result = await Process.run('explorer.exe', [normalized]);
+      if (result.exitCode != 0) {
+        // Fallback using cmd's start command
+        await Process.run('cmd', ['/c', 'start', '', normalized]);
+      }
+    } else if (Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('openFile', {'path': filePath});
+      } on PlatformException catch (e) {
+        throw 'Failed to open file: ${e.message}';
+      }
     } else {
       await OpenFilex.open(filePath);
     }
@@ -22,7 +33,12 @@ class FileFolderOpener {
   /// Opens a folder (directory) using the system file manager / app chooser
   static Future<void> openFolder(String folderPath) async {
     if (Platform.isWindows) {
-      await Process.run('explorer.exe', [folderPath]);
+      final normalized = folderPath.replaceAll('/', '\\');
+      final result = await Process.run('explorer.exe', [normalized]);
+      if (result.exitCode != 0) {
+        // Fallback using cmd's start command
+        await Process.run('cmd', ['/c', 'start', '', normalized]);
+      }
     } else if (Platform.isAndroid) {
       try {
         await _channel.invokeMethod('openFolder', {'path': folderPath});

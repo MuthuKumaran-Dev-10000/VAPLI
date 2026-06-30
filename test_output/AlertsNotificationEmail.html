@@ -1,0 +1,208 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                background-color: #FAFAFA;
+                color: #2D3748;
+                margin: 0;
+                padding: 0;
+                -webkit-font-smoothing: antialiased;
+            }
+            .container {
+                max-width: 600px;
+                margin: 30px auto;
+                background: #FFFFFF;
+                border-radius: 8px;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                border: 1px solid #E2E8F0;
+                padding: 30px;
+            }
+            .header {
+                border-bottom: 2px solid #EDF2F7;
+                padding-bottom: 15px;
+                margin-bottom: 25px;
+            }
+            .header h1 {
+                color: #1A365D;
+                margin: 0;
+                font-size: 20px;
+                font-weight: 600;
+            }
+            .header p {
+                color: #718096;
+                margin: 5px 0 0 0;
+                font-size: 13px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+            .content {
+                line-height: 1.5;
+                font-size: 14px;
+            }
+            .content p {
+                margin: 0 0 15px 0;
+            }
+            .footer {
+                border-top: 1px solid #EDF2F7;
+                padding-top: 15px;
+                margin-top: 30px;
+                font-size: 11px;
+                color: #A0AEC0;
+                text-align: center;
+                line-height: 1.5;
+            }
+            .footer a {
+                color: #3182CE;
+                text-decoration: none;
+            }
+            .badge {
+                display: inline-block;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: 600;
+                text-transform: uppercase;
+            }
+            .badge-critical { background-color: #FED7D7; color: #9B2C2C; }
+            .badge-warning { background-color: #FEFCBF; color: #975A16; }
+            .badge-info { background-color: #EBF8FF; color: #2B6CB0; }
+            
+            /* Tables */
+            table.report-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin: 20px 0;
+            }
+            table.report-table th {
+                background-color: #F7FAFC;
+                color: #4A5568;
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                padding: 10px 12px;
+                border-bottom: 2px solid #EDF2F7;
+                text-align: left;
+            }
+            table.report-table td {
+                padding: 10px 12px;
+                border-bottom: 1px solid #EDF2F7;
+                font-size: 13px;
+            }
+            
+            /* Form / CTA Link Button */
+            .btn-cta {
+                display: inline-block;
+                background-color: #3182CE;
+                color: #FFFFFF !important;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: 600;
+                border-radius: 5px;
+                text-decoration: none;
+                margin: 20px 0 10px 0;
+            }
+            .btn-cta:hover {
+                background-color: #2B6CB0;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>Active Alarm Notification</h1>
+                <p>Active Alarm Center — muthu stores</p>
+            </div>
+            <div class="content">
+                
+    <p>Dear team,</p>
+    <p>Our constraint engine has surfaced the following active alarms that require your immediate attention.</p>
+    
+    <table class='report-table'>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Asset</th>
+                <th>Severity</th>
+                <th>Parameter</th>
+                <th>Violated Value</th>
+                <th>Message</th>
+            </tr>
+        </thead>
+        <tbody>
+            
+        <tr>
+            <td style='white-space:nowrap;'>24/06/2026 11:40 PM</td>
+            <td><b>PM6 Unirun</b><br><span style='font-size:11px; color:#64748B;'>PM6U</span></td>
+            <td><span class='badge badge-critical'>CRITICAL</span></td>
+            <td>Predicted Oil Leak</td>
+            <td style='color:#EF4444; font-weight:600;'>22.0</td>
+            <td>testing if then bulk update</td>
+        </tr>
+        
+        <tr>
+            <td style='white-space:nowrap;'>25/06/2026 12:06 PM</td>
+            <td><b>PM6 M704</b><br><span style='font-size:11px; color:#64748B;'>PM6GBM704</span></td>
+            <td><span class='badge badge-critical'>CRITICAL</span></td>
+            <td>Oil Level</td>
+            <td style='color:#EF4444; font-weight:600;'>LEVEL LOW TAKE ACTION</td>
+            <td>OIL TANK LEAKS : LOOK FOR LEAKS</td>
+        </tr>
+        
+        <tr>
+            <td style='white-space:nowrap;'>07/06/2026 01:54 AM</td>
+            <td><b>PM6 Flexo Lube</b><br><span style='font-size:11px; color:#64748B;'>PM6FH</span></td>
+            <td><span class='badge badge-critical'>CRITICAL</span></td>
+            <td>Diff PR</td>
+            <td style='color:#EF4444; font-weight:600;'>3.0</td>
+            <td>Potential Oil Leak - Inspect the Tank</td>
+        </tr>
+        
+        <tr>
+            <td style='white-space:nowrap;'>07/06/2026 10:52 PM</td>
+            <td><b>PM6 Flexo Hydraulic</b><br><span style='font-size:11px; color:#64748B;'>PM6FH</span></td>
+            <td><span class='badge badge-critical'>CRITICAL</span></td>
+            <td>Diff PR</td>
+            <td style='color:#EF4444; font-weight:600;'>3.0</td>
+            <td>Potential Oil Leak - Inspect the Tank</td>
+        </tr>
+        
+        <tr>
+            <td style='white-space:nowrap;'>24/06/2026 11:26 PM</td>
+            <td><b>PM6 Flexo Hydraulic</b><br><span style='font-size:11px; color:#64748B;'>PM6FH</span></td>
+            <td><span class='badge badge-critical'>CRITICAL</span></td>
+            <td>Predicted Oil Leak</td>
+            <td style='color:#EF4444; font-weight:600;'>15.0</td>
+            <td>if then works</td>
+        </tr>
+        
+        <tr>
+            <td style='white-space:nowrap;'>26/06/2026 03:09 PM</td>
+            <td><b>PM6 Flexo Hydraulic</b><br><span style='font-size:11px; color:#64748B;'>PM6FH</span></td>
+            <td><span class='badge badge-critical'>CRITICAL</span></td>
+            <td>Predicted Oil Leak</td>
+            <td style='color:#EF4444; font-weight:600;'>30.0</td>
+            <td>testing if then bulk update</td>
+        </tr>
+        
+        </tbody>
+    </table>
+    
+    <p style='margin-top:20px; font-weight:600; color:#EF4444;'>Action Required:</p>
+    <p>Log in to the VAPLI Admin Dashboard to inspect these violations, resolve the issues on-site, and mark these alerts as resolved.</p>
+    <br>
+    <p>Regards,<br><b>VAPLI Alert Center</b></p>
+    
+            </div>
+            <div class="footer">
+                This is an automated report from your VAPLI lubrication monitoring system.<br>
+                For support, contact <a href="mailto:muthukumarandeveloper@gmail.com">muthukumarandeveloper@gmail.com</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    

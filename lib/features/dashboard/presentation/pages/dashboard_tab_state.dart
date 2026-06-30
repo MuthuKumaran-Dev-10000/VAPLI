@@ -438,6 +438,29 @@ class _DashboardTabState extends State<DashboardTab> {
     return null;
   }
 
+  bool _shouldAbbreviateTitle(String title, bool compress, bool abbrTitlesEnabled) {
+    if (!abbrTitlesEnabled) return false;
+    if (!compress) return false;
+    if (title.length <= 12) return false;
+    return true;
+  }
+
+  bool _isNumericOrRange(String value) {
+    final RegExp numericRangeRegExp = RegExp(r'^[0-9\.\-\/\+\s]+$');
+    return numericRangeRegExp.hasMatch(value.trim());
+  }
+
+  bool _isCapturedToday(String? capturedAt) {
+    if (capturedAt == null) return false;
+    try {
+      final dt = DateTime.parse(capturedAt).toLocal();
+      final now = DateTime.now();
+      return dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    } catch (_) {
+      return false;
+    }
+  }
+
   String _formatValueWithArrow(dynamic val, Map<String, dynamic>? paramProp, {bool forExcel = false}) {
     if (val == null) return '-';
     final valStr = _fmtPdfAny(val);
@@ -1096,6 +1119,11 @@ class _DashboardTabState extends State<DashboardTab> {
       for (final tank in _tanks) {
         statsByTank[tank.id] = await statsRepo.getStats(tank.id);
       }
+
+      final formatSettingsSnap = await DatabaseModeService.ref('settings/report_format').get();
+      final formatSettings = formatSettingsSnap.exists && formatSettingsSnap.value != null
+          ? Map<String, dynamic>.from(formatSettingsSnap.value as Map)
+          : <String, dynamic>{};
 
       final openAlerts = _allAlerts.where((a) => !a.acknowledged).toList()
         ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
@@ -1790,6 +1818,8 @@ class _DashboardTabState extends State<DashboardTab> {
       final generatedAt = DateFormat('dd MMMM yyyy - HH:mm').format(DateTime.now());
 
       final formatConfigs = await _fetchReportFormatConfigs();
+      final Map<String, dynamic> localColorsCache = Map<String, dynamic>.from(formatConfigs['param_colors'] ?? {});
+      final List<Map<String, dynamic>> pendingDbWrites = [];
 
       final nodes = await TankTreeRepository().fetchAll();
       final rootFolder = TankNode(
@@ -1919,7 +1949,33 @@ class _DashboardTabState extends State<DashboardTab> {
                         pw.SizedBox(height: 4),
                         pw.Text('Report Mode: ${_reportRangeMode.toUpperCase()}', style: const pw.TextStyle(fontSize: 8, color: pdf.PdfColors.grey800)),
                         pw.Text('Report Date Range: ${DateFormat('dd MMM yyyy').format(window.start)} to ${DateFormat('dd MMM yyyy').format(window.end)}', style: const pw.TextStyle(fontSize: 8)),
-                        pw.Text('Compliance Rate: ${_tanks.isEmpty ? '0.0%' : '${(inspectedTanks.length / _tanks.length * 100).toStringAsFixed(1)}%'}', style: const pw.TextStyle(fontSize: 8)),
+                        pw.Row(
+                          children: [
+                            pw.Text('Compliance Rate: ${_tanks.isEmpty ? '0.0%' : '${(inspectedTanks.length / _tanks.length * 100).toStringAsFixed(1)}%'}', style: const pw.TextStyle(fontSize: 8)),
+                            pw.SizedBox(width: 8),
+                            pw.Container(
+                              height: 6,
+                              width: 80,
+                              decoration: const pw.BoxDecoration(
+                                color: pdf.PdfColors.grey300,
+                                borderRadius: pw.BorderRadius.all(pw.Radius.circular(3)),
+                              ),
+                              child: pw.Align(
+                                alignment: pw.Alignment.centerLeft,
+                                child: pw.Container(
+                                  height: 6,
+                                  width: 80 * (_tanks.isEmpty ? 0.0 : (inspectedTanks.length / _tanks.length)),
+                                  decoration: pw.BoxDecoration(
+                                    color: (inspectedTanks.length / (_tanks.isEmpty ? 1 : _tanks.length)) >= 0.8
+                                        ? pdf.PdfColors.green
+                                        : ((inspectedTanks.length / (_tanks.isEmpty ? 1 : _tanks.length)) >= 0.5 ? pdf.PdfColors.orange : pdf.PdfColors.red),
+                                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(3)),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                         pw.SizedBox(height: 10),
                         pw.Text('Reading & Alert Statistics', style: pw.TextStyle(fontWeight: pw.FontWeight.bold, fontSize: 10)),
                         pw.SizedBox(height: 4),
@@ -2052,6 +2108,8 @@ class _DashboardTabState extends State<DashboardTab> {
               includeTimestamp: includeTimestamp,
               formatConfigs: formatConfigs,
               abbrService: abbrService,
+              localColorsCache: localColorsCache,
+              pendingDbWrites: pendingDbWrites,
             );
             detailedWidgets.addAll(folderWidgets);
           } else {
@@ -2080,6 +2138,8 @@ class _DashboardTabState extends State<DashboardTab> {
                 includeTimestamp: includeTimestamp,
                 formatConfigs: formatConfigs,
                 abbrService: abbrService,
+                localColorsCache: localColorsCache,
+                pendingDbWrites: pendingDbWrites,
                 dateStr: dateStr,
               );
               detailedWidgets.addAll(folderWidgets);
@@ -2171,6 +2231,8 @@ class _DashboardTabState extends State<DashboardTab> {
               abbrService: abbrService,
               folderId: folderId,
               dayColors: dayColors,
+              localColorsCache: localColorsCache,
+              pendingDbWrites: pendingDbWrites,
             );
             detailedWidgets.add(
               pw.Inseparable(
@@ -2200,6 +2262,8 @@ class _DashboardTabState extends State<DashboardTab> {
               abbrService: abbrService,
               folderId: folderId,
               dayColors: dayColors,
+              localColorsCache: localColorsCache,
+              pendingDbWrites: pendingDbWrites,
             );
             detailedWidgets.add(
               pw.Inseparable(
@@ -2342,6 +2406,8 @@ class _DashboardTabState extends State<DashboardTab> {
       final safeClient = clientName.replaceAll(RegExp(r'[^\w\-]'), '_');
       final fileName = '${safeClient}_InspectionReport_$ts.pdf';
 
+      _flushParamColors(pendingDbWrites);
+
       final savedFile = await ReportStorageService.saveFile(
         fileName: fileName,
         bytes: await doc.save(),
@@ -2381,6 +2447,8 @@ class _DashboardTabState extends State<DashboardTab> {
         ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
 
       final formatConfigs = await _fetchReportFormatConfigs();
+      final Map<String, dynamic> localColorsCache = Map<String, dynamic>.from(formatConfigs['param_colors'] ?? {});
+      final List<Map<String, dynamic>> pendingDbWrites = [];
       final nodes = await TankTreeRepository().fetchAll();
       final rootFolder = TankNode(
         id: 'root',
@@ -2521,6 +2589,8 @@ class _DashboardTabState extends State<DashboardTab> {
               abbrService: abbrService,
               setCellBg: setCellBg,
               refCurrentRowBox: refCurrentRowBox,
+              localColorsCache: localColorsCache,
+              pendingDbWrites: pendingDbWrites,
             );
           } else {
             final folderTankIds = folderTanks.map((t) => t.id).toSet();
@@ -2551,6 +2621,8 @@ class _DashboardTabState extends State<DashboardTab> {
                 abbrService: abbrService,
                 setCellBg: setCellBg,
                 refCurrentRowBox: refCurrentRowBox,
+                localColorsCache: localColorsCache,
+                pendingDbWrites: pendingDbWrites,
                 dateStr: dateStr,
               );
             }
@@ -2621,6 +2693,8 @@ class _DashboardTabState extends State<DashboardTab> {
             setCellBg: setCellBg,
             refCurrentRowBox: refCurrentRowBox,
             openAlerts: openAlerts,
+            localColorsCache: localColorsCache,
+            pendingDbWrites: pendingDbWrites,
           );
         }
         currentRow = refCurrentRowBox[0];
@@ -2651,6 +2725,8 @@ class _DashboardTabState extends State<DashboardTab> {
       final ts = DateFormat('yyyy-MM-dd_HH-mm-ss').format(DateTime.now());
       final safeClient = clientName.replaceAll(RegExp(r'[^\w\-]'), '_');
       final fileName = '${safeClient}_InspectionReport_$ts.xlsx';
+
+      _flushParamColors(pendingDbWrites);
 
       final excelBytes = excel.save()!;
       final savedFile = await ReportStorageService.saveFile(
@@ -4005,6 +4081,98 @@ class _DashboardTabState extends State<DashboardTab> {
                         letterSpacing: 1.5)),
               ]),
               const SizedBox(height: 8),
+              Builder(
+                builder: (context) {
+                  int compliantCount = 0;
+                  for (int i = 0; i < _tanks.length; i++) {
+                    final t = _tanks[i];
+                    final s = i < stats.length ? stats[i] : DashboardStatsModel.empty(t.id);
+                    if (_isCompliant(t, s.lastCapturedAt)) {
+                      compliantCount++;
+                    }
+                  }
+                  final double complianceRate = _tanks.isEmpty ? 0.0 : (compliantCount / _tanks.length);
+                  final int compliancePercent = (complianceRate * 100).round();
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 16, top: 4),
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: _kCard,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: _kBorder),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Compliance Rate',
+                                  style: GoogleFonts.dmSans(
+                                    color: _kSub,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '$compliantCount of ${_tanks.length} assets compliant',
+                                  style: GoogleFonts.dmSans(
+                                    color: _kSubL,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              '$compliancePercent%',
+                              style: GoogleFonts.spaceGrotesk(
+                                color: compliancePercent >= 80
+                                    ? _kSuccess
+                                    : (compliancePercent >= 50 ? _kWarn : _kDanger),
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            height: 8,
+                            width: double.infinity,
+                            color: _kBorder,
+                            child: FractionallySizedBox(
+                              alignment: Alignment.centerLeft,
+                              widthFactor: complianceRate,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      compliancePercent >= 80
+                                          ? _kSuccess.withOpacity(0.8)
+                                          : (compliancePercent >= 50 ? _kWarn.withOpacity(0.8) : _kDanger.withOpacity(0.8)),
+                                      compliancePercent >= 80
+                                          ? _kSuccess
+                                          : (compliancePercent >= 50 ? _kWarn : _kDanger),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
               ..._tanks.asMap().entries.map((e) {
                 final t = e.value;
                 final s = e.key < stats.length ? stats[e.key] : DashboardStatsModel.empty(t.id);
@@ -4348,13 +4516,15 @@ class _DashboardTabState extends State<DashboardTab> {
     required bool includeTimestamp,
     required AbbreviationService abbrService,
     required String folderId,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
   }) {
     // Check if any row has an IF-THEN alert value
     bool hasIfThen = false;
     if (isToday) {
       hasIfThen = tanks.any((t) {
         final stats = statsByTank[t.id];
-        if (stats == null || stats.lastCapturedAt == null) return false;
+        if (stats == null || !_isCapturedToday(stats.lastCapturedAt)) return false;
         return _getIfThenForTank(t.id, stats.lastCapturedAt, null).isNotEmpty;
       });
     } else {
@@ -4367,7 +4537,7 @@ class _DashboardTabState extends State<DashboardTab> {
     if (isToday) {
       hasDuplicateReason = tanks.any((t) {
         final stats = statsByTank[t.id];
-        if (stats == null) return false;
+        if (stats == null || !_isCapturedToday(stats.lastCapturedAt)) return false;
         return stats.lastDuplicateReason != null && stats.lastDuplicateReason!.trim().isNotEmpty;
       });
     } else {
@@ -4376,44 +4546,164 @@ class _DashboardTabState extends State<DashboardTab> {
       });
     }
 
-    final int totalCols = 1 + params.length + (hasIfThen ? 1 : 0) + (hasDuplicateReason ? 1 : 0);
+    // ── Parameter consolidation ───────────────────────────────────────────
     final folderConfig = formatConfigs[folderId] as Map?;
-    final pdfAbbreviate = folderConfig?['pdf_abbreviate'] != false;
-    final int pdfThreshold = (folderConfig?['pdf_threshold'] as num?)?.toInt() ?? 6;
-    final bool compress = pdfAbbreviate && (totalCols > pdfThreshold);
+    final int uncommonThreshold = (folderConfig?['uncommon_threshold'] as num?)?.toInt() ?? 50;
+    final bool consolidateUncommon = formatConfigs['consolidate_uncommon'] != false && folderConfig?['consolidate_uncommon'] != false;
 
-    final List<String> headers = ['Asset Name'];
+    final bool compactionEnabled = formatConfigs['compaction_enabled'] == true;
+    final bool abbrTitlesEnabled = formatConfigs['abbr_titles_enabled'] == true;
+
+    final Map<String, int> paramTankCount = {};
     for (final p in params) {
       final label = p['label'].toString();
-      headers.add(compress ? abbrService.abbreviate(label, isHeader: true) : label);
+      int count = 0;
+      for (final tank in tanks) {
+        if (tank.inspectionProperties.any((prop) =>
+            (prop['label'] ?? prop['name'] ?? '').toString() == label)) {
+          count++;
+        }
+      }
+      paramTankCount[label] = count;
+    }
+
+    final int totalTanks = tanks.isEmpty ? 1 : tanks.length;
+    final List<Map<String, dynamic>> commonParams = [];
+    final List<Map<String, dynamic>> uncommonParams = [];
+
+    for (final p in params) {
+      final label = p['label'].toString();
+      final pct = ((paramTankCount[label] ?? 0) / totalTanks * 100).round();
+      if (consolidateUncommon && pct < uncommonThreshold) {
+        uncommonParams.add(p);
+      } else {
+        commonParams.add(p);
+      }
+    }
+    uncommonParams.sort((a, b) => a['label'].toString().compareTo(b['label'].toString()));
+    final bool hasOtherCol = uncommonParams.isNotEmpty;
+
+    final int totalCols = 1 +
+        commonParams.length +
+        (hasOtherCol ? 1 : 0) +
+        (hasIfThen ? 1 : 0) +
+        (hasDuplicateReason ? 1 : 0);
+
+    final excelAbbreviate = folderConfig?['excel_abbreviate'] != false;
+    final bool compress = excelAbbreviate && (totalCols > 6);
+
+    // ── Header row ────────────────────────────────────────────────────────
+    final List<String> headers = ['Asset Name'];
+    for (final p in commonParams) {
+      final label = p['label'].toString();
+      final shouldAbbr = _shouldAbbreviateTitle(label, compress, abbrTitlesEnabled);
+      headers.add(shouldAbbr ? abbrService.abbreviate(label, isHeader: true) : label);
+    }
+    if (hasOtherCol) {
+      headers.add('Other Parameters');
     }
     if (hasIfThen) {
-      headers.add(compress ? abbrService.abbreviate('IF-THEN', isHeader: true) : 'IF-THEN');
+      final shouldAbbr = _shouldAbbreviateTitle('IF-THEN', compress, abbrTitlesEnabled);
+      headers.add(shouldAbbr ? abbrService.abbreviate('IF-THEN', isHeader: true) : 'IF-THEN');
     }
     if (hasDuplicateReason) {
-      headers.add(compress ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason');
+      final shouldAbbr = _shouldAbbreviateTitle('Duplicate Reason', compress, abbrTitlesEnabled);
+      headers.add(shouldAbbr ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason');
     }
+
+    final double cellFontSize = compactionEnabled ? 5.8 : (compress ? 6.2 : 6.8);
+    final double headerFontSize = compactionEnabled ? 6.2 : (compress ? 6.5 : 7.2);
+    final pw.EdgeInsets cellPadding = compactionEnabled
+        ? const pw.EdgeInsets.symmetric(horizontal: 1.5, vertical: 1.5)
+        : const pw.EdgeInsets.symmetric(horizontal: 2.5, vertical: 2.5);
 
     final headerRow = pw.TableRow(
       decoration: const pw.BoxDecoration(color: pdf.PdfColors.grey300),
-      children: headers.map((h) => _pdfCell(h, header: true, fontSize: compress ? 6.5 : 7.5, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2))).toList(),
+      children: headers.map((h) => _pdfCell(h, header: true, fontSize: headerFontSize, padding: cellPadding)).toList(),
     );
 
     final List<pw.TableRow> rows = [headerRow];
+
+    // ── Helper: build Other Parameters cell ──────────────────────────────
+    pw.Widget buildOtherParamsCell({
+      required Map<String, dynamic> readingValues,
+      required TankModel tank,
+      required pw.BoxDecoration? rowBg,
+    }) {
+      final List<Map<String, dynamic>> entries = [];
+      for (final p in uncommonParams) {
+        final label = p['label'].toString();
+        final val = readingValues[label];
+        if (val == null) continue;
+        final prop = _getTankParamProp(tank, label) ?? p;
+        final valStr = _formatValueWithArrow(val, prop);
+        if (valStr == '-') continue;
+        entries.add({'label': label, 'value': valStr});
+      }
+      entries.sort((a, b) => a['label'].toString().compareTo(b['label'].toString()));
+
+      if (entries.isEmpty) {
+        return _pdfCell('-', fill: rowBg?.color, fontSize: cellFontSize, padding: cellPadding);
+      }
+
+      final textSpans = <pw.TextSpan>[];
+      for (int i = 0; i < entries.length; i++) {
+        final entry = entries[i];
+        final label = entry['label'].toString();
+        final valStr = entry['value'].toString();
+
+        final pdfColor = _resolveParamColorPdfSync(
+          label: label,
+          localColorsCache: localColorsCache,
+          pendingDbWrites: pendingDbWrites,
+        );
+
+        if (i > 0) {
+          textSpans.add(const pw.TextSpan(text: '\n'));
+        }
+        textSpans.add(
+          pw.TextSpan(
+            text: '$label: ',
+            style: pw.TextStyle(
+              color: pdfColor,
+              fontWeight: pw.FontWeight.bold,
+              fontSize: cellFontSize - 0.5,
+            ),
+          ),
+        );
+        textSpans.add(
+          pw.TextSpan(
+            text: valStr,
+            style: pw.TextStyle(
+              color: rowBg != null ? pdf.PdfColors.black : null,
+              fontSize: cellFontSize - 0.5,
+            ),
+          ),
+        );
+      }
+
+      return _pdfCellWidget(
+        pw.RichText(
+          text: pw.TextSpan(children: textSpans),
+        ),
+        fill: rowBg?.color,
+        padding: cellPadding,
+      );
+    }
 
     if (isToday) {
       for (final tank in tanks) {
         final stats = statsByTank[tank.id];
         final cleanName = _cleanAssetName(tankName: tank.tankName, folderId: folderId, formatConfigs: formatConfigs);
-        
-        if (stats == null || stats.lastCapturedAt == null) {
+
+        if (stats == null || !_isCapturedToday(stats.lastCapturedAt)) {
           final pendingBg = _getRowColor(null, pending: true);
           rows.add(
             pw.TableRow(
               decoration: pw.BoxDecoration(color: pendingBg),
               children: [
-                _pdfCell('$cleanName\n-', fill: pendingBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, textColor: pdf.PdfColors.black, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
-                _pdfCell('------- Readings not taken ------', fill: pendingBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, alignment: pw.Alignment.center, textColor: pdf.PdfColors.black, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
+                _pdfCell('$cleanName\n-', fill: pendingBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, textColor: pdf.PdfColors.black, padding: cellPadding),
+                _pdfCell('------- Readings not taken ------', fill: pendingBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, alignment: pw.Alignment.center, textColor: pdf.PdfColors.black, padding: cellPadding),
                 for (int i = 0; i < totalCols - 2; i++) pw.Container(),
               ],
             ),
@@ -4422,14 +4712,14 @@ class _DashboardTabState extends State<DashboardTab> {
           final alertSev = _getTankActiveAlertSeverity(tank.id, _allAlerts.where((a) => !a.acknowledged && a.status.toLowerCase() != 'completed').toList());
           final rowBg = _getRowColor(alertSev);
           final timeStr = DateFormat('hh:mm a').format(DateTime.parse(stats.lastCapturedAt!).toLocal());
-          
-          final List<pw.Widget> cells = [];
-          cells.add(_pdfCell('$cleanName\n$timeStr', fill: rowBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, textColor: rowBg != null ? pdf.PdfColors.black : null, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
 
-          for (final p in params) {
+          final List<pw.Widget> cells = [];
+          cells.add(_pdfCell('$cleanName\n$timeStr', fill: rowBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, textColor: rowBg != null ? pdf.PdfColors.black : null, padding: cellPadding));
+
+          for (final p in commonParams) {
             final val = stats.lastReading[p['label']];
             var valStr = _formatValueWithArrow(val, _getTankParamProp(tank, p['label'].toString()));
-            if (compress && valStr != '-' && valStr.length > 5) {
+            if (compress && valStr != '-' && valStr.length > 5 && !_isNumericOrRange(valStr)) {
               valStr = abbrService.abbreviate(valStr);
             }
             final paramImages = _getParamImages(stats.lastReading, _getTankParamProp(tank, p['label'].toString()) ?? p);
@@ -4440,12 +4730,12 @@ class _DashboardTabState extends State<DashboardTab> {
                   mainAxisSize: pw.MainAxisSize.min,
                   crossAxisAlignment: pw.CrossAxisAlignment.center,
                   children: [
-                    pw.Text(valStr, style: pw.TextStyle(fontSize: compress ? 6.0 : 6.8, fontWeight: pw.FontWeight.normal, color: rowBg != null ? pdf.PdfColors.black : null)),
+                    pw.Text(valStr, style: pw.TextStyle(fontSize: cellFontSize, fontWeight: pw.FontWeight.normal, color: rowBg != null ? pdf.PdfColors.black : null)),
                     if (includeTimestamp && valStr != '-')
                       pw.Text(
                         timeStr,
                         style: pw.TextStyle(
-                          fontSize: 5.0,
+                          fontSize: cellFontSize - 1.2,
                           color: pdf.PdfColor.fromInt(0xFF1B5E20),
                           fontWeight: pw.FontWeight.bold,
                         ),
@@ -4460,7 +4750,7 @@ class _DashboardTabState extends State<DashboardTab> {
                           child: pw.Text(
                             paramImages.length == 1 ? '[Photo]' : '[P$idx]',
                             style: pw.TextStyle(
-                              fontSize: 5.0,
+                              fontSize: cellFontSize - 1.5,
                               color: pdf.PdfColors.blue800,
                               decoration: pw.TextDecoration.underline,
                             ),
@@ -4472,16 +4762,24 @@ class _DashboardTabState extends State<DashboardTab> {
                 ),
                 fill: rowBg,
                 alignment: pw.Alignment.center,
-                padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                padding: cellPadding,
               ),
             );
           }
 
-
+          if (hasOtherCol) {
+            cells.add(
+              buildOtherParamsCell(
+                readingValues: stats.lastReading,
+                tank: tank,
+                rowBg: rowBg != null ? pw.BoxDecoration(color: rowBg) : null,
+              ),
+            );
+          }
 
           if (hasIfThen) {
             final ifThenVal = _getIfThenForTank(tank.id, stats.lastCapturedAt, null);
-            cells.add(_pdfCell(ifThenVal.isNotEmpty ? ifThenVal : '-', fill: rowBg, fontSize: compress ? 6.0 : 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+            cells.add(_pdfCell(ifThenVal.isNotEmpty ? ifThenVal : '-', fill: rowBg, fontSize: cellFontSize, padding: cellPadding));
           }
 
           if (hasDuplicateReason) {
@@ -4489,7 +4787,7 @@ class _DashboardTabState extends State<DashboardTab> {
             if (compress && reason != '-' && reason.length > 8) {
               reason = abbrService.abbreviate(reason);
             }
-            cells.add(_pdfCell(reason, fill: rowBg, fontSize: compress ? 6.0 : 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+            cells.add(_pdfCell(reason, fill: rowBg, fontSize: cellFontSize, padding: cellPadding));
           }
 
           rows.add(pw.TableRow(children: cells));
@@ -4511,8 +4809,8 @@ class _DashboardTabState extends State<DashboardTab> {
             pw.TableRow(
               decoration: pw.BoxDecoration(color: pendingBg),
               children: [
-                _pdfCell('$cleanName\n-', fill: pendingBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, textColor: pdf.PdfColors.black, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
-                _pdfCell('------- Readings not taken ------', fill: pendingBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, alignment: pw.Alignment.center, textColor: pdf.PdfColors.black, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
+                _pdfCell('$cleanName\n-', fill: pendingBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, textColor: pdf.PdfColors.black, padding: cellPadding),
+                _pdfCell('------- Readings not taken ------', fill: pendingBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, alignment: pw.Alignment.center, textColor: pdf.PdfColors.black, padding: cellPadding),
                 for (int i = 0; i < totalCols - 2; i++) pw.Container(),
               ],
             ),
@@ -4524,12 +4822,12 @@ class _DashboardTabState extends State<DashboardTab> {
             final timeStr = DateFormat('hh:mm a').format(DateTime.parse(r.capturedAt).toLocal());
 
             final List<pw.Widget> cells = [];
-            cells.add(_pdfCell('$cleanName\n$timeStr', fill: rowBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, textColor: rowBg != null ? pdf.PdfColors.black : null, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+            cells.add(_pdfCell('$cleanName\n$timeStr', fill: rowBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, textColor: rowBg != null ? pdf.PdfColors.black : null, padding: cellPadding));
 
-            for (final p in params) {
+            for (final p in commonParams) {
               final val = r.inspectionValues[p['label']];
               var valStr = _formatValueWithArrow(val, _getTankParamProp(tank, p['label'].toString()));
-              if (compress && valStr != '-' && valStr.length > 5) {
+              if (compress && valStr != '-' && valStr.length > 5 && !_isNumericOrRange(valStr)) {
                 valStr = abbrService.abbreviate(valStr);
               }
               final paramImages = _getParamImages(r.inspectionValues, _getTankParamProp(tank, p['label'].toString()) ?? p);
@@ -4540,12 +4838,12 @@ class _DashboardTabState extends State<DashboardTab> {
                     mainAxisSize: pw.MainAxisSize.min,
                     crossAxisAlignment: pw.CrossAxisAlignment.center,
                     children: [
-                      pw.Text(valStr, style: pw.TextStyle(fontSize: compress ? 6.0 : 6.8, fontWeight: pw.FontWeight.normal, color: rowBg != null ? pdf.PdfColors.black : null)),
+                      pw.Text(valStr, style: pw.TextStyle(fontSize: cellFontSize, fontWeight: pw.FontWeight.normal, color: rowBg != null ? pdf.PdfColors.black : null)),
                       if (includeTimestamp && valStr != '-')
                         pw.Text(
                           timeStr,
                           style: pw.TextStyle(
-                            fontSize: 5.0,
+                            fontSize: cellFontSize - 1.2,
                             color: pdf.PdfColor.fromInt(0xFF1B5E20),
                             fontWeight: pw.FontWeight.bold,
                           ),
@@ -4560,7 +4858,7 @@ class _DashboardTabState extends State<DashboardTab> {
                             child: pw.Text(
                               paramImages.length == 1 ? '[Photo]' : '[P$idx]',
                               style: pw.TextStyle(
-                                fontSize: 5.0,
+                                fontSize: cellFontSize - 1.5,
                                 color: pdf.PdfColors.blue800,
                                 decoration: pw.TextDecoration.underline,
                               ),
@@ -4572,16 +4870,24 @@ class _DashboardTabState extends State<DashboardTab> {
                   ),
                   fill: rowBg,
                   alignment: pw.Alignment.center,
-                  padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                  padding: cellPadding,
                 ),
               );
             }
 
-
+            if (hasOtherCol) {
+              cells.add(
+                buildOtherParamsCell(
+                  readingValues: r.inspectionValues,
+                  tank: tank,
+                  rowBg: rowBg != null ? pw.BoxDecoration(color: rowBg) : null,
+                ),
+              );
+            }
 
             if (hasIfThen) {
               final ifThenVal = _getIfThenForTank(r.tankId, r.capturedAt, r);
-              cells.add(_pdfCell(ifThenVal.isNotEmpty ? ifThenVal : '-', fill: rowBg, fontSize: compress ? 6.0 : 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+              cells.add(_pdfCell(ifThenVal.isNotEmpty ? ifThenVal : '-', fill: rowBg, fontSize: cellFontSize, padding: cellPadding));
             }
 
             if (hasDuplicateReason) {
@@ -4589,7 +4895,7 @@ class _DashboardTabState extends State<DashboardTab> {
               if (compress && reason != '-' && reason.length > 8) {
                 reason = abbrService.abbreviate(reason);
               }
-              cells.add(_pdfCell(reason, fill: rowBg, fontSize: compress ? 6.0 : 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+              cells.add(_pdfCell(reason, fill: rowBg, fontSize: cellFontSize, padding: cellPadding));
             }
 
             rows.add(pw.TableRow(children: cells));
@@ -4601,12 +4907,12 @@ class _DashboardTabState extends State<DashboardTab> {
     final List<pw.TableColumnWidth> colWidthList = [
       const pw.FlexColumnWidth(1.3), // Asset Name
     ];
-    for (int i = 0; i < params.length; i++) {
+    for (int i = 0; i < commonParams.length; i++) {
       colWidthList.add(const pw.FlexColumnWidth(1.0)); // Params
     }
-    // if (hasImages) {
-    //   colWidthList.add(const pw.FlexColumnWidth(0.8)); // Images
-    // }
+    if (hasOtherCol) {
+      colWidthList.add(const pw.FlexColumnWidth(1.6)); // Other Parameters
+    }
     if (hasIfThen) {
       colWidthList.add(const pw.FlexColumnWidth(1.5)); // IF-THEN
     }
@@ -4634,47 +4940,107 @@ class _DashboardTabState extends State<DashboardTab> {
     required AbbreviationService abbrService,
     required String folderId,
     required List<pdf.PdfColor> dayColors,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
   }) {
     final hasDuplicateReason = readings.any((r) {
       return r.inspectionValues['duplicate_reason'] != null && r.inspectionValues['duplicate_reason'].toString().trim().isNotEmpty;
     });
 
-    final int totalCols = 1 + params.length + (hasDuplicateReason ? 1 : 0);
+    // ── Parameter consolidation ───────────────────────────────────────────
     final folderConfig = formatConfigs[folderId] as Map?;
+    final int uncommonThreshold = (folderConfig?['uncommon_threshold'] as num?)?.toInt() ?? 50;
+    final bool consolidateUncommon = formatConfigs['consolidate_uncommon'] != false && folderConfig?['consolidate_uncommon'] != false;
+
+    final bool compactionEnabled = formatConfigs['compaction_enabled'] == true;
+    final bool abbrTitlesEnabled = formatConfigs['abbr_titles_enabled'] == true;
+
+    final Map<String, int> paramTankCount = {};
+    for (final p in params) {
+      final label = p['label'].toString();
+      int count = 0;
+      for (final tank in tanks) {
+        if (tank.inspectionProperties.any((prop) {
+          return (prop['label'] ?? prop['name'] ?? '').toString() == label;
+        })) {
+          count++;
+        }
+      }
+      paramTankCount[label] = count;
+    }
+
+    final int totalTanks = tanks.isEmpty ? 1 : tanks.length;
+    final List<Map<String, dynamic>> commonParams = [];
+    final List<Map<String, dynamic>> uncommonParams = [];
+
+    for (final p in params) {
+      final label = p['label'].toString();
+      final pct = ((paramTankCount[label] ?? 0) / totalTanks * 100).round();
+      if (consolidateUncommon && pct < uncommonThreshold) {
+        uncommonParams.add(p);
+      } else {
+        commonParams.add(p);
+      }
+    }
+    uncommonParams.sort((a, b) => a['label'].toString().compareTo(b['label'].toString()));
+    final bool hasOtherCol = uncommonParams.isNotEmpty;
+
+    final int totalCols = 1 + commonParams.length * days.length + (hasOtherCol ? 1 : 0) + (hasDuplicateReason ? 1 : 0);
     final pdfAbbreviate = folderConfig?['pdf_abbreviate'] != false;
     final bool compress = pdfAbbreviate && (totalCols > 6);
 
+    final double cellFontSize = compactionEnabled ? 5.2 : (compress ? 5.6 : 6.2);
+    final double headerFontSize = compactionEnabled ? 5.8 : (compress ? 6.2 : 6.8);
+    final pw.EdgeInsets cellPadding = compactionEnabled
+        ? const pw.EdgeInsets.symmetric(horizontal: 1.5, vertical: 1.5)
+        : const pw.EdgeInsets.symmetric(horizontal: 2.5, vertical: 2.5);
+
+    // ── Header Row 1: Parameter Groups ────────────────────────────────────
     final header1Cells = <pw.Widget>[
-      _pdfCell('', header: true, fontSize: 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
+      _pdfCell('', header: true, fontSize: headerFontSize, padding: cellPadding),
     ];
-    for (final p in params) {
+    for (final p in commonParams) {
       final label = p['label'].toString();
+      final shouldAbbr = _shouldAbbreviateTitle(label, compress, abbrTitlesEnabled);
       header1Cells.add(
         _pdfCell(
-          compress ? abbrService.abbreviate(label, isHeader: true) : label,
+          shouldAbbr ? abbrService.abbreviate(label, isHeader: true) : label,
           header: true,
-          fontSize: 7.0,
+          fontSize: headerFontSize,
           alignment: pw.Alignment.center,
-          padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+          padding: cellPadding,
+        ),
+      );
+    }
+    if (hasOtherCol) {
+      header1Cells.add(
+        _pdfCell(
+          'Other Parameters',
+          header: true,
+          fontSize: headerFontSize,
+          alignment: pw.Alignment.center,
+          padding: cellPadding,
         ),
       );
     }
     if (hasDuplicateReason) {
+      final shouldAbbr = _shouldAbbreviateTitle('Duplicate Reason', compress, abbrTitlesEnabled);
       header1Cells.add(
         _pdfCell(
-          compress ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason',
+          shouldAbbr ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason',
           header: true,
-          fontSize: 7.0,
+          fontSize: headerFontSize,
           alignment: pw.Alignment.center,
-          padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+          padding: cellPadding,
         ),
       );
     }
 
+    // ── Header Row 2: Date sub-columns ────────────────────────────────────
     final header2Cells = <pw.Widget>[
-      _pdfCell('Asset Name', header: true, fontSize: 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
+      _pdfCell('Asset Name', header: true, fontSize: headerFontSize, padding: cellPadding),
     ];
-    for (final p in params) {
+    for (final p in commonParams) {
       header2Cells.add(
         pw.Table(
           defaultVerticalAlignment: pw.TableCellVerticalAlignment.full,
@@ -4692,10 +5058,10 @@ class _DashboardTabState extends State<DashboardTab> {
                   dateLabel,
                   header: true,
                   fill: colBg,
-                  fontSize: 6.0,
+                  fontSize: cellFontSize,
                   alignment: pw.Alignment.center,
                   textColor: pdf.PdfColors.black,
-                  padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                  padding: cellPadding,
                 );
               }),
             ),
@@ -4703,8 +5069,19 @@ class _DashboardTabState extends State<DashboardTab> {
         ),
       );
     }
+    if (hasOtherCol) {
+      header2Cells.add(
+        _pdfCell(
+          'Name : Value (per day)',
+          header: true,
+          fontSize: cellFontSize,
+          alignment: pw.Alignment.center,
+          padding: cellPadding,
+        ),
+      );
+    }
     if (hasDuplicateReason) {
-      header2Cells.add(_pdfCell('-', header: true, fontSize: 7.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+      header2Cells.add(_pdfCell('-', header: true, fontSize: headerFontSize, padding: cellPadding));
     }
 
     final List<pw.TableRow> rows = [
@@ -4712,11 +5089,117 @@ class _DashboardTabState extends State<DashboardTab> {
       pw.TableRow(children: header2Cells),
     ];
 
+    // ── Helper: build weekly Other Parameters rich cell ───────────────────
+    pw.Widget buildWeeklyOtherParamsCell({
+      required List<ReadingModel> tankReadings,
+      required TankModel tank,
+      required pw.BoxDecoration? rowBg,
+    }) {
+      final textSpans = <pw.TextSpan>[];
+      int dayCount = 0;
+
+      for (int dIdx = 0; dIdx < days.length; dIdx++) {
+        final day = days[dIdx];
+        final dateLabel = DateFormat('dd/MM').format(day);
+
+        final dayReadings = tankReadings.where((r) {
+          final dt = DateTime.parse(r.capturedAt).toLocal();
+          return DateFormat('yyyy-MM-dd').format(dt) == DateFormat('yyyy-MM-dd').format(day);
+        }).toList()
+          ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+
+        final ReadingModel? latestReading = dayReadings.isNotEmpty ? dayReadings.first : null;
+
+        final List<Map<String, dynamic>> dayEntries = [];
+        for (final p in uncommonParams) {
+          final label = p['label'].toString();
+          String valText = '-';
+          if (latestReading != null) {
+            final val = latestReading.inspectionValues[label];
+            if (val != null) {
+              final prop = _getTankParamProp(tank, label) ?? p;
+              valText = _formatValueWithArrow(val, prop);
+            }
+          }
+          if (valText != '-') {
+            dayEntries.add({'label': label, 'value': valText});
+          }
+        }
+        dayEntries.sort((a, b) => a['label'].toString().compareTo(b['label'].toString()));
+
+        if (dayEntries.isNotEmpty) {
+          if (dayCount > 0) {
+            textSpans.add(const pw.TextSpan(text: '\n'));
+          }
+          textSpans.add(
+            pw.TextSpan(
+              text: '[$dateLabel]\n',
+              style: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: cellFontSize - 0.5,
+                color: pdf.PdfColors.grey800,
+              ),
+            ),
+          );
+
+          for (int entryIdx = 0; entryIdx < dayEntries.length; entryIdx++) {
+            final entry = dayEntries[entryIdx];
+            final label = entry['label'].toString();
+            final value = entry['value'].toString();
+
+            final pdfColor = _resolveParamColorPdfSync(
+              label: label,
+              localColorsCache: localColorsCache,
+              pendingDbWrites: pendingDbWrites,
+            );
+
+            if (entryIdx > 0) {
+              textSpans.add(const pw.TextSpan(text: '\n'));
+            }
+            textSpans.add(
+              pw.TextSpan(
+                text: '  $label: ',
+                style: pw.TextStyle(
+                  color: pdfColor,
+                  fontWeight: pw.FontWeight.bold,
+                  fontSize: cellFontSize - 0.8,
+                ),
+              ),
+            );
+            textSpans.add(
+              pw.TextSpan(
+                text: value,
+                style: pw.TextStyle(
+                  color: rowBg != null ? pdf.PdfColors.black : null,
+                  fontSize: cellFontSize - 0.8,
+                ),
+              ),
+            );
+          }
+          dayCount++;
+        }
+      }
+
+      if (textSpans.isEmpty) {
+        return _pdfCell('-', fill: rowBg?.color, fontSize: cellFontSize, padding: cellPadding);
+      }
+
+      return _pdfCellWidget(
+        pw.RichText(
+          text: pw.TextSpan(children: textSpans),
+        ),
+        fill: rowBg?.color,
+        padding: cellPadding,
+      );
+    }
+
+    // ── Table Rows ────────────────────────────────────────────────────────
     for (final tank in tanks) {
       final alertSev = _getTankActiveAlertSeverity(tank.id, _allAlerts.where((a) => !a.acknowledged && a.status.toLowerCase() != 'completed').toList());
       final cleanName = _cleanAssetName(tankName: tank.tankName, folderId: folderId, formatConfigs: formatConfigs);
 
-      final hasAnyReadings = readings.any((r) => r.tankId == tank.id);
+      final folderReadings = readings.where((r) => r.tankId == tank.id).toList();
+      final hasAnyReadings = folderReadings.isNotEmpty;
       final alertBg = hasAnyReadings ? _getRowColor(alertSev) : _getRowColor(null, pending: true);
 
       if (!hasAnyReadings) {
@@ -4724,18 +5207,18 @@ class _DashboardTabState extends State<DashboardTab> {
           pw.TableRow(
             decoration: pw.BoxDecoration(color: alertBg),
             children: [
-              _pdfCell(cleanName, fill: alertBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, textColor: pdf.PdfColors.black, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
-              _pdfCell('------- Readings not taken ------', fill: alertBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, alignment: pw.Alignment.center, textColor: pdf.PdfColors.black, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
+              _pdfCell(cleanName, fill: alertBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, textColor: pdf.PdfColors.black, padding: cellPadding),
+              _pdfCell('------- Readings not taken ------', fill: alertBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, alignment: pw.Alignment.center, textColor: pdf.PdfColors.black, padding: cellPadding),
               for (int i = 0; i < totalCols - 2; i++) pw.Container(),
             ],
           ),
         );
       } else {
         final List<pw.Widget> parentCells = [
-          _pdfCell(cleanName, fill: alertBg, fontSize: 7.0, fontWeight: pw.FontWeight.bold, textColor: alertBg != null ? pdf.PdfColors.black : null, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)),
+          _pdfCell(cleanName, fill: alertBg, fontSize: cellFontSize, fontWeight: pw.FontWeight.bold, textColor: alertBg != null ? pdf.PdfColors.black : null, padding: cellPadding),
         ];
 
-        for (final p in params) {
+        for (final p in commonParams) {
           final prop = _getTankParamProp(tank, p['label'].toString()) ?? p;
 
           parentCells.add(
@@ -4751,8 +5234,7 @@ class _DashboardTabState extends State<DashboardTab> {
                     final day = days[dIdx];
                     final colBg = alertBg ?? dayColors[dIdx % dayColors.length];
 
-                    final dayReadings = readings.where((r) {
-                      if (r.tankId != tank.id) return false;
+                    final dayReadings = folderReadings.where((r) {
                       final dt = DateTime.parse(r.capturedAt).toLocal();
                       return DateFormat('yyyy-MM-dd').format(dt) == DateFormat('yyyy-MM-dd').format(day);
                     }).toList()
@@ -4766,7 +5248,7 @@ class _DashboardTabState extends State<DashboardTab> {
                       final val = latest.inspectionValues[p['label']];
                       if (val != null) {
                         valText = _formatValueWithArrow(val, prop);
-                        if (compress && valText != '-' && valText.length > 5) {
+                        if (compress && valText != '-' && valText.length > 5 && !_isNumericOrRange(valText)) {
                           valText = abbrService.abbreviate(valText);
                         }
                         timeStr = DateFormat('hh:mm a').format(DateTime.parse(latest.capturedAt).toLocal());
@@ -4778,12 +5260,12 @@ class _DashboardTabState extends State<DashboardTab> {
                       mainAxisSize: pw.MainAxisSize.min,
                       crossAxisAlignment: pw.CrossAxisAlignment.center,
                       children: [
-                        pw.Text(valText, style: pw.TextStyle(fontSize: 6.0, fontWeight: pw.FontWeight.normal, color: colBg != null ? pdf.PdfColors.black : null)),
+                        pw.Text(valText, style: pw.TextStyle(fontSize: cellFontSize, fontWeight: pw.FontWeight.normal, color: colBg != null ? pdf.PdfColors.black : null)),
                         if (includeTimestamp && valText != '-' && timeStr.isNotEmpty)
                           pw.Text(
                             timeStr,
                             style: pw.TextStyle(
-                              fontSize: 4.8,
+                              fontSize: cellFontSize - 1.2,
                               color: pdf.PdfColor.fromInt(0xFF1B5E20),
                               fontWeight: pw.FontWeight.bold,
                             ),
@@ -4798,7 +5280,7 @@ class _DashboardTabState extends State<DashboardTab> {
                               child: pw.Text(
                                 paramImages.length == 1 ? '[Photo]' : '[P$idx]',
                                 style: pw.TextStyle(
-                                  fontSize: 4.6,
+                                  fontSize: cellFontSize - 1.4,
                                   color: pdf.PdfColors.blue800,
                                   decoration: pw.TextDecoration.underline,
                                 ),
@@ -4809,7 +5291,7 @@ class _DashboardTabState extends State<DashboardTab> {
                       ],
                     );
 
-                    return _pdfCellWidget(cellContent, fill: colBg, alignment: pw.Alignment.center, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2));
+                    return _pdfCellWidget(cellContent, fill: colBg, alignment: pw.Alignment.center, padding: cellPadding);
                   }),
                 ),
               ],
@@ -4817,11 +5299,20 @@ class _DashboardTabState extends State<DashboardTab> {
           );
         }
 
+        if (hasOtherCol) {
+          parentCells.add(
+            buildWeeklyOtherParamsCell(
+              tankReadings: folderReadings,
+              tank: tank,
+              rowBg: alertBg != null ? pw.BoxDecoration(color: alertBg) : null,
+            ),
+          );
+        }
+
         if (hasDuplicateReason) {
           final List<String> reasons = [];
           for (final day in days) {
-            final dayReadings = readings.where((r) {
-              if (r.tankId != tank.id) return false;
+            final dayReadings = folderReadings.where((r) {
               final dt = DateTime.parse(r.capturedAt).toLocal();
               return DateFormat('yyyy-MM-dd').format(dt) == DateFormat('yyyy-MM-dd').format(day);
             }).toList();
@@ -4837,7 +5328,7 @@ class _DashboardTabState extends State<DashboardTab> {
           if (compress && reasonStr != '-' && reasonStr.length > 10) {
             reasonStr = abbrService.abbreviate(reasonStr);
           }
-          parentCells.add(_pdfCell(reasonStr, fill: alertBg, fontSize: 6.0, padding: const pw.EdgeInsets.symmetric(horizontal: 2, vertical: 2)));
+          parentCells.add(_pdfCell(reasonStr, fill: alertBg, fontSize: cellFontSize, padding: cellPadding));
         }
 
         rows.add(pw.TableRow(decoration: alertBg != null ? pw.BoxDecoration(color: alertBg) : null, children: parentCells));
@@ -4847,11 +5338,16 @@ class _DashboardTabState extends State<DashboardTab> {
     final Map<int, pw.TableColumnWidth> colWidths = {
       0: const pw.FlexColumnWidth(1.2),
     };
-    for (int i = 1; i <= params.length; i++) {
+    for (int i = 1; i <= commonParams.length; i++) {
       colWidths[i] = pw.FlexColumnWidth(days.length * 0.7);
     }
+    int colIdxOffset = commonParams.length + 1;
+    if (hasOtherCol) {
+      colWidths[colIdxOffset] = const pw.FlexColumnWidth(1.8);
+      colIdxOffset++;
+    }
     if (hasDuplicateReason) {
-      colWidths[params.length + 1] = const pw.FlexColumnWidth(1.2);
+      colWidths[colIdxOffset] = const pw.FlexColumnWidth(1.2);
     }
 
     return pw.Table(
@@ -4874,6 +5370,8 @@ class _DashboardTabState extends State<DashboardTab> {
     required bool includeTimestamp,
     required Map<String, dynamic> formatConfigs,
     required AbbreviationService abbrService,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
     String? dateStr,
   }) {
     final widgets = <pw.Widget>[];
@@ -4950,6 +5448,8 @@ class _DashboardTabState extends State<DashboardTab> {
           includeTimestamp: includeTimestamp,
           abbrService: abbrService,
           folderId: folderNode.id,
+          localColorsCache: localColorsCache,
+          pendingDbWrites: pendingDbWrites,
         );
 
         widgets.add(
@@ -4982,6 +5482,8 @@ class _DashboardTabState extends State<DashboardTab> {
           includeTimestamp: includeTimestamp,
           abbrService: abbrService,
           folderId: folderNode.id,
+          localColorsCache: localColorsCache,
+          pendingDbWrites: pendingDbWrites,
         );
 
         widgets.add(
@@ -5018,6 +5520,8 @@ class _DashboardTabState extends State<DashboardTab> {
     required AbbreviationService abbrService,
     required void Function(int col, int row, String colorHex) setCellBg,
     required refCurrentRowBox,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
     String? dateStr,
   }) {
     final List<TankModel> normalTanks = [];
@@ -5095,7 +5599,7 @@ class _DashboardTabState extends State<DashboardTab> {
       if (isToday) {
         hasIfThen = tanks.any((t) {
           final stats = statsByTank[t.id];
-          if (stats == null || stats.lastCapturedAt == null) return false;
+          if (stats == null || !_isCapturedToday(stats.lastCapturedAt)) return false;
           return _getIfThenForTank(t.id, stats.lastCapturedAt, null).isNotEmpty;
         });
       } else {
@@ -5108,7 +5612,7 @@ class _DashboardTabState extends State<DashboardTab> {
       if (isToday) {
         hasDuplicateReason = tanks.any((t) {
           final stats = statsByTank[t.id];
-          if (stats == null) return false;
+          if (stats == null || !_isCapturedToday(stats.lastCapturedAt)) return false;
           return stats.lastDuplicateReason != null && stats.lastDuplicateReason!.trim().isNotEmpty;
         });
       } else {
@@ -5145,7 +5649,7 @@ class _DashboardTabState extends State<DashboardTab> {
           final stats = statsByTank[tank.id];
           final cleanName = _cleanAssetName(tankName: tank.tankName, folderId: folderNode.id, formatConfigs: formatConfigs);
 
-          if (stats == null || stats.lastCapturedAt == null) {
+          if (stats == null || !_isCapturedToday(stats.lastCapturedAt)) {
             final nameCell = xl.TextCellValue('$cleanName\n-');
             final mergedCell = xl.TextCellValue('------- Readings not taken ------');
             final rowCells = <xl.CellValue>[nameCell, mergedCell];
@@ -5344,6 +5848,8 @@ class _DashboardTabState extends State<DashboardTab> {
     required void Function(int col, int row, String colorHex) setCellBg,
     required refCurrentRowBox,
     required List<_AlertModel> openAlerts,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
   }) {
     final List<TankModel> normalTanks = [];
     final List<TankModel> violatedTanks = [];
@@ -5385,27 +5891,69 @@ class _DashboardTabState extends State<DashboardTab> {
         return r.inspectionValues['duplicate_reason'] != null && r.inspectionValues['duplicate_reason'].toString().trim().isNotEmpty;
       });
 
-      final int totalCols = 1 + params.length + (hasDuplicateReason ? 1 : 0);
+      // ── Parameter consolidation ───────────────────────────────────────────
       final folderConfig = formatConfigs[folderNode.id] as Map?;
+      final int uncommonThreshold = (folderConfig?['uncommon_threshold'] as num?)?.toInt() ?? 50;
+      final bool consolidateUncommon = formatConfigs['consolidate_uncommon'] != false && folderConfig?['consolidate_uncommon'] != false;
+
+      final bool compactionEnabled = formatConfigs['compaction_enabled'] == true;
+      final bool abbrTitlesEnabled = formatConfigs['abbr_titles_enabled'] == true;
+
+      final Map<String, int> paramTankCount = {};
+      for (final p in params) {
+        final label = p['label'].toString();
+        int count = 0;
+        for (final tank in tanks) {
+          if (tank.inspectionProperties.any((prop) {
+            return (prop['label'] ?? prop['name'] ?? '').toString() == label;
+          })) {
+            count++;
+          }
+        }
+        paramTankCount[label] = count;
+      }
+
+      final int totalTanks = tanks.isEmpty ? 1 : tanks.length;
+      final List<Map<String, dynamic>> commonParams = [];
+      final List<Map<String, dynamic>> uncommonParams = [];
+
+      for (final p in params) {
+        final label = p['label'].toString();
+        final pct = ((paramTankCount[label] ?? 0) / totalTanks * 100).round();
+        if (consolidateUncommon && pct < uncommonThreshold) {
+          uncommonParams.add(p);
+        } else {
+          commonParams.add(p);
+        }
+      }
+      uncommonParams.sort((a, b) => a['label'].toString().compareTo(b['label'].toString()));
+      final bool hasOtherCol = uncommonParams.isNotEmpty;
+
+      final int totalCols = 1 + commonParams.length * days.length + (hasOtherCol ? 1 : 0) + (hasDuplicateReason ? 1 : 0);
       final excelAbbreviate = folderConfig?['excel_abbreviate'] != false;
       final bool compress = excelAbbreviate && (totalCols > 6);
 
-      final headerRow1 = <xl.CellValue>[
-        xl.TextCellValue('Asset Name'),
-      ];
-      for (final p in params) {
-        final label = compress ? abbrService.abbreviate(p['label'].toString(), isHeader: true) : p['label'].toString();
-        headerRow1.addAll(List.generate(days.length, (dIdx) => xl.TextCellValue(dIdx == 0 ? label : '')));
+      // ── Header row 1: param labels (merged across days) ───────────────────
+      final headerRow1 = <xl.CellValue>[xl.TextCellValue('Asset Name')];
+      for (final p in commonParams) {
+        final label = p['label'].toString();
+        final shouldAbbr = _shouldAbbreviateTitle(label, compress, abbrTitlesEnabled);
+        final finalLabel = shouldAbbr ? abbrService.abbreviate(label, isHeader: true) : label;
+        headerRow1.addAll(List.generate(days.length, (dIdx) => xl.TextCellValue(dIdx == 0 ? finalLabel : '')));
+      }
+      if (hasOtherCol) {
+        headerRow1.add(xl.TextCellValue('Other Parameters'));
       }
       if (hasDuplicateReason) {
-        headerRow1.add(xl.TextCellValue(compress ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason'));
+        final shouldAbbr = _shouldAbbreviateTitle('Duplicate Reason', compress, abbrTitlesEnabled);
+        headerRow1.add(xl.TextCellValue(shouldAbbr ? abbrService.abbreviate('Duplicate Reason', isHeader: true) : 'Duplicate Reason'));
       }
 
       sheet.appendRow(headerRow1);
       for (int col = 0; col < headerRow1.length; col++) {
         setCellBg(col, currentRow, '#ECEFF1');
       }
-      for (int pIdx = 0; pIdx < params.length; pIdx++) {
+      for (int pIdx = 0; pIdx < commonParams.length; pIdx++) {
         int startCol = 1 + pIdx * days.length;
         int endCol = startCol + days.length - 1;
         if (days.length > 1) {
@@ -5417,11 +5965,13 @@ class _DashboardTabState extends State<DashboardTab> {
       }
       currentRow++;
 
-      final headerRow2 = <xl.CellValue>[
-        xl.TextCellValue(''),
-      ];
-      for (final p in params) {
+      // ── Header row 2: date sub-columns ─────────────────────────────────────
+      final headerRow2 = <xl.CellValue>[xl.TextCellValue('')];
+      for (final _ in commonParams) {
         headerRow2.addAll(days.map((day) => xl.TextCellValue(DateFormat('dd/MM').format(day))));
+      }
+      if (hasOtherCol) {
+        headerRow2.add(xl.TextCellValue('Name : Value (per day)'));
       }
       if (hasDuplicateReason) {
         headerRow2.add(xl.TextCellValue(''));
@@ -5429,7 +5979,11 @@ class _DashboardTabState extends State<DashboardTab> {
 
       sheet.appendRow(headerRow2);
       for (int col = 0; col < headerRow2.length; col++) {
-        if (col == 0 || (hasDuplicateReason && col == headerRow2.length - 1)) {
+        if (col == 0) {
+          setCellBg(col, currentRow, '#ECEFF1');
+        } else if (hasOtherCol && col == 1 + commonParams.length * days.length) {
+          setCellBg(col, currentRow, '#ECEFF1');
+        } else if (hasDuplicateReason && col == headerRow2.length - 1) {
           setCellBg(col, currentRow, '#ECEFF1');
         } else {
           final dIdx = (col - 1) % days.length;
@@ -5449,23 +6003,23 @@ class _DashboardTabState extends State<DashboardTab> {
                 : (alertSev == 'warning' ? '#F7EAD7' : (alertSev == 'info' ? '#ECEFF1' : null)))
             : '#EAF2E8';
 
-        final rowCells = <xl.CellValue>[
-          xl.TextCellValue(cleanName),
-        ];
+        final rowCells = <xl.CellValue>[xl.TextCellValue(cleanName)];
 
         if (!hasAnyReadingsForTank) {
           rowCells.add(xl.TextCellValue('------- Readings not taken ------'));
           sheet.appendRow(rowCells);
+          final lastDataCol = commonParams.length * days.length + (hasOtherCol ? 1 : 0) + (hasDuplicateReason ? 1 : 0);
           sheet.merge(
             xl.CellIndex.indexByColumnRow(columnIndex: 1, rowIndex: currentRow),
-            xl.CellIndex.indexByColumnRow(columnIndex: params.length * days.length + (hasDuplicateReason ? 1 : 0), rowIndex: currentRow),
+            xl.CellIndex.indexByColumnRow(columnIndex: lastDataCol, rowIndex: currentRow),
           );
-          for (int col = 0; col <= params.length * days.length + (hasDuplicateReason ? 1 : 0); col++) {
+          for (int col = 0; col <= lastDataCol; col++) {
             setCellBg(col, currentRow, '#EAF2E8');
           }
           currentRow++;
         } else {
-          for (final p in params) {
+          // ── Common parameter value cells ───────────────────────────────────
+          for (final p in commonParams) {
             for (int dIdx = 0; dIdx < days.length; dIdx++) {
               final day = days[dIdx];
 
@@ -5482,7 +6036,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 final val = latest.inspectionValues[p['label']];
                 final prop = _getTankParamProp(tank, p['label'].toString()) ?? p;
                 var valStr = _formatValueWithArrow(val, prop, forExcel: true);
-                if (compress && valStr != '-' && valStr.length > 5) {
+                if (compress && valStr != '-' && valStr.length > 5 && !_isNumericOrRange(valStr)) {
                   valStr = abbrService.abbreviate(valStr);
                 }
 
@@ -5504,6 +6058,61 @@ class _DashboardTabState extends State<DashboardTab> {
               }
               rowCells.add(xl.TextCellValue(valText));
             }
+          }
+
+          // ── Other Parameters merged cell ───────────────────────────────────
+          if (hasOtherCol) {
+            final StringBuffer otherBuf = StringBuffer();
+            for (int dIdx = 0; dIdx < days.length; dIdx++) {
+              final day = days[dIdx];
+              final dateLabel = DateFormat('dd/MM').format(day);
+
+              final dayReadings = tableReadings.where((r) {
+                if (r.tankId != tank.id) return false;
+                final dt = DateTime.parse(r.capturedAt).toLocal();
+                return DateFormat('yyyy-MM-dd').format(dt) == DateFormat('yyyy-MM-dd').format(day);
+              }).toList()
+                ..sort((a, b) => b.capturedAt.compareTo(a.capturedAt));
+
+              final ReadingModel? latestReading = dayReadings.isNotEmpty ? dayReadings.first : null;
+
+              final List<Map<String, dynamic>> dayEntries = [];
+              for (final p in uncommonParams) {
+                final label = p['label'].toString();
+                String valText = '-';
+                if (latestReading != null) {
+                  final val = latestReading.inspectionValues[label];
+                  if (val != null) {
+                    final prop = _getTankParamProp(tank, label) ?? p;
+                    valText = _formatValueWithArrow(val, prop, forExcel: true);
+                  }
+                }
+                if (valText != '-') {
+                  dayEntries.add({'label': label, 'value': valText});
+                }
+              }
+              dayEntries.sort((a, b) => a['label'].toString().compareTo(b['label'].toString()));
+
+              if (dayEntries.isNotEmpty) {
+                if (otherBuf.isNotEmpty) otherBuf.write('\n');
+                otherBuf.write('[$dateLabel]');
+                for (final entry in dayEntries) {
+                  final label = entry['label'].toString();
+                  final value = entry['value'].toString();
+                  // Trigger color registration in cache (return value intentionally discarded).
+                  // ignore: unused_local_variable
+                  final _colorHex = _resolveParamColorExcelSync(
+                    label: label,
+                    localColorsCache: localColorsCache,
+                    pendingDbWrites: pendingDbWrites,
+                  );
+                  otherBuf.write('\n  $label : $value');
+                }
+              }
+            }
+
+            final otherText = otherBuf.isEmpty ? '-' : otherBuf.toString();
+            rowCells.add(xl.TextCellValue(otherText));
           }
 
           if (hasDuplicateReason) {
@@ -5533,11 +6142,16 @@ class _DashboardTabState extends State<DashboardTab> {
           for (int col = 0; col < rowCells.length; col++) {
             if (alertBg != null) {
               setCellBg(col, currentRow, alertBg);
-            } else if (col > 0 && !(hasDuplicateReason && col == rowCells.length - 1)) {
-              final dIdx = (col - 1) % days.length;
-              setCellBg(col, currentRow, dayColors[dIdx % dayColors.length]);
-            } else if (hasDuplicateReason && col == rowCells.length - 1) {
-              setCellBg(col, currentRow, alertBg ?? '#FFFFFF');
+            } else if (col > 0) {
+              final otherColIdx = 1 + commonParams.length * days.length;
+              if (hasOtherCol && col == otherColIdx) {
+                // No special background for Other Parameters column
+              } else if (hasDuplicateReason && col == rowCells.length - 1) {
+                setCellBg(col, currentRow, '#FFFFFF');
+              } else if (col <= commonParams.length * days.length) {
+                final dIdx = (col - 1) % days.length;
+                setCellBg(col, currentRow, dayColors[dIdx % dayColors.length]);
+              }
             }
           }
           currentRow++;
@@ -5805,5 +6419,128 @@ class _DashboardTabState extends State<DashboardTab> {
         setState(() => _alertsPdfExporting = false);
       }
     }
+  }
+
+  int _getStableHash(String s) {
+    int hash = 5381;
+    for (int i = 0; i < s.length; i++) {
+      hash = ((hash << 5) + hash) + s.codeUnitAt(i);
+      hash = hash & 0xFFFFFFFF;
+    }
+    return hash;
+  }
+
+  String _hsvToHex(double h, double s, double v) {
+    final double c = v * s;
+    final double x = c * (1 - ((h / 60.0) % 2 - 1).abs());
+    final double m = v - c;
+
+    double r = 0, g = 0, b = 0;
+    if (h < 60) {
+      r = c; g = x; b = 0;
+    } else if (h < 120) {
+      r = x; g = c; b = 0;
+    } else if (h < 180) {
+      r = 0; g = c; b = x;
+    } else if (h < 240) {
+      r = 0; g = x; b = c;
+    } else if (h < 300) {
+      r = x; g = 0; b = c;
+    } else {
+      r = c; g = 0; b = x;
+    }
+
+    final int ri = ((r + m) * 255).round().clamp(0, 255);
+    final int gi = ((g + m) * 255).round().clamp(0, 255);
+    final int bi = ((b + m) * 255).round().clamp(0, 255);
+
+    final String rs = ri.toRadixString(16).padLeft(2, '0');
+    final String gs = gi.toRadixString(16).padLeft(2, '0');
+    final String bs = bi.toRadixString(16).padLeft(2, '0');
+
+    return '#$rs$gs$bs';
+  }
+
+  String _sanitizeDbKey(String s) {
+    return s.replaceAll(RegExp(r'[\.\$\#\[\]\/]'), '_');
+  }
+
+  pdf.PdfColor _resolveParamColorPdfSync({
+    required String label,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
+  }) {
+    final String dbKey = _sanitizeDbKey(label);
+    if (localColorsCache.containsKey(dbKey)) {
+      final item = localColorsCache[dbKey];
+      if (item is Map && item.containsKey('color')) {
+        final colorHex = item['color'].toString();
+        try {
+          final int val = int.parse(colorHex.replaceAll('#', 'FF'), radix: 16);
+          return pdf.PdfColor.fromInt(val);
+        } catch (_) {}
+      }
+    }
+
+    final int hashVal = _getStableHash(label);
+    final double hue = (hashVal % 360).toDouble();
+    final String generatedHex = _hsvToHex(hue, 0.85, 0.45);
+
+    localColorsCache[dbKey] = {
+      'color': generatedHex,
+      'displayName': label,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'lastUsed': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    pendingDbWrites.add({
+      'key': dbKey,
+      'data': localColorsCache[dbKey],
+    });
+
+    final int val = int.parse(generatedHex.replaceAll('#', 'FF'), radix: 16);
+    return pdf.PdfColor.fromInt(val);
+  }
+
+  String _resolveParamColorExcelSync({
+    required String label,
+    required Map<String, dynamic> localColorsCache,
+    required List<Map<String, dynamic>> pendingDbWrites,
+  }) {
+    final String dbKey = _sanitizeDbKey(label);
+    if (localColorsCache.containsKey(dbKey)) {
+      final item = localColorsCache[dbKey];
+      if (item is Map && item.containsKey('color')) {
+        return item['color'].toString();
+      }
+    }
+
+    final int hashVal = _getStableHash(label);
+    final double hue = (hashVal % 360).toDouble();
+    final String generatedHex = _hsvToHex(hue, 0.85, 0.45);
+
+    localColorsCache[dbKey] = {
+      'color': generatedHex,
+      'displayName': label,
+      'createdAt': DateTime.now().toUtc().toIso8601String(),
+      'lastUsed': DateTime.now().toUtc().toIso8601String(),
+    };
+
+    pendingDbWrites.add({
+      'key': dbKey,
+      'data': localColorsCache[dbKey],
+    });
+
+    return generatedHex;
+  }
+
+  void _flushParamColors(List<Map<String, dynamic>> pendingDbWrites) {
+    if (pendingDbWrites.isEmpty) return;
+    try {
+      final dbRef = FirebaseDatabase.instance.ref('settings/report_format/param_colors');
+      for (final write in pendingDbWrites) {
+        dbRef.child(write['key']).update(Map<String, dynamic>.from(write['data']));
+      }
+    } catch (_) {}
   }
 }

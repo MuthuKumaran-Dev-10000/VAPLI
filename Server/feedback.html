@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Missed Inspection Feedback</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background-color: #0E1012;
+            color: #F0EEE9;
+            margin: 0;
+            padding: 20px;
+        }
+        .wrapper {
+            max-width: 550px;
+            margin: 40px auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #CB8C3E;
+            font-size: 24px;
+            margin: 0;
+            font-weight: 700;
+        }
+        .header p {
+            color: #8A8F9C;
+            font-size: 13px;
+            margin: 5px 0 0 0;
+        }
+        .card {
+            background: #141618;
+            border: 1px solid #252830;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.25);
+        }
+        .card h3 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            color: #F0EEE9;
+            border-bottom: 1px solid #252830;
+            padding-bottom: 8px;
+        }
+        .card h3 .subtitle {
+            font-size: 12px;
+            color: #8A8F9C;
+            font-weight: normal;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: #8A8F9C;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        .form-group select, .form-group textarea {
+            width: 100%;
+            background: #1C1E22;
+            border: 1px solid #252830;
+            border-radius: 6px;
+            color: #F0EEE9;
+            padding: 10px;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        .form-group select:focus, .form-group textarea:focus {
+            border-color: #CB8C3E;
+            outline: none;
+        }
+        .form-group textarea {
+            height: 80px;
+            resize: vertical;
+        }
+        .submit-btn {
+            width: 100%;
+            background-color: #CB8C3E;
+            color: #FFFFFF;
+            border: none;
+            border-radius: 8px;
+            padding: 14px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .submit-btn:hover {
+            background-color: #B57B32;
+        }
+        .submit-btn:disabled {
+            background-color: #555555;
+            cursor: not-allowed;
+        }
+        .success-icon {
+            width: 60px;
+            height: 60px;
+            background-color: #D5F5E3;
+            color: #2ECC71;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            margin: 0 auto 20px auto;
+        }
+        .loader {
+            border: 3px solid #252830;
+            border-top: 3px solid #CB8C3E;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 10px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="wrapper">
+        <div class="header">
+            <h1 id="page-title">Loading Compliance Form...</h1>
+            <p id="page-subtitle">Retrieving asset data from database</p>
+        </div>
+        <div id="form-container"></div>
+    </div>
+
+    <script>
+        const DB_BASE_URL = "https://dummy-firebase-project-id-default-rtdb.firebaseio.com";
+        
+        // Parse Query Params
+        const urlParams = new URLSearchParams(window.location.search);
+        const clientId = urlParams.get('client_id');
+        const dateStr = urlParams.get('date');
+        const tanksParam = urlParams.get('tanks');
+        const envMode = urlParams.get('env') || 'production';
+
+        const tankIds = tanksParam ? tanksParam.split(',').filter(Boolean) : [];
+
+        function getDBPath(path) {
+            let resolved = path;
+            if (clientId) {
+                resolved = `${clientId}/${resolved}`;
+            }
+            if (envMode === 'development') {
+                resolved = `testDB/${resolved}`;
+            }
+            return resolved;
+        }
+
+        async function initForm() {
+            const formContainer = document.getElementById('form-container');
+            const pageTitle = document.getElementById('page-title');
+            const pageSubtitle = document.getElementById('page-subtitle');
+
+            const submittedBy = urlParams.get('submitted_by') || '';
+            const sig = urlParams.get('sig') || '';
+
+            if (!clientId || !dateStr || tankIds.length === 0 || !submittedBy || !sig) {
+                pageTitle.innerText = "Invalid Access Link";
+                pageSubtitle.innerText = "Required parameters are missing or unauthorized.";
+                formContainer.innerHTML = `<div class="card" style="text-align:center;"><h3>Access Error</h3><p>Please use the personalized compliance link provided in your email report.</p></div>`;
+                return;
+            }
+
+            pageTitle.innerText = `Missed Inspection Feedback - ${clientId.toUpperCase()}`;
+            pageSubtitle.innerText = `Reporting missed readings for ${dateStr}`;
+
+            try {
+                // Fetch tank names from Firebase
+                const path = getDBPath("tanks");
+                const response = await fetch(`${DB_BASE_URL}/${path}.json`);
+                const tanksData = await response.json() || {};
+
+                const groups = {};
+                let validTanksCount = 0;
+
+                tankIds.forEach(tid => {
+                    const tank = tanksData[tid];
+                    if (!tank) return;
+                    validTanksCount++;
+                    const name = tank.tank_name || "Asset";
+                    const code = tank.tank_code || "";
+                    const groupName = Object.values(tank.Groups || {})[0] || 'Unassigned';
+                    
+                    if (!groups[groupName]) {
+                        groups[groupName] = [];
+                    }
+                    groups[groupName].push({ id: tid, name: name, code: code });
+                });
+
+                if (validTanksCount === 0) {
+                    formContainer.innerHTML = `
+                    <div class="card" style="text-align:center; padding: 40px 20px;">
+                        <div class="success-icon" style="background-color:#E2E8F0; color:#64748B;">✓</div>
+                        <h2>No Gaps Found</h2>
+                        <p>All assets for client <b>${clientId.toUpperCase()}</b> have recorded inspections for today.</p>
+                    </div>
+                    `;
+                    return;
+                }
+
+                let tanksHtml = "";
+                for (const [groupName, tankList] of Object.entries(groups)) {
+                    tanksHtml += `
+                    <div style="margin-bottom: 16px;">
+                        <h4 style="color: #CB8C3E; font-size: 14px; margin: 0 0 8px 0; border-bottom: 1px solid #252830; padding-bottom: 4px;">${groupName}</h4>
+                        <ul style="list-style: none; padding-left: 10px; margin: 0;">
+                    `;
+                    tankList.forEach(t => {
+                        tanksHtml += `<li style="font-size: 13px; color: #F0EEE9; margin-bottom: 6px;">• ${t.name} <span style="color: #8A8F9C; font-size: 11px;">(${t.code})</span></li>`;
+                    });
+                    tanksHtml += `</ul></div>`;
+                }
+
+                formContainer.innerHTML = `
+                <form id="feedback-form" onsubmit="submitForm(event)">
+                    <div class="card">
+                        <h3>Unattended Assets</h3>
+                        <p style="color: #8A8F9C; font-size: 12px; margin-bottom: 15px;">The following assets did not receive their daily lubrication inspection:</p>
+                        ${tanksHtml}
+                    </div>
+
+                    <div class="card">
+                        <h3>Submit Explanation</h3>
+                        
+                        <div class="form-group">
+                            <label>Supervisor / Submitted By</label>
+                            <div id="supervisor_display" style="padding: 10px; background: #1C1E22; border: 1px solid #252830; border-radius: 6px; color: #8A8F9C; font-size: 13px;">${submittedBy}</div>
+                            <input type="hidden" id="supervisor_name" value="${submittedBy}" />
+                        </div>
+
+                        <div class="form-group">
+                            <label>Reason for not Taking Readings *</label>
+                            <select id="common_reason" required>
+                                <option value="">-- Select Reason --</option>
+                                <option value="Breakdown work">Breakdown work</option>
+                                <option value="Leave">Leave</option>
+                                <option value="Lack of Manpower">Lack of Manpower</option>
+                                <option value="Stock Out / No Lube">Stock Out / No Lube</option>
+                                <option value="Machine Offline / Under Maintenance">Machine Offline / Under Maintenance</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Comments / Explanation *</label>
+                            <textarea id="common_comments" placeholder="Explain the reason in detail..." required></textarea>
+                        </div>
+                    </div>
+
+                    <button type="submit" id="submit-btn" class="submit-btn">Submit Compliance Form</button>
+                </form>
+                `;
+            } catch (err) {
+                console.error(err);
+                formContainer.innerHTML = `<div class="card"><p style="color:#EF4444;">Failed to fetch database configurations. Please check your internet connection.</p></div>`;
+            }
+        }
+
+        async function submitForm(event) {
+            event.preventDefault();
+            const submitBtn = document.getElementById('submit-btn');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = `<div class="loader"></div> Submitting...`;
+
+            const formContainer = document.getElementById('form-container');
+            const supervisorName = document.getElementById('supervisor_name').value.trim();
+            const reason = document.getElementById('common_reason').value;
+            const comments = document.getElementById('common_comments').value.trim();
+            
+            try {
+                // Fetch tank names from Firebase
+                const pathTanks = getDBPath("tanks");
+                const response = await fetch(`${DB_BASE_URL}/${pathTanks}.json`);
+                const tanksData = await response.json() || {};
+
+                const groupedTanks = {};
+                tankIds.forEach(tid => {
+                    const tank = tanksData[tid];
+                    if (!tank) return;
+                    const name = tank.tank_name || "Asset";
+                    const code = tank.tank_code || "";
+                    const groupName = Object.values(tank.Groups || {})[0] || 'Unassigned';
+                    
+                    if (!groupedTanks[groupName]) {
+                        groupedTanks[groupName] = [];
+                    }
+                    groupedTanks[groupName].push({ tank_id: tid, name: name, code: code });
+                });
+
+                const feedbackEntry = {
+                    date: dateStr,
+                    reason: reason,
+                    comments: comments,
+                    submitted_by: supervisorName,
+                    signature: urlParams.get('sig') || '',
+                    submitted_at: new Date().toISOString(),
+                    tanks_by_group: groupedTanks,
+                    email_sent: false
+                };
+
+                const uniqueId = new Date().getTime();
+                const writePath = getDBPath(`MissingReasons/${dateStr}/${uniqueId}`);
+                
+                // Write to Firebase Realtime Database
+                await fetch(`${DB_BASE_URL}/${writePath}.json`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(feedbackEntry)
+                });
+
+                // Show Success Screen
+                formContainer.innerHTML = `
+                <div class="card" style="text-align:center; padding: 40px 20px;">
+                    <div class="success-icon">✓</div>
+                    <h2>Feedback Submitted Successfully</h2>
+                    <p>Reasons for missed inspections have been recorded directly in the database.</p>
+                    <p style="color:#8A8F9C; font-size:12px; margin-top:20px;">The supervisor report will be compiled and sent to the administrator shortly.</p>
+                    <p style="color:#8A8F9C; font-size:12px; margin-top:10px;">You can now close this tab safely.</p>
+                </div>
+                `;
+            } catch (err) {
+                console.error(err);
+                alert("Failed to submit feedback to database. Please check your internet connection.");
+                submitBtn.disabled = false;
+                submitBtn.innerText = "Submit Compliance Form";
+            }
+        }
+
+        window.onload = initForm;
+    </script>
+</body>
+</html>

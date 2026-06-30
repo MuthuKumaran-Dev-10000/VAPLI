@@ -8,6 +8,8 @@ import 'core/services/firebase_env_options.dart';
 import 'core/utils/session_manager.dart';
 import 'features/auth/presentation/pages/login_screen.dart';
 import 'features/home/presentation/pages/home_screen.dart';
+import 'package:lubrication_indicator/core/services/client_context_service.dart';
+import 'package:lubrication_indicator/core/services/fcm_subscription_helper.dart';
 
 
 import 'package:firebase_database/firebase_database.dart';
@@ -79,7 +81,14 @@ class _AppEntryState extends State<AppEntry> {
 
   Future<void> _checkSession() async {
     final valid = await SessionManager.isSessionValid();
-    if (!valid && mounted) {
+    if (valid) {
+      try {
+        final client = await ClientContextService.getLastUsedClient();
+        if (client != null) {
+          await FcmSubscriptionHelper.handleFcmTopicSubscription(client.dbKey);
+        }
+      } catch (_) {}
+    } else if (!valid && mounted) {
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const LoginScreen()),
