@@ -6,6 +6,7 @@
     <title>VAPLI Control Center</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
     <style>
+        *, *::before, *::after { box-sizing: border-box; }
         body {
             font-family: 'Outfit', sans-serif;
             background: radial-gradient(circle at top right, #1E1B4B 0%, #0F172A 70%, #020617 100%);
@@ -15,7 +16,7 @@
             min-height: 100vh;
         }
         .container {
-            max-width: 900px;
+            max-width: 960px;
             margin: 40px auto;
         }
         .header {
@@ -34,6 +35,18 @@
             -webkit-text-fill-color: transparent;
             margin: 0;
         }
+        .header-times {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 3px;
+        }
+        .time-line {
+            font-size: 12px;
+            color: #94A3B8;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .time-line span { color: #F1F5F9; font-weight: 600; }
         .card {
             background: rgba(30, 41, 59, 0.4);
             backdrop-filter: blur(12px);
@@ -74,11 +87,13 @@
             gap: 15px;
             margin-bottom: 20px;
             align-items: center;
+            flex-wrap: wrap;
         }
         .form-group {
             flex: 1;
             display: flex;
             flex-direction: column;
+            min-width: 140px;
         }
         .form-group label {
             font-size: 13px;
@@ -86,30 +101,77 @@
             margin-bottom: 6px;
             font-weight: 600;
         }
-        select, input, button {
+        select, input[type="time"], input[type="number"] {
             background: rgba(15, 23, 42, 0.8);
             border: 1px solid rgba(255,255,255,0.1);
             color: #F8FAFC;
             padding: 10px 14px;
             border-radius: 8px;
             font-size: 14px;
+            font-family: 'Outfit', sans-serif;
             outline: none;
             transition: all 0.2s;
+            width: 100%;
         }
         select:focus, input:focus {
             border-color: #CB8C3E;
             box-shadow: 0 0 0 2px rgba(203, 140, 62, 0.2);
         }
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 6px;
+        }
+        .toggle-label {
+            font-size: 13px;
+            color: #94A3B8;
+            font-weight: 600;
+        }
+        .toggle {
+            position: relative;
+            width: 40px;
+            height: 22px;
+            cursor: pointer;
+        }
+        .toggle input { display: none; }
+        .toggle-slider {
+            position: absolute;
+            inset: 0;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            transition: 0.2s;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .toggle-slider::before {
+            content: "";
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            left: 2px;
+            top: 2px;
+            background: #94A3B8;
+            border-radius: 50%;
+            transition: 0.2s;
+        }
+        .toggle input:checked + .toggle-slider { background: rgba(203,140,62,0.3); border-color: #CB8C3E; }
+        .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: #CB8C3E; }
         .btn {
             background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
             border: 1px solid rgba(255,255,255,0.08);
+            color: #F8FAFC;
             cursor: pointer;
             font-weight: 600;
+            font-family: 'Outfit', sans-serif;
+            font-size: 14px;
             padding: 12px 18px;
+            border-radius: 8px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             gap: 8px;
+            transition: all 0.2s;
+            white-space: nowrap;
         }
         .btn:hover {
             border-color: rgba(255,255,255,0.2);
@@ -119,11 +181,19 @@
             background: linear-gradient(135deg, #CB8C3E 0%, #B45309 100%);
             border: none;
             color: #FFFFFF;
-            cursor: pointer;
         }
         .btn-primary:hover {
             background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
             box-shadow: 0 0 15px rgba(245, 158, 11, 0.3);
+        }
+        .btn-green {
+            background: linear-gradient(135deg, #065F46 0%, #047857 100%);
+            border: none;
+            color: #FFFFFF;
+        }
+        .btn-green:hover {
+            background: linear-gradient(135deg, #059669 0%, #10B981 100%);
+            box-shadow: 0 0 12px rgba(16, 185, 129, 0.3);
         }
         .section-title {
             font-size: 16px;
@@ -136,8 +206,36 @@
         }
         .button-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
             gap: 12px;
+        }
+        /* Tabs */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+            background: rgba(15,23,42,0.5);
+            border-radius: 10px;
+            padding: 4px;
+        }
+        .tab {
+            flex: 1;
+            text-align: center;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            border-radius: 7px;
+            cursor: pointer;
+            color: #64748B;
+            transition: all 0.2s;
+            border: none;
+            background: transparent;
+            font-family: 'Outfit', sans-serif;
+        }
+        .tab.active {
+            background: rgba(203,140,62,0.2);
+            color: #F59E0B;
+            border: 1px solid rgba(203,140,62,0.3);
         }
         .console-container {
             background: #090D16;
@@ -146,16 +244,15 @@
             padding: 16px;
             font-family: 'JetBrains Mono', monospace;
             font-size: 12px;
-            height: 200px;
+            height: 220px;
             overflow-y: auto;
             color: #38BDF8;
         }
-        .console-line {
-            margin-bottom: 6px;
-        }
+        .console-line { margin-bottom: 6px; line-height: 1.5; }
         .console-success { color: #4ADE80; }
         .console-error { color: #F87171; }
         .console-info { color: #38BDF8; }
+        .console-warning { color: #FBBF24; }
         .badge {
             display: inline-block;
             padding: 3px 6px;
@@ -167,15 +264,162 @@
         .badge-success { background: rgba(74, 222, 128, 0.2); color: #4ADE80; }
         .badge-error { background: rgba(248, 113, 113, 0.2); color: #F87171; }
         .badge-warning { background: rgba(245, 158, 11, 0.2); color: #FBBF24; }
+        .schedule-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        .tz-block {
+            background: rgba(15, 23, 42, 0.5);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 16px;
+        }
+        .tz-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+        .tz-label {
+            font-size: 14px;
+            font-weight: 700;
+            color: #F1F5F9;
+        }
+        .tz-current {
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            color: #CB8C3E;
+        }
+        .time-input-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(2, 6, 23, 0.85);
+            backdrop-filter: blur(6px);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.open { display: flex; }
+        .modal {
+            background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 28px;
+            width: 90%;
+            max-width: 520px;
+            box-shadow: 0 30px 80px rgba(0,0,0,0.6);
+            position: relative;
+            animation: modalIn 0.2s ease;
+        }
+        @keyframes modalIn {
+            from { transform: scale(0.9) translateY(20px); opacity: 0; }
+            to   { transform: scale(1) translateY(0); opacity: 1; }
+        }
+        .modal-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0 0 6px 0;
+            background: linear-gradient(135deg, #CB8C3E 0%, #F59E0B 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .modal-subtitle {
+            font-size: 13px;
+            color: #64748B;
+            margin: 0 0 20px 0;
+        }
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: #94A3B8;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+        .modal-close:hover { background: rgba(248,113,113,0.15); color: #F87171; border-color: rgba(248,113,113,0.3); }
+        .option-list { list-style: none; padding: 0; margin: 0; }
+        .option-item {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 14px;
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 10px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.15s;
+            background: rgba(15,23,42,0.4);
+        }
+        .option-item:hover {
+            border-color: rgba(203,140,62,0.4);
+            background: rgba(203,140,62,0.08);
+        }
+        .option-item.selected {
+            border-color: #CB8C3E;
+            background: rgba(203,140,62,0.12);
+        }
+        .option-num {
+            width: 26px;
+            height: 26px;
+            border-radius: 8px;
+            background: rgba(203,140,62,0.15);
+            border: 1px solid rgba(203,140,62,0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: #CB8C3E;
+            flex-shrink: 0;
+        }
+        .option-text { font-size: 14px; font-weight: 500; color: #E2E8F0; flex: 1; }
+        .option-tag {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 2px 7px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .tag-email { background: rgba(59,130,246,0.2); color: #60A5FA; }
+        .tag-fcm { background: rgba(168,85,247,0.2); color: #C084FC; }
+        .group-select-row { margin-top: 14px; display: none; }
+        .modal-footer { margin-top: 18px; display: flex; gap: 10px; justify-content: flex-end; }
+        @media (max-width: 600px) {
+            .schedule-grid { grid-template-columns: 1fr; }
+            .form-row { flex-direction: column; }
+        }
     </style>
 </head>
 <body>
     <div class="container">
+        <!-- HEADER -->
         <div class="header">
             <h1>VAPLI Control Center</h1>
-            <div id="live-time" style="font-size:13px; color:#94A3B8;">Sydney Time: --:--:--</div>
+            <div class="header-times">
+                <div class="time-line">🇸🇦 AST &nbsp;<span id="live-ast">--:--:--</span></div>
+                <div class="time-line">🇮🇳 IST &nbsp;<span id="live-ist">--:--:--</span></div>
+                <div class="time-line">🇦🇺 SYD &nbsp;<span id="live-syd">--:--:--</span></div>
+            </div>
         </div>
 
+        <!-- STAT CARDS -->
         <div class="grid-3">
             <div class="stat-card">
                 <span class="stat-title">Client ID</span>
@@ -191,6 +435,7 @@
             </div>
         </div>
 
+        <!-- CONTEXT CONFIG -->
         <div class="card">
             <div class="section-title">Context Configurations</div>
             <div class="form-row">
@@ -210,27 +455,86 @@
             </div>
         </div>
 
+        <!-- SCHEDULE TIME MANAGEMENT -->
         <div class="card">
-            <div class="section-title">Manual Report Execution</div>
-            <div class="button-grid">
-                <button class="btn" onclick="triggerAction('test_smtp')">Test SMTP</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_daily')">Send Daily Reports</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_compliance')">Send Gaps Alert</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_active_alerts')">Send Active Alerts</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_weekly_inspection')">Send Weekly Telemetry</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_weekly_alerts')">Send Weekly Alerts</button>
+            <div class="section-title">Schedule Time Management</div>
+            <div class="schedule-grid">
+                <!-- AST -->
+                <div class="tz-block">
+                    <div class="tz-header">
+                        <div>
+                            <div class="tz-label">🇸🇦 Arabia Standard Time (AST)</div>
+                            <div class="tz-current" id="ast-current">UTC+3 · Loading...</div>
+                        </div>
+                        <label class="toggle" title="Enable AST schedule">
+                            <input type="checkbox" id="ast-enabled" checked onchange="scheduleChanged()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Reminder Time (24h)</label>
+                        <input type="time" id="ast-time" value="15:00" onchange="scheduleChanged()">
+                    </div>
+                </div>
+                <!-- IST -->
+                <div class="tz-block">
+                    <div class="tz-header">
+                        <div>
+                            <div class="tz-label">🇮🇳 India Standard Time (IST)</div>
+                            <div class="tz-current" id="ist-current">UTC+5:30 · Loading...</div>
+                        </div>
+                        <label class="toggle" title="Enable IST schedule">
+                            <input type="checkbox" id="ist-enabled" checked onchange="scheduleChanged()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Reminder Time (24h)</label>
+                        <input type="time" id="ist-time" value="15:00" onchange="scheduleChanged()">
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top:16px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+                <div class="toggle-row" style="margin-bottom:0;">
+                    <label class="toggle" title="Enable Sydney schedule">
+                        <input type="checkbox" id="syd-enabled" checked onchange="scheduleChanged()">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">🇦🇺 Sydney Time (AEST/AEDT) — 1 PM & 3 PM</span>
+                </div>
+                <div style="flex:1;"></div>
+                <button class="btn btn-primary" id="save-schedule-btn" onclick="saveSchedule()" style="min-width:140px;">
+                    💾 Save Schedule
+                </button>
             </div>
         </div>
 
+        <!-- MANUAL REPORT EXECUTION -->
+        <div class="card">
+            <div class="section-title">Manual Report Execution</div>
+            <div class="button-grid">
+                <button class="btn" onclick="triggerAction('test_smtp')">🔌 Test SMTP</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_daily')">📊 Send Daily Reports</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_compliance')">⚠️ Send Gaps Alert</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_active_alerts')">🚨 Send Active Alerts</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_weekly_inspection')">📋 Send Weekly Telemetry</button>
+                <button class="btn btn-primary" onclick="triggerAction('send_weekly_alerts')">📈 Send Weekly Alerts</button>
+                <button class="btn btn-green" onclick="openSendModal()" style="grid-column: span 2;">
+                    📧 Send Email / FCM Now...
+                </button>
+            </div>
+        </div>
+
+        <!-- MANUAL FCM PUSH -->
         <div class="card">
             <div class="section-title">Manual FCM Push Execution</div>
             <div class="form-row" style="margin-bottom:12px;">
                 <div class="form-group" style="flex:2;">
                     <label for="fcm-type-select">FCM Trigger Type</label>
                     <select id="fcm-type-select" onchange="toggleFcmGroup(this.value)">
-                        <option value="1">📋 Daily Inspection Reminder</option>
-                        <option value="2">🚨 Alert Notification (With Image)</option>
-                        <option value="3">⚠️ Alert Notification (Without Image)</option>
+                        <option value="5">📊 Smart Tank Status Reminder (Rule-based)</option>
+                        <option value="2">🚨 Alert Test Notification (With Image)</option>
+                        <option value="3">⚠️ Alert Test Notification (Without Image)</option>
                         <option value="4">🔍 Group Reminder (Custom Target)</option>
                     </select>
                 </div>
@@ -241,15 +545,88 @@
                     </select>
                 </div>
                 <div class="form-group" style="flex:1; align-self:flex-end;">
-                    <button class="btn btn-primary" style="width:100%;" onclick="triggerFcm()">Push FCM</button>
+                    <button class="btn btn-primary" style="width:100%;" onclick="triggerFcm()">🔔 Push FCM</button>
                 </div>
             </div>
         </div>
 
+        <!-- LIVE LOGS -->
         <div class="card">
-            <div class="section-title">Live Terminal Logs</div>
+            <div class="section-title" style="margin-bottom:10px;">Server Logs</div>
+            <div class="tabs">
+                <button class="tab active" id="tab-live" onclick="switchTab('live')">🟢 Live Logs</button>
+                <button class="tab" id="tab-history" onclick="switchTab('history')">📜 Sent History</button>
+            </div>
             <div class="console-container" id="terminal">
                 <div class="console-line console-info">[+] Control panel initialized. Fetching database status...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SEND EMAIL/FCM MODAL -->
+    <div class="modal-overlay" id="send-modal">
+        <div class="modal">
+            <div class="modal-close" onclick="closeSendModal()">✕</div>
+            <p class="modal-title">📧 Send Email / FCM Now</p>
+            <p class="modal-subtitle">Select an option to trigger immediately</p>
+            <ul class="option-list" id="option-list">
+                <li class="option-item" onclick="selectOption(1)">
+                    <div class="option-num">1</div>
+                    <div class="option-text">Send Daily Inspection Report</div>
+                    <span class="option-tag tag-email">Email</span>
+                </li>
+                <li class="option-item" onclick="selectOption(2)">
+                    <div class="option-num">2</div>
+                    <div class="option-text">Send Missing Tanks Compliance Alert</div>
+                    <span class="option-tag tag-email">Email</span>
+                </li>
+                <li class="option-item" onclick="selectOption(3)">
+                    <div class="option-num">3</div>
+                    <div class="option-text">Send Active Alerts Notification</div>
+                    <span class="option-tag tag-email">Email</span>
+                </li>
+                <li class="option-item" onclick="selectOption(4)">
+                    <div class="option-num">4</div>
+                    <div class="option-text">Send Weekly Inspection Report</div>
+                    <span class="option-tag tag-email">Email</span>
+                </li>
+                <li class="option-item" onclick="selectOption(5)">
+                    <div class="option-num">5</div>
+                    <div class="option-text">Send Weekly Alerts Report</div>
+                    <span class="option-tag tag-email">Email</span>
+                </li>
+                <li class="option-item" onclick="selectOption(6)">
+                    <div class="option-num">6</div>
+                    <div class="option-text">FCM: Smart Tank Status Reminder (Rule-based)</div>
+                    <span class="option-tag tag-fcm">FCM</span>
+                </li>
+                <li class="option-item" onclick="selectOption(7)">
+                    <div class="option-num">7</div>
+                    <div class="option-text">FCM: Alert Test — With Image</div>
+                    <span class="option-tag tag-fcm">FCM</span>
+                </li>
+                <li class="option-item" onclick="selectOption(8)">
+                    <div class="option-num">8</div>
+                    <div class="option-text">FCM: Alert Test — No Image</div>
+                    <span class="option-tag tag-fcm">FCM</span>
+                </li>
+                <li class="option-item" onclick="selectOption(9)" id="option-9">
+                    <div class="option-num">9</div>
+                    <div class="option-text">FCM: Group Reminder (Custom Target)</div>
+                    <span class="option-tag tag-fcm">FCM</span>
+                </li>
+            </ul>
+            <div class="group-select-row" id="modal-group-row">
+                <div class="form-group">
+                    <label for="modal-group-select">Target Group for Reminder</label>
+                    <select id="modal-group-select">
+                        <option value="">-- Select Group --</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeSendModal()">Cancel</button>
+                <button class="btn btn-primary" id="modal-send-btn" onclick="dispatchSelected()" disabled>Send Selected</button>
             </div>
         </div>
     </div>
@@ -258,189 +635,335 @@
         const DB_BASE_URL = "https://dummy-firebase-project-id-default-rtdb.firebaseio.com";
         let activeClientId = "";
         let processedLogKeys = new Set();
+        let processedHistoryKeys = new Set();
+        let currentTab = "live";
+        let selectedOption = null;
+        let scheduleModified = false;
 
+        /* ────────── HEADER CLOCKS ────────── */
+        function updateClocks() {
+            const now = new Date();
+            const astTime = new Date(now.getTime() + 3 * 3600000);
+            const istTime = new Date(now.getTime() + 5.5 * 3600000);
+            const sydOffset = getSydneyOffset();
+            const sydTime = new Date(now.getTime() + sydOffset * 3600000);
+            document.getElementById('live-ast').innerText = fmtTime(astTime);
+            document.getElementById('live-ist').innerText = fmtTime(istTime);
+            document.getElementById('live-syd').innerText = fmtTime(sydTime);
+        }
+        function getSydneyOffset() {
+            const now = new Date();
+            const year = now.getUTCFullYear();
+            const firstSunApr = nthSunday(year, 4, 1);
+            const firstSunOct = nthSunday(year, 10, 1);
+            const utcMs = now.getTime();
+            return (utcMs >= firstSunApr && utcMs < firstSunOct) ? 10 : 11;
+        }
+        function nthSunday(year, month, nth) {
+            const d = new Date(Date.UTC(year, month - 1, 1));
+            while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() + 1);
+            d.setUTCDate(d.getUTCDate() + (nth - 1) * 7);
+            return d.getTime();
+        }
+        function fmtTime(d) {
+            return d.toUTCString().slice(17, 25);
+        }
+        setInterval(updateClocks, 1000);
+        updateClocks();
+
+        /* ────────── DATABASE POLLING ────────── */
         async function fetchStatus() {
             try {
-                // 1. Fetch Server state
                 const resState = await fetch(`${DB_BASE_URL}/server_state.json`);
                 const state = await resState.json();
-                
+
                 if (state) {
                     activeClientId = state.client_id;
                     document.getElementById('stat-client').innerText = state.client_id;
-                    document.getElementById('stat-mode').innerText = state.env_mode.toUpperCase();
-                    document.getElementById('live-time').innerText = 'Sydney Time: ' + state.sydney_time;
+                    document.getElementById('stat-mode').innerText = (state.env_mode || '').toUpperCase();
 
-                    // Calculate heartbeat connection (active within 15 seconds)
                     const lastActive = new Date(state.last_active);
-                    const now = new Date();
-                    const diffSeconds = Math.abs(now - lastActive) / 1000;
-                    
-                    const workerBadge = diffSeconds < 15 
-                        ? '<span class="badge badge-success">ONLINE</span>' 
+                    const diffSeconds = Math.abs(new Date() - lastActive) / 1000;
+                    const workerBadge = diffSeconds < 15
+                        ? '<span class="badge badge-success">ONLINE</span>'
                         : '<span class="badge badge-error">OFFLINE</span>';
                     document.getElementById('stat-worker').innerHTML = workerBadge;
                 } else {
                     document.getElementById('stat-worker').innerHTML = '<span class="badge badge-warning">NO WORKER</span>';
                 }
 
-                // 2. Fetch clients list
+                // Clients
                 const resClients = await fetch(`${DB_BASE_URL}/clients.json`);
                 const clientsData = await resClients.json();
                 if (clientsData) {
                     const clientSelect = document.getElementById('client-select');
-                    const optionsHtml = Object.keys(clientsData).map(k => {
-                        const name = clientsData[k].name || clientsData[k].db_key || k;
-                        const key = clientsData[k].db_key || k;
-                        return `<option value="${key}" ${key === activeClientId ? 'selected' : ''}>${name} (${key})</option>`;
-                    }).join('');
-                    
-                    // Only update if option list changed to prevent resetting selection
                     if (clientSelect.options.length <= 1) {
-                        clientSelect.innerHTML = optionsHtml;
+                        clientSelect.innerHTML = Object.keys(clientsData).map(k => {
+                            const name = clientsData[k].name || clientsData[k].db_key || k;
+                            const key = clientsData[k].db_key || k;
+                            return `<option value="${key}" ${key === activeClientId ? 'selected' : ''}>${name} (${key})</option>`;
+                        }).join('');
                     }
                 }
 
-                // 3. Fetch groups for current client
+                // Groups
                 if (activeClientId) {
                     const resGroups = await fetch(`${DB_BASE_URL}/${activeClientId}/tank_tree.json`);
                     const treeData = await resGroups.json();
                     if (treeData) {
                         const groups = Object.values(treeData)
-                            .filter(n => n && n.type === 'folder')
-                            .sort((a,b) => (a.order || 0) - (b.order || 0))
+                            .filter(n => n && n.type === 'folder' && !n.parent_id)
+                            .sort((a, b) => (a.order || 0) - (b.order || 0))
                             .map(g => g.name);
-                        
-                        const groupSelect = document.getElementById('fcm-group-select');
-                        if (groups.length > 0) {
-                            groupSelect.innerHTML = groups.map(g => `<option value="${g}">${g}</option>`).join('');
-                        } else {
-                            groupSelect.innerHTML = '<option value="">-- No Groups Configured --</option>';
-                        }
+                        const gSel = document.getElementById('fcm-group-select');
+                        const mSel = document.getElementById('modal-group-select');
+                        const opts = groups.length
+                            ? groups.map(g => `<option value="${g}">${g}</option>`).join('')
+                            : '<option value="">-- No Groups Configured --</option>';
+                        gSel.innerHTML = opts;
+                        mSel.innerHTML = opts;
                     }
                 }
 
-                // 4. Fetch logs
-                const resLogs = await fetch(`${DB_BASE_URL}/server_logs.json?orderBy="timestamp"&limitToLast=20`);
-                const logsData = await resLogs.json();
-                if (logsData) {
-                    const sortedLogs = Object.keys(logsData).sort((a,b) => new Date(logsData[a].timestamp) - new Date(logsData[b].timestamp));
-                    sortedLogs.forEach(key => {
-                        if (!processedLogKeys.has(key)) {
-                            processedLogKeys.add(key);
-                            const entry = logsData[key];
-                            const tStr = new Date(entry.timestamp).toLocaleTimeString();
-                            logConsole(`[${tStr}] ${entry.message}`, entry.type);
-                        }
-                    });
+                // Logs
+                if (currentTab === 'live') {
+                    await fetchLiveLogs();
+                } else {
+                    await fetchHistory();
                 }
+
+                // Schedule
+                await fetchSchedule();
+
             } catch (err) {
-                console.error("Error polling database: ", err);
+                console.error("Poll error:", err);
             }
         }
 
-        function logConsole(message, type = 'info') {
+        async function fetchLiveLogs() {
+            try {
+                const res = await fetch(`${DB_BASE_URL}/server_logs.json?orderBy="timestamp"&limitToLast=30`);
+                const logs = await res.json();
+                if (!logs) return;
+                const sorted = Object.keys(logs).sort((a, b) => new Date(logs[a].timestamp) - new Date(logs[b].timestamp));
+                sorted.forEach(key => {
+                    if (!processedLogKeys.has(key)) {
+                        processedLogKeys.add(key);
+                        const e = logs[key];
+                        const t = new Date(e.timestamp).toLocaleTimeString();
+                        logConsole(`[${t}] ${e.message}`, e.type, 'terminal');
+                    }
+                });
+            } catch (e) {}
+        }
+
+        async function fetchHistory() {
+            // Show history of sent emails/FCM from server_logs filtered by success
+            try {
+                const res = await fetch(`${DB_BASE_URL}/server_logs.json?orderBy="timestamp"&limitToLast=50`);
+                const logs = await res.json();
+                if (!logs) {
+                    document.getElementById('terminal').innerHTML = '<div class="console-line console-info">[~] No history entries yet.</div>';
+                    return;
+                }
+                const sorted = Object.keys(logs).sort((a, b) => new Date(logs[b].timestamp) - new Date(logs[a].timestamp));
+                const term = document.getElementById('terminal');
+                const newEntries = sorted.filter(k => !processedHistoryKeys.has(k));
+                if (newEntries.length === 0) return;
+                newEntries.forEach(key => {
+                    processedHistoryKeys.add(key);
+                    const e = logs[key];
+                    const t = new Date(e.timestamp).toLocaleString();
+                    logConsole(`[${t}] ${e.message}`, e.type, 'terminal');
+                });
+            } catch (e) {}
+        }
+
+        async function fetchSchedule() {
+            if (scheduleModified) return; // Don't overwrite user's in-progress edits
+            try {
+                const res = await fetch(`${DB_BASE_URL}/server_state.json`);
+                const state = await res.json();
+                if (state && state.sydney_time) {
+                    document.getElementById('ast-current').innerText = `UTC+3 · ${document.getElementById('live-ast').innerText}`;
+                    document.getElementById('ist-current').innerText = `UTC+5:30 · ${document.getElementById('live-ist').innerText}`;
+                }
+            } catch (e) {}
+        }
+
+        /* ────────── TABS ────────── */
+        function switchTab(tab) {
+            currentTab = tab;
+            document.getElementById('tab-live').classList.toggle('active', tab === 'live');
+            document.getElementById('tab-history').classList.toggle('active', tab === 'history');
             const term = document.getElementById('terminal');
-            const cssClass = type === 'success' ? 'console-success' : (type === 'error' ? 'console-error' : 'console-info');
-            term.innerHTML += `<div class="console-line ${cssClass}">${message}</div>`;
+            term.innerHTML = `<div class="console-line console-info">[~] Loading ${tab === 'live' ? 'live logs' : 'sent history'}...</div>`;
+            if (tab === 'history') {
+                processedHistoryKeys = new Set();
+                fetchHistory();
+            } else {
+                processedLogKeys = new Set();
+                fetchLiveLogs();
+            }
+        }
+
+        /* ────────── CONSOLE ────────── */
+        function logConsole(message, type = 'info', termId = 'terminal') {
+            const term = document.getElementById(termId);
+            const css = type === 'success' ? 'console-success' : type === 'error' ? 'console-error' : type === 'warning' ? 'console-warning' : 'console-info';
+            term.innerHTML += `<div class="console-line ${css}">${message}</div>`;
             term.scrollTop = term.scrollHeight;
         }
 
+        /* ────────── ACTIONS ────────── */
         async function triggerAction(actionName, params = {}) {
             logConsole(`Requesting action: ${actionName}...`);
             try {
-                // Generate a pending trigger key in triggers node
-                const triggerPayload = {
-                    action: actionName,
-                    params: params,
-                    status: "pending",
-                    timestamp: new Date().toISOString()
-                };
-                
-                const response = await fetch(`${DB_BASE_URL}/triggers.json`, {
+                const payload = { action: actionName, params, status: "pending", timestamp: new Date().toISOString() };
+                const res = await fetch(`${DB_BASE_URL}/triggers.json`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(triggerPayload)
+                    body: JSON.stringify(payload)
                 });
-                const res = await response.json();
-                if (res && res.name) {
-                    logConsole(`Trigger posted to DB. Awaiting local worker execution...`, 'info');
-                    monitorTriggerExecution(res.name);
+                const data = await res.json();
+                if (data && data.name) {
+                    logConsole(`Trigger posted. Awaiting worker...`, 'info');
+                    monitorTrigger(data.name);
                 } else {
-                    logConsole(`Failed to post trigger to DB.`, 'error');
+                    logConsole('Failed to post trigger to DB.', 'error');
                 }
             } catch (err) {
                 logConsole(`Error: ${err.message}`, 'error');
             }
         }
 
-        async function monitorTriggerExecution(triggerId) {
+        async function monitorTrigger(triggerId) {
             let attempts = 0;
             const interval = setInterval(async () => {
                 attempts++;
-                if (attempts > 15) {
-                    clearInterval(interval);
-                    logConsole(`Execution timeout: worker did not respond.`, 'error');
-                    return;
-                }
+                if (attempts > 20) { clearInterval(interval); logConsole('Worker timeout.', 'error'); return; }
                 try {
-                    const response = await fetch(`${DB_BASE_URL}/triggers/${triggerId}.json`);
-                    const trigger = await response.json();
-                    if (trigger && (trigger.status === 'success' || trigger.status === 'failed')) {
+                    const res = await fetch(`${DB_BASE_URL}/triggers/${triggerId}.json`);
+                    const t = await res.json();
+                    if (t && (t.status === 'success' || t.status === 'failed')) {
                         clearInterval(interval);
-                        if (trigger.status === 'success') {
-                            logConsole(`Worker complete: ${trigger.message || 'Success'}`, 'success');
-                        } else {
-                            logConsole(`Worker execution failed: ${trigger.message || 'Failed'}`, 'error');
-                        }
-                        // Delete processed trigger to keep triggers node clean
+                        logConsole(t.status === 'success' ? `✅ ${t.message || 'Success'}` : `❌ ${t.message || 'Failed'}`, t.status === 'success' ? 'success' : 'error');
                         await fetch(`${DB_BASE_URL}/triggers/${triggerId}.json`, { method: 'DELETE' });
                     }
-                } catch (e) {
-                    console.error("Error monitoring trigger: ", e);
-                }
+                } catch (e) {}
             }, 2000);
         }
 
         async function updateClient(clientId) {
             try {
                 await fetch(`${DB_BASE_URL}/server_state_override/client_id.json`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(clientId)
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(clientId)
                 });
                 logConsole(`Requested client switch to: ${clientId}`);
-            } catch (e) {
-                logConsole(`Error updating client: ${e.message}`, 'error');
-            }
+            } catch (e) { logConsole(`Error: ${e.message}`, 'error'); }
         }
 
         async function updateMode(mode) {
             try {
                 await fetch(`${DB_BASE_URL}/server_state_override/env_mode.json`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(mode)
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mode)
                 });
-                logConsole(`Requested database mode switch to: ${mode.toUpperCase()}`);
-            } catch (e) {
-                logConsole(`Error updating mode: ${e.message}`, 'error');
-            }
+                logConsole(`Requested mode switch to: ${mode.toUpperCase()}`);
+            } catch (e) { logConsole(`Error: ${e.message}`, 'error'); }
         }
 
         function toggleFcmGroup(val) {
-            const container = document.getElementById('fcm-group-container');
-            container.style.display = val === '4' ? 'flex' : 'none';
+            document.getElementById('fcm-group-container').style.display = val === '4' ? 'flex' : 'none';
         }
 
         function triggerFcm() {
             const fcmType = document.getElementById('fcm-type-select').value;
             const params = { fcm_type: fcmType };
-            if (fcmType === '4') {
-                params.group_name = document.getElementById('fcm-group-select').value;
-            }
+            if (fcmType === '4') params.group_name = document.getElementById('fcm-group-select').value;
             triggerAction('trigger_fcm', params);
         }
+
+        /* ────────── SCHEDULE ────────── */
+        function scheduleChanged() { scheduleModified = true; }
+
+        async function saveSchedule() {
+            const btn = document.getElementById('save-schedule-btn');
+            btn.disabled = true;
+            btn.innerText = '⏳ Saving...';
+            const astVal = document.getElementById('ast-time').value || '15:00';
+            const istVal = document.getElementById('ist-time').value || '15:00';
+            const [astH, astM] = astVal.split(':').map(Number);
+            const [istH, istM] = istVal.split(':').map(Number);
+            const payload = {
+                ast_hour: astH, ast_minute: astM,
+                ast_enabled: document.getElementById('ast-enabled').checked,
+                ist_hour: istH, ist_minute: istM,
+                ist_enabled: document.getElementById('ist-enabled').checked,
+                syd_enabled: document.getElementById('syd-enabled').checked
+            };
+            // Write override to DB (server will pick up and apply)
+            try {
+                await fetch(`${DB_BASE_URL}/server_schedule_override.json`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+                });
+                logConsole(`✅ Schedule saved: AST ${astH}:${String(astM).padStart(2,'0')}, IST ${istH}:${String(istM).padStart(2,'0')}`, 'success');
+                scheduleModified = false;
+            } catch (e) {
+                logConsole(`❌ Failed to save schedule: ${e.message}`, 'error');
+            }
+            btn.disabled = false;
+            btn.innerText = '💾 Save Schedule';
+        }
+
+        /* ────────── SEND NOW MODAL ────────── */
+        function openSendModal() {
+            selectedOption = null;
+            document.querySelectorAll('.option-item').forEach(el => el.classList.remove('selected'));
+            document.getElementById('modal-group-row').style.display = 'none';
+            document.getElementById('modal-send-btn').disabled = true;
+            document.getElementById('send-modal').classList.add('open');
+        }
+
+        function closeSendModal() {
+            document.getElementById('send-modal').classList.remove('open');
+        }
+
+        function selectOption(num) {
+            selectedOption = num;
+            document.querySelectorAll('.option-item').forEach((el, i) => {
+                el.classList.toggle('selected', i + 1 === num);
+            });
+            // Show group row only for option 9 (Group Reminder)
+            const showGroup = (num === 9);
+            document.getElementById('modal-group-row').style.display = showGroup ? 'block' : 'none';
+            document.getElementById('modal-send-btn').disabled = false;
+        }
+
+        async function dispatchSelected() {
+            if (!selectedOption) return;
+            closeSendModal();
+            const actionMap = {
+                1: () => triggerAction('send_daily'),
+                2: () => triggerAction('send_compliance'),
+                3: () => triggerAction('send_active_alerts'),
+                4: () => triggerAction('send_weekly_inspection'),
+                5: () => triggerAction('send_weekly_alerts'),
+                6: () => triggerAction('trigger_fcm', { fcm_type: '5' }),
+                7: () => triggerAction('trigger_fcm', { fcm_type: '2' }),
+                8: () => triggerAction('trigger_fcm', { fcm_type: '3' }),
+                9: () => {
+                    const grp = document.getElementById('modal-group-select').value;
+                    if (grp) triggerAction('trigger_fcm', { fcm_type: '4', group_name: grp });
+                    else { logConsole('❌ Please select a group first.', 'error'); }
+                }
+            };
+            if (actionMap[selectedOption]) actionMap[selectedOption]();
+        }
+
+        // Close modal on overlay click
+        document.getElementById('send-modal').addEventListener('click', function(e) {
+            if (e.target === this) closeSendModal();
+        });
 
         setInterval(fetchStatus, 3000);
         fetchStatus();

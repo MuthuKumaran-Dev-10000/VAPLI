@@ -1,0 +1,98 @@
+================================================================================
+          VAPLI SERVER DEPLOYMENT COMMANDS - GOOGLE CLOUD RUN (FREE TIER)
+================================================================================
+
+This guide contains the exact commands to build and deploy the VAPLI Python server
+to Google Cloud Run. 
+
+NOTE: You do NOT need Docker installed on your local computer! 
+We use Google Cloud Build ('gcloud builds submit') to build the container on Google's 
+cloud servers for free.
+
+--------------------------------------------------------------------------------
+STEP 1: DOWNLOAD & INITIALIZE GOOGLE CLOUD SDK
+--------------------------------------------------------------------------------
+1. Download and install Google Cloud SDK:
+   https://cloud.google.com/sdk/docs/install
+
+2. Open Command Prompt / PowerShell and run:
+   gcloud init
+
+3. A browser window will open. Login to your Google account that owns the GCP project.
+
+--------------------------------------------------------------------------------
+STEP 2: CONFIGURE PROJECT & ACTIVATE SERVICES
+--------------------------------------------------------------------------------
+Run these commands in your terminal to set your active project and enable services:
+
+# Set project ID
+gcloud config set project vapli-501018
+
+# Enable Cloud Run, Cloud Build, and Cloud Scheduler APIs
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com cloudscheduler.googleapis.com
+
+--------------------------------------------------------------------------------
+STEP 3: CLOUD CONTAINER BUILD & DEPLOY
+--------------------------------------------------------------------------------
+Run these commands from the 'Server/' directory (where the Dockerfile is located):
+
+# Navigate to the Server directory
+cd Server
+
+# Build the container image in the cloud (no local Docker needed)
+gcloud builds submit --tag gcr.io/vapli-501018/vapli-server .
+
+# Deploy the image to Cloud Run (runs on the free tier)
+gcloud run deploy vapli-server ^
+  --image gcr.io/vapli-501018/vapli-server ^
+  --region us-central1 ^
+  --platform managed ^
+  --allow-unauthenticated ^
+  --port 8080 ^
+  --memory 512Mi ^
+  --min-instances 0 ^
+  --max-instances 2 ^
+  --timeout 300
+
+--------------------------------------------------------------------------------
+STEP 4: CONFIGURE SERVER ENVIRONMENT VARIABLES
+--------------------------------------------------------------------------------
+Apply your environment variables directly to the Cloud Run service:
+
+gcloud run services update vapli-server --region us-central1 ^
+  --set-env-vars "FIREBASE_DATABASE_URL=https://dummy-firebase-project-id-default-rtdb.firebaseio.com" ^
+  --set-env-vars "SMTP_EMAIL=your-sender-email@gmail.com" ^
+  --set-env-vars "SMTP_PASSWORD=your-gmail-app-password" ^
+  --set-env-vars "CLIENT_ID=vapli_default_client" ^
+  --set-env-vars "ENV_MODE=production" ^
+  --set-env-vars "NO_INTERACTIVE=1"
+
+*Replace your-sender-email@gmail.com and SMTP password with your actual values.*
+
+--------------------------------------------------------------------------------
+STEP 5: SETUP KEEP-ALIVE SCHEDULER (PREVENTS SHUTDOWN / SLEEPING)
+--------------------------------------------------------------------------------
+Cloud Run shuts down or goes to sleep when there is no traffic. To keep the server
+awake 24/7 so scheduling and real-time triggers work, create a Cloud Scheduler job 
+that pings the '/health' endpoint every minute:
+
+1. Copy your Cloud Run URL from the output of Step 3 (e.g., https://vapli-server-xxxx-uc.a.run.app)
+2. Run this command (replace the URL with your actual URL):
+
+gcloud scheduler jobs create http vapli-keepalive ^
+  --location us-central1 ^
+  --schedule "*/1 * * * *" ^
+  --uri "https://vapli-server-xxxx-uc.a.run.app/health" ^
+  --http-method GET ^
+  --attempt-deadline 30s
+
+--------------------------------------------------------------------------------
+VERIFY IT IS WORKING
+--------------------------------------------------------------------------------
+- Test the health endpoint:
+  curl https://vapli-server-xxxx-uc.a.run.app/health
+  (Expected JSON response: {"status": "ok", "uptime_seconds": ...})
+
+- Open the Control Panel dashboard:
+  https://vapli-server-xxxx-uc.a.run.app/admin
+================================================================================

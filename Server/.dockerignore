@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+*.log
+temp/
+tmp/
+fix_admin_html.py
+service-account.json

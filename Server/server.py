@@ -85,7 +85,16 @@ CONFIG = {
     "server_port": 8080,
     "client_id": "dummy_client_id",
     "env_mode": "production", # 'production' or 'development'
-    "external_url": ""
+    "external_url": "",
+    # Schedule configuration
+    "ast_reminder_hour": 15,       # 3 PM Arabia Standard Time (UTC+3)
+    "ast_reminder_minute": 0,
+    "ast_reminder_enabled": True,
+    "ist_reminder_hour": 15,       # 3 PM India Standard Time (UTC+5:30)
+    "ist_reminder_minute": 0,
+    "ist_reminder_enabled": True,
+    "syd_reminder_enabled": True,   # Keep Sydney schedule active
+    "server_start_time": None       # Set at startup
 }
 
 def load_env():
@@ -1184,10 +1193,12 @@ def build_modern_template(title, header_title, body_content):
 # INDIVIDUAL EMAIL ACTIONS
 # ==============================================================================
 
-def execute_daily_reports_email():
+def execute_daily_reports_email(target_date=None):
     """Compiles PDFs and Excel sheets and sends to report_receivers"""
     print("[*] Starting Daily Reports compilation...")
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    if not target_date:
+        target_date = get_ast_time().strftime("%Y-%m-%d")
+    today_str = target_date
     
     # Create temp directory
     temp_dir = os.path.join(os.path.dirname(__file__), "temp_reports")
@@ -1236,9 +1247,12 @@ def execute_daily_reports_email():
     """
     
     html_email = build_modern_template("Telemetry & Alerts Summary", "Inspection Summary Reports", body)
-    
+
     attachments = [insp_pdf_path, insp_xls_path, alerts_pdf_path, alerts_xls_path]
-    send_email(receivers, subject, html_email, attachments)
+    ok = send_email(receivers, subject, html_email, attachments)
+    if ok:
+        threading.Thread(target=send_email_sent_fcm, args=("Daily Inspection Report", len(receivers))).start()
+
 
     # Clean up files
     for path in attachments:
@@ -1252,10 +1266,12 @@ def execute_daily_reports_email():
     except:
         pass
 
-def execute_missing_tanks_email():
+def execute_missing_tanks_email(target_date=None):
     """Generates compliance summary and sends personalized, signed form links to missing_tanks_receivers"""
     print("[*] Starting Missing Tanks compliance scan...")
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    if not target_date:
+        target_date = get_ast_time().strftime("%Y-%m-%d")
+    today_str = target_date
 
     tanks_data = normalize_to_dict(fetch_db("tanks"))
     readings_data = normalize_to_dict(fetch_db("readings"))
@@ -1362,8 +1378,11 @@ def execute_missing_tanks_email():
 
         subject = f"VAPLI Inspection Compliance Gaps - {datetime.now().strftime('%d/%m/%Y')} ({client_name})"
         html_email = build_modern_template("Inspection Gaps & Gaps Form", "Daily Compliance Alert", body)
-        
-        send_email([receiver], subject, html_email)
+
+        ok = send_email([receiver], subject, html_email)
+        if ok:
+            threading.Thread(target=send_email_sent_fcm, args=("Missing Tanks Compliance Alert", 1)).start()
+
 
 def render_3_column_list(tanks):
     """Renders tank list as a responsive 3-column table/grid inside HTML emails"""
@@ -1464,8 +1483,11 @@ def execute_alerts_notification_email():
 
     subject = f"URGENT: Active Alert Notification - {len(active_alerts)} Alerts Unresolved ({client_name})"
     html_email = build_modern_template("Active Alert Center", "Active Alert Notification", body)
-    
-    send_email(receivers, subject, html_email)
+
+    ok = send_email(receivers, subject, html_email)
+    if ok:
+        threading.Thread(target=send_email_sent_fcm, args=("Active Alerts Notification", len(receivers))).start()
+
 
 def execute_weekly_reports_email():
     """Compiles weekly inspection PDF and Excel reports and emails to report receivers"""
@@ -1518,14 +1540,17 @@ def execute_weekly_reports_email():
     
     subject = f"VAPLI Weekly Telemetry Reports - {client_name}"
     html_email = build_modern_template("Weekly Telemetry Summary", "Weekly Telemetry Report", body)
-    
+
     attachments = []
     if pdf_ok and os.path.exists(pdf_filename):
         attachments.append(pdf_filename)
     if excel_ok and os.path.exists(excel_filename):
         attachments.append(excel_filename)
-        
-    send_email(receivers, subject, html_email, attachments)
+
+    ok = send_email(receivers, subject, html_email, attachments)
+    if ok:
+        threading.Thread(target=send_email_sent_fcm, args=("Weekly Inspection Report", len(receivers))).start()
+
 
     # Cleanup
     for path in attachments:
@@ -1589,14 +1614,17 @@ def execute_weekly_alerts_email():
     
     subject = f"VAPLI Weekly Alerts Summary - {client_name}"
     html_email = build_modern_template("Weekly Alerts Summary", "Weekly Alert Report", body)
-    
+
     attachments = []
     if pdf_ok and os.path.exists(pdf_filename):
         attachments.append(pdf_filename)
     if excel_ok and os.path.exists(excel_filename):
         attachments.append(excel_filename)
-        
-    send_email(receivers, subject, html_email, attachments)
+
+    ok = send_email(receivers, subject, html_email, attachments)
+    if ok:
+        threading.Thread(target=send_email_sent_fcm, args=("Weekly Alerts Report", len(receivers))).start()
+
 
     # Cleanup
     for path in attachments:
@@ -2448,364 +2476,46 @@ def generate_weekly_alerts_excel(filepath, start_date_str, end_date_str):
 # WEB SERVER FOR FEEDBACK SUBMISSION
 # ==============================================================================
 
-ADMIN_DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>VAPLI Control Center</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
-    <style>
-        body {
-            font-family: 'Outfit', sans-serif;
-            background: radial-gradient(circle at top right, #1E1B4B 0%, #0F172A 70%, #020617 100%);
-            color: #F1F5F9;
-            margin: 0;
-            padding: 20px;
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 900px;
-            margin: 40px auto;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
-            padding-bottom: 20px;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            font-size: 28px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #CB8C3E 0%, #F59E0B 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin: 0;
-        }
-        .card {
-            background: rgba(30, 41, 59, 0.4);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 16px;
-            padding: 24px;
-            margin-bottom: 24px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-        }
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 20px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 18px;
-            display: flex;
-            flex-direction: column;
-        }
-        .stat-title {
-            font-size: 12px;
-            color: #94A3B8;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 6px;
-        }
-        .stat-value {
-            font-size: 18px;
-            font-weight: 600;
-            color: #F8FAFC;
-        }
-        .form-row {
-            display: flex;
-            gap: 15px;
-            margin-bottom: 20px;
-            align-items: center;
-        }
-        .form-group {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-        }
-        .form-group label {
-            font-size: 13px;
-            color: #94A3B8;
-            margin-bottom: 6px;
-            font-weight: 600;
-        }
-        select, input, button {
-            background: rgba(15, 23, 42, 0.8);
-            border: 1px solid rgba(255,255,255,0.1);
-            color: #F8FAFC;
-            padding: 10px 14px;
-            border-radius: 8px;
-            font-size: 14px;
-            outline: none;
-            transition: all 0.2s;
-        }
-        select:focus, input:focus {
-            border-color: #CB8C3E;
-            box-shadow: 0 0 0 2px rgba(203, 140, 62, 0.2);
-        }
-        .btn {
-            background: linear-gradient(135deg, #1E293B 0%, #0F172A 100%);
-            border: 1px solid rgba(255,255,255,0.08);
-            cursor: pointer;
-            font-weight: 600;
-            padding: 12px 18px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-        }
-        .btn:hover {
-            border-color: rgba(255,255,255,0.2);
-            background: linear-gradient(135deg, #334155 0%, #1E293B 100%);
-        }
-        .btn-primary {
-            background: linear-gradient(135deg, #CB8C3E 0%, #B45309 100%);
-            border: none;
-            color: #FFFFFF;
-            cursor: pointer;
-        }
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
-            box-shadow: 0 0 15px rgba(245, 158, 11, 0.3);
-        }
-        .section-title {
-            font-size: 16px;
-            font-weight: 600;
-            margin-top: 0;
-            margin-bottom: 16px;
-            color: #F1F5F9;
-            border-left: 3px solid #CB8C3E;
-            padding-left: 10px;
-        }
-        .button-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 12px;
-        }
-        .console-container {
-            background: #090D16;
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 12px;
-            padding: 16px;
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 12px;
-            height: 200px;
-            overflow-y: auto;
-            color: #38BDF8;
-        }
-        .console-line {
-            margin-bottom: 6px;
-        }
-        .console-success { color: #4ADE80; }
-        .console-error { color: #F87171; }
-        .console-info { color: #38BDF8; }
-        .badge {
-            display: inline-block;
-            padding: 3px 6px;
-            font-size: 10px;
-            font-weight: 700;
-            border-radius: 4px;
-            text-transform: uppercase;
-        }
-        .badge-success { background: rgba(74, 222, 128, 0.2); color: #4ADE80; }
-        .badge-error { background: rgba(248, 113, 113, 0.2); color: #F87171; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>VAPLI Control Center</h1>
-            <div id="live-time" style="font-size:13px; color:#94A3B8;">Sydney Time: --:--:--</div>
-        </div>
+def _load_admin_html():
+    """Reads admin.html from the Server directory at request time (single source of truth)"""
+    try:
+        html_path = os.path.join(os.path.dirname(__file__), "admin.html")
+        with open(html_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        # Fallback minimal page if file not found
+        return "<html><body><h1>VAPLI Control Center</h1><p>admin.html not found in Server directory.</p></body></html>"
 
-        <div class="grid-3">
-            <div class="stat-card">
-                <span class="stat-title">Client ID</span>
-                <span id="stat-client" class="stat-value">Loading...</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-title">Database Mode</span>
-                <span id="stat-mode" class="stat-value">Loading...</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-title">SMTP Status</span>
-                <span id="stat-smtp" class="stat-value">Loading...</span>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Context Configurations</div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="client-select">Change Client ID</label>
-                    <select id="client-select" onchange="updateClient(this.value)">
-                        <option value="">-- Fetching Clients --</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="mode-select">Database Mode</label>
-                    <select id="mode-select" onchange="updateMode(this.value)">
-                        <option value="production">PRODUCTION</option>
-                        <option value="development">DEVELOPMENT</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Manual Report Execution</div>
-            <div class="button-grid">
-                <button class="btn" onclick="triggerAction('test_smtp')">Test SMTP</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_daily')">Send Daily Reports</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_compliance')">Send Gaps Alert</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_active_alerts')">Send Active Alerts</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_weekly_inspection')">Send Weekly Telemetry</button>
-                <button class="btn btn-primary" onclick="triggerAction('send_weekly_alerts')">Send Weekly Alerts</button>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Manual FCM Push Execution</div>
-            <div class="form-row" style="margin-bottom:12px;">
-                <div class="form-group" style="flex:2;">
-                    <label for="fcm-type-select">FCM Trigger Type</label>
-                    <select id="fcm-type-select" onchange="toggleFcmGroup(this.value)">
-                        <option value="1">📋 Daily Inspection Reminder</option>
-                        <option value="2">🚨 Alert Notification (With Image)</option>
-                        <option value="3">⚠️ Alert Notification (Without Image)</option>
-                        <option value="4">🔍 Group Reminder (Custom Target)</option>
-                    </select>
-                </div>
-                <div class="form-group" id="fcm-group-container" style="flex:2; display:none;">
-                    <label for="fcm-group-select">Target Group Name</label>
-                    <select id="fcm-group-select">
-                        <option value="">-- Loading Groups --</option>
-                    </select>
-                </div>
-                <div class="form-group" style="flex:1; align-self:flex-end;">
-                    <button class="btn btn-primary" style="width:100%;" onclick="triggerFcm()">Push FCM</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="section-title">Live Terminal Logs</div>
-            <div class="console-container" id="terminal">
-                <div class="console-line console-info">[+] Control panel initialized. Fetching status...</div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        async function fetchStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const status = await response.json();
-                
-                document.getElementById('stat-client').innerText = status.client_id;
-                document.getElementById('stat-mode').innerText = status.env_mode.toUpperCase();
-                
-                const smtpBadge = status.smtp_configured 
-                    ? '<span class="badge badge-success">Configured</span>' 
-                    : '<span class="badge badge-error">Missing</span>';
-                document.getElementById('stat-smtp').innerHTML = smtpBadge;
-                document.getElementById('live-time').innerText = 'Sydney Time: ' + status.sydney_time;
-
-                const clientSelect = document.getElementById('client-select');
-                clientSelect.innerHTML = status.clients.map(c => 
-                    `<option value="${c.db_key}" ${c.db_key === status.client_id ? 'selected' : ''}>${c.name} (${c.db_key})</option>`
-                ).join('');
-
-                const modeSelect = document.getElementById('mode-select');
-                modeSelect.value = status.env_mode;
-
-                const groupSelect = document.getElementById('fcm-group-select');
-                if (status.groups.length > 0) {
-                    groupSelect.innerHTML = status.groups.map(g => `<option value="${g}">${g}</option>`).join('');
-                } else {
-                    groupSelect.innerHTML = '<option value="">-- No Groups Configured --</option>';
-                }
-            } catch (err) {
-                logConsole('Error fetching status: ' + err.message, 'error');
-            }
-        }
-
-        function logConsole(message, type = 'info') {
-            const term = document.getElementById('terminal');
-            const time = new Date().toLocaleTimeString();
-            const cssClass = type === 'success' ? 'console-success' : (type === 'error' ? 'console-error' : 'console-info');
-            term.innerHTML += `<div class="console-line ${cssClass}">[${time}] ${message}</div>`;
-            term.scrollTop = term.scrollHeight;
-        }
-
-        async function triggerAction(actionName, params = {}) {
-            logConsole(`Sending trigger: ${actionName}...`);
-            try {
-                const response = await fetch('/api/trigger', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ action: actionName, params: params })
-                });
-                const res = await response.json();
-                if (res.success) {
-                    logConsole(`Success: ${res.message}`, 'success');
-                } else {
-                    logConsole(`Failed: ${res.message}`, 'error');
-                }
-                fetchStatus();
-            } catch (err) {
-                logConsole(`Error: ${err.message}`, 'error');
-            }
-        }
-
-        function updateClient(clientId) {
-            triggerAction('set_client', { client_id: clientId });
-        }
-
-        function updateMode(mode) {
-            triggerAction('set_mode', { mode: mode });
-        }
-
-        function toggleFcmGroup(val) {
-            const container = document.getElementById('fcm-group-container');
-            container.style.display = val === '4' ? 'flex' : 'none';
-        }
-
-        function triggerFcm() {
-            const fcmType = document.getElementById('fcm-type-select').value;
-            const params = { fcm_type: fcmType };
-            if (fcmType === '4') {
-                params.group_name = document.getElementById('fcm-group-select').value;
-            }
-            triggerAction('trigger_fcm', params);
-        }
-
-        setInterval(fetchStatus, 3000);
-        fetchStatus();
-    </script>
-</body>
-</html>
-"""
 
 class FeedbackHTTPRequestHandler(BaseHTTPRequestHandler):
     """Zero-dependency HTTP Request Handler to serve feedback forms and provide a server control panel"""
-    
+
     def log_message(self, format, *args):
         # Suppress logging in console to avoid cluttering CLI menus
         pass
 
     def do_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
-        
-        if parsed_url.path in ["/feedback", "/feedback.html"]:
+
+
+        if parsed_url.path == "/health":
+            # Keep-alive health check endpoint for Cloud Run / UptimeRobot
+            import time as pytime
+            uptime_secs = int(pytime.time() - (CONFIG.get("server_start_time") or pytime.time()))
+            health_data = {
+                "status": "ok",
+                "uptime_seconds": uptime_secs,
+                "client_id": CONFIG["client_id"],
+                "env_mode": CONFIG["env_mode"],
+                "timestamp": datetime.utcnow().isoformat() + "Z"
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            self.wfile.write(json.dumps(health_data).encode("utf-8"))
+
+        elif parsed_url.path in ["/feedback", "/feedback.html"]:
             try:
                 filepath = os.path.join(os.path.dirname(__file__), "feedback.html")
                 with open(filepath, "r", encoding="utf-8") as f:
@@ -2818,13 +2528,13 @@ class FeedbackHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(f"Error loading form: {e}".encode("utf-8"))
-                
+
         elif parsed_url.path in ["/admin", "/admin.html", "/"]:
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
-            self.wfile.write(ADMIN_DASHBOARD_HTML.encode("utf-8"))
-            
+            self.wfile.write(_load_admin_html().encode("utf-8"))
+
         elif parsed_url.path == "/api/status":
             client_list = []
             try:
@@ -2841,7 +2551,7 @@ class FeedbackHTTPRequestHandler(BaseHTTPRequestHandler):
                             client_list.append({"db_key": db_key, "name": name})
             except Exception as e:
                 pass
-                
+
             groups_list = []
             try:
                 tree_data = normalize_to_dict(fetch_db("tank_tree"))
@@ -2852,26 +2562,59 @@ class FeedbackHTTPRequestHandler(BaseHTTPRequestHandler):
                     groups_list.append(f.get("name"))
             except Exception as e:
                 pass
-                
+
             syd_time = get_sydney_time().strftime("%Y-%m-%d %I:%M:%S %p")
+            ast_time = get_ast_time().strftime("%Y-%m-%d %I:%M:%S %p")
+            ist_time = get_ist_time().strftime("%Y-%m-%d %I:%M:%S %p")
             status_data = {
                 "client_id": CONFIG["client_id"],
                 "env_mode": CONFIG["env_mode"],
                 "sydney_time": syd_time,
+                "ast_time": ast_time,
+                "ist_time": ist_time,
                 "clients": client_list,
                 "groups": groups_list,
-                "smtp_configured": bool(CONFIG["smtp_email"] and CONFIG["smtp_password"])
+                "smtp_configured": bool(CONFIG["smtp_email"] and CONFIG["smtp_password"]),
+                "schedule": {
+                    "ast_hour": CONFIG.get("ast_reminder_hour", 15),
+                    "ast_minute": CONFIG.get("ast_reminder_minute", 0),
+                    "ast_enabled": CONFIG.get("ast_reminder_enabled", True),
+                    "ist_hour": CONFIG.get("ist_reminder_hour", 15),
+                    "ist_minute": CONFIG.get("ist_reminder_minute", 0),
+                    "ist_enabled": CONFIG.get("ist_reminder_enabled", True),
+                    "syd_enabled": CONFIG.get("syd_reminder_enabled", True),
+                }
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(status_data).encode("utf-8"))
+
+        elif parsed_url.path == "/api/schedule":
+            schedule_data = {
+                "ast_hour": CONFIG.get("ast_reminder_hour", 15),
+                "ast_minute": CONFIG.get("ast_reminder_minute", 0),
+                "ast_enabled": CONFIG.get("ast_reminder_enabled", True),
+                "ist_hour": CONFIG.get("ist_reminder_hour", 15),
+                "ist_minute": CONFIG.get("ist_reminder_minute", 0),
+                "ist_enabled": CONFIG.get("ist_reminder_enabled", True),
+                "syd_enabled": CONFIG.get("syd_reminder_enabled", True),
+                "ast_current": get_ast_time().strftime("%Y-%m-%d %H:%M:%S"),
+                "ist_current": get_ist_time().strftime("%Y-%m-%d %H:%M:%S"),
+                "syd_current": get_sydney_time().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(schedule_data).encode("utf-8"))
+
         else:
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"Not Found")
 
     def do_POST(self):
+
         parsed_url = urllib.parse.urlparse(self.path)
         
         if parsed_url.path == "/api/trigger":
@@ -2952,13 +2695,20 @@ class FeedbackHTTPRequestHandler(BaseHTTPRequestHandler):
                             message = f"FCM Group Reminder queued for group '{group_name}'"
                         else:
                             message = "Missing group_name parameter"
+                    elif fcm_type in (1, 5):
+                        # type 1 = Daily Inspection Reminder, type 5 = Smart Tank Reminder
+                        # Both use the rule-based tank reminder (0% / <50% / >=50% per group)
+                        threading.Thread(target=trigger_fcm_tank_reminder, args=("Manual",)).start()
+                        success = True
+                        message = "Smart Tank Reminder FCM queued (rule-based per-group status)"
                     else:
+                        # Types 2 (alert+image) and 3 (alert no image) use the test notifications
                         threading.Thread(target=trigger_fcm_notification, args=(fcm_type,)).start()
                         success = True
-                        message = f"FCM Notification type {fcm_type} queued"
+                        message = f"FCM test notification type {fcm_type} queued"
                 else:
                     message = f"Unknown action: {action}"
-                    
+
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
@@ -2967,10 +2717,51 @@ class FeedbackHTTPRequestHandler(BaseHTTPRequestHandler):
                 self.send_response(500)
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": False, "message": f"Error: {e}"}).encode("utf-8"))
+
+        elif parsed_url.path == "/api/schedule":
+            # Update schedule configuration
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            try:
+                data = json.loads(post_data)
+                updated = []
+                if "ast_hour" in data:
+                    CONFIG["ast_reminder_hour"] = int(data["ast_hour"])
+                    updated.append(f"AST hour={data['ast_hour']}")
+                if "ast_minute" in data:
+                    CONFIG["ast_reminder_minute"] = int(data["ast_minute"])
+                    updated.append(f"AST minute={data['ast_minute']}")
+                if "ast_enabled" in data:
+                    CONFIG["ast_reminder_enabled"] = bool(data["ast_enabled"])
+                    updated.append(f"AST enabled={data['ast_enabled']}")
+                if "ist_hour" in data:
+                    CONFIG["ist_reminder_hour"] = int(data["ist_hour"])
+                    updated.append(f"IST hour={data['ist_hour']}")
+                if "ist_minute" in data:
+                    CONFIG["ist_reminder_minute"] = int(data["ist_minute"])
+                    updated.append(f"IST minute={data['ist_minute']}")
+                if "ist_enabled" in data:
+                    CONFIG["ist_reminder_enabled"] = bool(data["ist_enabled"])
+                    updated.append(f"IST enabled={data['ist_enabled']}")
+                if "syd_enabled" in data:
+                    CONFIG["syd_reminder_enabled"] = bool(data["syd_enabled"])
+                    updated.append(f"SYD enabled={data['syd_enabled']}")
+                msg = "Schedule updated: " + ", ".join(updated) if updated else "No changes"
+                log_to_db(msg, "info")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True, "message": msg}).encode("utf-8"))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "message": f"Error: {e}"}).encode("utf-8"))
+
         else:
             self.send_response(404)
             self.end_headers()
             self.wfile.write(b"Not Found")
+
 
 def fetch_db_global(path):
     """Fetches global database node without client-scoping prefixes"""
@@ -3070,9 +2861,14 @@ def execute_backend_action(action, params):
                     threading.Thread(target=trigger_fcm_group_reminder, args=(group_name,)).start()
                     return True, f"FCM Group Reminder queued for group '{group_name}'"
                 return False, "Missing group_name parameter"
+            elif fcm_type in (1, 5):
+                # type 1 and 5 both use the rule-based smart tank reminder
+                threading.Thread(target=trigger_fcm_tank_reminder, args=("Manual",)).start()
+                return True, "Smart Tank Reminder FCM queued (rule-based per-group status)"
             else:
+                # Types 2 and 3 are test alert notifications
                 threading.Thread(target=trigger_fcm_notification, args=(fcm_type,)).start()
-                return True, f"FCM Notification type {fcm_type} queued"
+                return True, f"FCM test notification type {fcm_type} queued"
                 
         return False, f"Unknown action: {action}"
     except Exception as e:
@@ -3171,49 +2967,251 @@ def get_sydney_time():
         offset = 11
     return utc_now + timedelta(hours=offset)
 
+def get_ast_time():
+    """Returns current time in Arabia Standard Time (AST, UTC+3) — used for Saudi Arabia"""
+    return datetime.utcnow() + timedelta(hours=3)
+
+def get_ist_time():
+    """Returns current time in India Standard Time (IST, UTC+5:30)"""
+    return datetime.utcnow() + timedelta(hours=5, minutes=30)
+
+def trigger_fcm_tank_reminder(timezone_label="", target_date=None):
+    """Sends smart FCM notification with per-group reading completion status and bullet-point pending list"""
+    if not initialize_firebase_admin():
+        print("[-] Firebase Admin not initialized. Cannot send tank reminder FCM.")
+        return
+
+    import firebase_admin
+    from firebase_admin import messaging
+
+    topic_name = CONFIG["client_id"]
+    
+    # Standardize date calculations to prevent timezone mismatches
+    if not target_date:
+        if timezone_label == "AST":
+            target_date = get_ast_time().strftime("%Y-%m-%d")
+        elif timezone_label == "IST":
+            target_date = get_ist_time().strftime("%Y-%m-%d")
+        elif timezone_label == "SYD":
+            target_date = get_sydney_time().strftime("%Y-%m-%d")
+        else:
+            # Manual or generic: Default to the AST workday date
+            target_date = get_ast_time().strftime("%Y-%m-%d")
+            
+    today_str = target_date
+
+    try:
+        tanks_data = normalize_to_dict(fetch_db("tanks"))
+        readings_data = normalize_to_dict(fetch_db("readings"))
+        tree_data = normalize_to_dict(fetch_db("tank_tree"))
+    except Exception as e:
+        print(f"[-] Tank Reminder FCM: Failed to fetch data - {e}")
+        return
+
+    today_readings = set()
+    for r in readings_data.values():
+        try:
+            if r and r.get("captured_at", "").split("T")[0] == today_str:
+                today_readings.add(r.get("tank_id"))
+        except:
+            continue
+
+    nodes = list(tree_data.values()) if isinstance(tree_data, dict) else []
+    top_folders = [n for n in nodes if n.get("type") == "folder" and not n.get("parent_id")]
+    top_folders.sort(key=lambda x: x.get("order", 0))
+
+    def get_folder_tanks(folder_id):
+        tank_ids = []
+        queue = [folder_id]
+        while queue:
+            curr = queue.pop(0)
+            children = [n for n in nodes if n.get("parent_id") == curr]
+            for c in children:
+                if c.get("type") == "leaf" and c.get("tank_id"):
+                    tank_ids.append(c.get("tank_id"))
+                elif c.get("type") == "folder":
+                    queue.append(c.get("id"))
+        return tank_ids
+
+    body_lines = []
+    for folder in top_folders:
+        t_ids = get_folder_tanks(folder.get("id"))
+        if not t_ids:
+            continue
+
+        folder_tanks = [tanks_data[tid] for tid in t_ids if tid in tanks_data]
+        if not folder_tanks:
+            continue
+
+        total_count = len(folder_tanks)
+        inspected = [t for t in folder_tanks if t.get("id") in today_readings]
+        uninspected = [t for t in folder_tanks if t.get("id") not in today_readings]
+        inspected_count = len(inspected)
+        percentage = (inspected_count / total_count * 100) if total_count > 0 else 0
+        folder_name = folder.get("name", "Group")
+
+        if inspected_count == 0:
+            # 0% — no readings at all
+            body_lines.append(f"{folder_name} has not taken Readings at all")
+        elif percentage < 50:
+            # < 50% — "Group C has not been Taken reading except: \nBulluet points pending list"
+            # Shows the pending list (uninspected)
+            body_lines.append(f"{folder_name} has not been Taken reading except:")
+            for t in uninspected:
+                name = t.get("tank_name", "Asset")
+                code = t.get("tank_code", "")
+                body_lines.append(f"  \u2022 {name}" + (f" ({code})" if code else ""))
+        elif percentage < 100:
+            # >= 50% — "Group B has been Taken reading except: \nBulluet points pending list"
+            # Also shows the pending list (uninspected)
+            body_lines.append(f"{folder_name} has been Taken reading except:")
+            for t in uninspected:
+                name = t.get("tank_name", "Asset")
+                code = t.get("tank_code", "")
+                body_lines.append(f"  \u2022 {name}" + (f" ({code})" if code else ""))
+        else:
+            # 100% complete — positive completion note
+            body_lines.append(f"{folder_name}: All readings complete \u2713")
+
+    if not body_lines:
+        print(f"[*] Tank Reminder FCM: No group data found for client {topic_name}")
+        return
+
+    tz_tag = f" [{timezone_label}]" if timezone_label else ""
+    title = f"\U0001f4cb 3 PM Inspection Reminder{tz_tag}"
+    body = "\n".join(body_lines)
+
+    try:
+        notification = messaging.Notification(title=title, body=body)
+        data_payload = {
+            "client_id": topic_name,
+            "click_action": "FLUTTER_NOTIFICATION_CLICK",
+            "type": "1"
+        }
+        message = messaging.Message(notification=notification, data=data_payload, topic=topic_name)
+        messaging.send(message)
+        log_to_db(f"Tank Reminder FCM sent{tz_tag} for topic: {topic_name}", "success")
+        print(f"[+] Tank Reminder FCM sent successfully{tz_tag} for {topic_name}")
+    except Exception as e:
+        print(f"[-] Tank Reminder FCM failed{tz_tag}: {e}")
+
+def send_email_sent_fcm(email_type, recipient_count=0):
+    """Sends FCM confirmation notification to client topic after an email has been dispatched"""
+    if not initialize_firebase_admin():
+        return
+    try:
+        import firebase_admin
+        from firebase_admin import messaging
+
+        topic_name = CONFIG["client_id"]
+        title = f"\U0001f4e7 Email Sent: {email_type}"
+        body = f"Report dispatched to {recipient_count} recipient(s) successfully."
+
+        notification = messaging.Notification(title=title, body=body)
+        data_payload = {
+            "client_id": topic_name,
+            "click_action": "FLUTTER_NOTIFICATION_CLICK",
+            "type": "email_sent",
+            "email_type": email_type
+        }
+        message = messaging.Message(notification=notification, data=data_payload, topic=topic_name)
+        messaging.send(message)
+        print(f"[+] Email Sent FCM notification dispatched: {email_type} ({recipient_count} recipients)")
+    except Exception as e:
+        print(f"[-] Email Sent FCM failed: {e}")
+
+
 def auto_scheduler_thread():
     """Background thread that monitors Sydney Time and automatically triggers daily/weekly reports and reminders"""
     import time as pytime
     pytime.sleep(10)
-    print("\n[+] Auto Scheduler started. Monitoring Sydney Time...")
-    
-    last_triggered_sydney_date_hour = ""
-    
+    print("\n[+] Auto Scheduler started. Monitoring AST, IST, and Sydney Time...")
+
+    # Dict to track what has been triggered per-day to prevent double-firing
+    # Key format: "YYYY-MM-DD_TZ_HOUR_MINUTE"
+    last_triggered = {}
+
+    def already_triggered(date_key, tz, hour, minute):
+        return f"{date_key}_{tz}_{hour}_{minute}" in last_triggered
+
+    def mark_triggered(date_key, tz, hour, minute):
+        last_triggered[f"{date_key}_{tz}_{hour}_{minute}"] = True
+
     while True:
         try:
-            syd_now = get_sydney_time()
-            syd_date_str = syd_now.strftime("%Y-%m-%d")
-            syd_hour = syd_now.hour
-            syd_minute = syd_now.minute
-            
-            trigger_key = f"{syd_date_str}_{syd_hour}"
-            
-            if trigger_key != last_triggered_sydney_date_hour:
-                # Schedule 1: 1:00 PM (13:00) Sydney Time - Daily Inspection Reminder
-                if syd_hour == 13 and syd_minute >= 0:
-                    print(f"\n[*] Scheduler: Triggering 1:00 PM Sydney Reminder Alert...")
-                    trigger_fcm_notification(1)
-                    last_triggered_sydney_date_hour = trigger_key
-                    
-                # Schedule 2: 3:00 PM (15:00) Sydney Time - Reports & Reminder
-                elif syd_hour == 15 and syd_minute >= 0:
-                    print(f"\n[*] Scheduler: Triggering 3:00 PM Sydney Reports & Reminder...")
-                    trigger_fcm_notification(1)
-                    
-                    if syd_now.weekday() < 5:
-                        print("    - Weekday detected. Triggering Daily Reports...")
-                        threading.Thread(target=execute_daily_reports_email).start()
-                        threading.Thread(target=execute_missing_tanks_email).start()
+            utc_now = datetime.utcnow()
+            today_utc = utc_now.strftime("%Y-%m-%d")
+
+            # --- AST (Arabia Standard Time, UTC+3) ---
+            if CONFIG.get("ast_reminder_enabled", True):
+                ast_now = get_ast_time()
+                ast_h = CONFIG.get("ast_reminder_hour", 15)
+                ast_m = CONFIG.get("ast_reminder_minute", 0)
+                ast_date = ast_now.strftime("%Y-%m-%d")
+                if ast_now.hour == ast_h and ast_now.minute >= ast_m and not already_triggered(ast_date, "AST", ast_h, ast_m):
+                    print(f"\n[*] Scheduler: Triggering {ast_h}:{ast_m:02d} AST Reminder...")
+                    mark_triggered(ast_date, "AST", ast_h, ast_m)
+                    threading.Thread(target=trigger_fcm_tank_reminder, args=("AST", ast_date)).start()
+                    # Emails: weekday = daily, weekend = weekly
+                    if ast_now.weekday() < 5:
+                        print("    AST: Weekday - Triggering Daily Reports + Missing Tanks...")
+                        threading.Thread(target=execute_daily_reports_email, args=(ast_date,)).start()
+                        threading.Thread(target=execute_missing_tanks_email, args=(ast_date,)).start()
                     else:
-                        print("    - Weekend detected. Triggering Weekly Reports...")
+                        print("    AST: Weekend - Triggering Weekly Reports + Missing Tanks...")
                         threading.Thread(target=execute_weekly_reports_email).start()
                         threading.Thread(target=execute_weekly_alerts_email).start()
-                        threading.Thread(target=execute_missing_tanks_email).start()
-                        
-                    last_triggered_sydney_date_hour = trigger_key
+                        threading.Thread(target=execute_missing_tanks_email, args=(ast_date,)).start()
+
+            # --- IST (India Standard Time, UTC+5:30) ---
+            if CONFIG.get("ist_reminder_enabled", True):
+                ist_now = get_ist_time()
+                ist_h = CONFIG.get("ist_reminder_hour", 15)
+                ist_m = CONFIG.get("ist_reminder_minute", 0)
+                ist_date = ist_now.strftime("%Y-%m-%d")
+                if ist_now.hour == ist_h and ist_now.minute >= ist_m and not already_triggered(ist_date, "IST", ist_h, ist_m):
+                    print(f"\n[*] Scheduler: Triggering {ist_h}:{ist_m:02d} IST Reminder...")
+                    mark_triggered(ist_date, "IST", ist_h, ist_m)
+                    # IST: FCM reminder only (emails already sent via AST)
+                    threading.Thread(target=trigger_fcm_tank_reminder, args=("IST", ist_date)).start()
+
+            # --- Sydney Time (AEST/AEDT) ---
+            if CONFIG.get("syd_reminder_enabled", True):
+                syd_now = get_sydney_time()
+                syd_date = syd_now.strftime("%Y-%m-%d")
+                syd_h = syd_now.hour
+                syd_m = syd_now.minute
+
+                if syd_h == 13 and syd_m >= 0 and not already_triggered(syd_date, "SYD", 13, 0):
+                    print(f"\n[*] Scheduler: Triggering 1:00 PM Sydney FCM Reminder...")
+                    mark_triggered(syd_date, "SYD", 13, 0)
+                    threading.Thread(target=trigger_fcm_tank_reminder, args=("SYD", syd_date)).start()
+
+                elif syd_h == 15 and syd_m >= 0 and not already_triggered(syd_date, "SYD", 15, 0):
+                    print(f"\n[*] Scheduler: Triggering 3:00 PM Sydney Reports & Reminder...")
+                    mark_triggered(syd_date, "SYD", 15, 0)
+                    threading.Thread(target=trigger_fcm_tank_reminder, args=("SYD", syd_date)).start()
+                    if syd_now.weekday() < 5:
+                        print("    SYD: Weekday - Daily Reports...")
+                        threading.Thread(target=execute_daily_reports_email, args=(syd_date,)).start()
+                        threading.Thread(target=execute_missing_tanks_email, args=(syd_date,)).start()
+                    else:
+                        print("    SYD: Weekend - Weekly Reports...")
+                        threading.Thread(target=execute_weekly_reports_email).start()
+                        threading.Thread(target=execute_weekly_alerts_email).start()
+                        threading.Thread(target=execute_missing_tanks_email, args=(syd_date,)).start()
+
+            # Prune old trigger keys (keep only today's entries)
+            current_dates = {utc_now.strftime("%Y-%m-%d")}
+            for tz_key in list(last_triggered.keys()):
+                key_date = tz_key.split("_")[0]
+                if key_date not in current_dates:
+                    del last_triggered[tz_key]
+
         except Exception as e:
-            pass
+            print(f"[-] Scheduler error: {e}")
         pytime.sleep(30)
+
 
 def realtime_alerts_monitor_thread():
     """Polls the DB alerts node every 15 seconds. If a new alert is created, triggers FCM notification with details, and updates notified=True"""
@@ -3240,13 +3238,14 @@ def realtime_alerts_monitor_thread():
         pytime.sleep(15)
 
 def send_realtime_alert_fcm(alert_id, alert):
-    """Sends FCM notification for a real alert payload, resolving image URLs"""
+    """Sends FCM notification for a real alert payload, resolving image URLs.
+    Image priority: violation_image (Cloudinary from reading page) -> image_url -> img_url"""
     if not initialize_firebase_admin():
         return False
-        
+
     import firebase_admin
     from firebase_admin import messaging
-    
+
     topic_name = CONFIG["client_id"]
     tank_name = alert.get("tank_name", "Asset")
     tank_code = alert.get("tank_code", "")
@@ -3254,13 +3253,14 @@ def send_realtime_alert_fcm(alert_id, alert):
     val = alert.get("violated_value") or alert.get("param_value") or "-"
     msg = alert.get("message") or alert.get("alert_title") or "Threshold Violated"
     severity = (alert.get("constraint_severity") or alert.get("severity") or "critical").upper()
-    
-    emoji = "🚨" if severity == "CRITICAL" else "⚠️"
+
+    emoji = "\U0001f6a8" if severity == "CRITICAL" else "\u26a0\ufe0f"
     title = f"{emoji} {severity} Alert: {tank_name} ({tank_code})"
     body = f"{param} is out of limits: {val} - {msg}"
-    
-    image_url = alert.get("image_url") or alert.get("img_url")
-    
+
+    # Priority: violation_image (from reading_entry_screen Cloudinary upload) > image_url > img_url
+    image_url = alert.get("violation_image") or alert.get("image_url") or alert.get("img_url")
+
     try:
         notification = messaging.Notification(
             title=title,
@@ -3549,19 +3549,25 @@ def print_menu():
     print("="*45)
 
 def main():
+    import time as pytime
     load_env()
-    
+    CONFIG["server_start_time"] = pytime.time()
+
+    # Start web server (admin panel + API) in background
+    start_web_server()
+
     # Start compliance feedback polling thread in background
     threading.Thread(target=feedback_monitor_thread, daemon=True).start()
-    
-    # Start Sydney Time Auto Scheduler in background
+
+    # Start Multi-timezone Auto Scheduler (AST, IST, Sydney) in background
     threading.Thread(target=auto_scheduler_thread, daemon=True).start()
-    
+
     # Start Real-time Alerts Push Notification check in background
     threading.Thread(target=realtime_alerts_monitor_thread, daemon=True).start()
-    
+
     # Start Database Trigger Monitor in background
     threading.Thread(target=db_trigger_monitor_thread, daemon=True).start()
+
     
     # Check if build/web exists and copy feedback.html & admin.html there if so, to merge hosting automatically
     try:
@@ -3699,4 +3705,34 @@ def main():
             print("[-] Invalid choice. Enter 1-10.")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    import time as _pytime
+
+    # Support --no-interactive flag for Cloud Run / Docker headless mode
+    if "--no-interactive" in sys.argv or os.environ.get("NO_INTERACTIVE") == "1":
+        load_env()
+        _pytime_ref = _pytime.time()
+        CONFIG["server_start_time"] = _pytime_ref
+
+        print("[+] VAPLI Server starting in headless mode (Cloud Run / Docker)...")
+        start_web_server()
+        threading.Thread(target=feedback_monitor_thread, daemon=True).start()
+        threading.Thread(target=auto_scheduler_thread, daemon=True).start()
+        threading.Thread(target=realtime_alerts_monitor_thread, daemon=True).start()
+        threading.Thread(target=db_trigger_monitor_thread, daemon=True).start()
+
+        print(f"[+] All background workers started.")
+        print(f"[+] Web server running on port {CONFIG['server_port']} — admin panel at /admin")
+        print(f"[+] Health endpoint at /health")
+        print(f"[+] Scheduler: AST {CONFIG['ast_reminder_hour']}:{CONFIG['ast_reminder_minute']:02d}, "
+              f"IST {CONFIG['ist_reminder_hour']}:{CONFIG['ist_reminder_minute']:02d}, Sydney enabled")
+
+        # Keep-alive main thread (Cloud Run needs the process to stay alive)
+        try:
+            while True:
+                _pytime.sleep(60)
+        except KeyboardInterrupt:
+            print("\n[*] Shutting down gracefully...")
+    else:
+        main()
+

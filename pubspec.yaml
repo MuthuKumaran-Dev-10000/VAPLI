@@ -59,6 +59,7 @@ dependencies:
   printing: ^5.14.3
   open_filex: ^4.7.0
   firebase_messaging: ^16.4.1
+  cupertino_icons: ^1.0.9
  
 
 dev_dependencies:
