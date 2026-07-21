@@ -1,0 +1,2 @@
+# No external dependencies needed for the Hello World server.
+# Built-in modules (http.server, smtplib, email, datetime) are used.

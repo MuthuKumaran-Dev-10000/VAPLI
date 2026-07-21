@@ -1,0 +1,69 @@
+================================================================================
+VAPLI - LOCAL TESTING GUIDE FOR CLOUDSERVER
+================================================================================
+
+Follow these steps to run and test the optimized server locally:
+
+--------------------------------------------------------------------------------
+1. INSTALL DEPENDENCIES
+--------------------------------------------------------------------------------
+Navigate to the cloudServer directory and install the requirements:
+   cd c:\Users\muthu\Freelance\vapli\cloudServer
+   pip install -r requirements.txt
+
+--------------------------------------------------------------------------------
+2. ENVIRONMENT SETUP
+--------------------------------------------------------------------------------
+A. Make sure your root `.env/.env` file contains your correct SMTP credentials:
+   SMTP_SERVER=smtp.gmail.com
+   SMTP_PORT=587
+   SMTP_EMAIL=dummy@example.com
+   SMTP_PASSWORD=dummy-smtp-password
+   FIREBASE_DATABASE_URL=https://dummy-firebase-project-id-default-rtdb.firebaseio.com
+
+B. Ensure the `service-account.json` file is present in the root folder
+   (`c:\Users\muthu\Freelance\vapli\service-account.json`) to allow firebase-admin
+   to authorize FCM notifications.
+
+--------------------------------------------------------------------------------
+3. RUN THE LOCAL SERVER
+--------------------------------------------------------------------------------
+Execute the main script:
+   python main.py
+
+The console will output:
+   [*] Cloud Run Email & Questioning server running on port 8080...
+
+--------------------------------------------------------------------------------
+4. TEST REQUESTS (USING POSTMAN, BROWSER, OR CURL)
+--------------------------------------------------------------------------------
+
+A. Test Trigger Daily/Weekly Scheduler Workflow:
+   Open in browser:
+   http://localhost:8080/trigger?force=true
+
+   * This compiles PDFs and Excel telemetry reports, scans compliance gaps,
+     sends daily report emails, sends personalized supervisor form links, and 
+     dispatches consolidated FCM notifications.
+
+B. Test Loading the Missed Reading Questionnaire:
+   Generate a signature signature hash for local test:
+   (The secure salt is "vapli_compliance_secure_salt".)
+   
+   If supervisor email is "muthukumarandev001@gmail.com", the SHA-256 signature is:
+   sig = hashlib.sha256(("muthukumarandev001@gmail.com" + "vapli_compliance_secure_salt").encode('utf-8')).hexdigest()
+   sig = "e009405d4f1345d9d7ce7e64177d63ce3fce3fce42013f9fbf49e917d098e945" (example)
+
+   Open the Questionnaire Link in browser:
+   http://localhost:8080/feedback?client_id=dummy_client_id&date=2026-07-17&tanks=1,2,3&submitted_by=muthukumarandev001@gmail.com&sig=9a911765c81cf2622956cf387cd1bfe3047d79b90c10398f6d67cf8c2dfa9a3b
+
+   * Displays the dark-mode aesthetic Questionnaire form. Note that the Supervisor
+     Email is completely disabled and read-only for tamper-proof security.
+
+C. Test Submitting the Questionnaire:
+   Fill in the dropdown, add comments, and click "Submit".
+   - The form will POST to `/submit-feedback`.
+   - The server validates the signature.
+   - The reason is recorded in Firebase Database.
+   - A supervisor report email is dispatched immediately to the receivers.
+   - An aesthetic success page is rendered.

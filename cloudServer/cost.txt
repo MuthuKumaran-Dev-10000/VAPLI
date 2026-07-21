@@ -1,0 +1,77 @@
+================================================================================
+VAPLI CLOUD SERVICE - MONTHLY COST ANALYSIS
+================================================================================
+
+This document details the cost analysis of running the optimized VAPLI email,
+reporting, and compliance feedback server on Google Cloud Run.
+
+--------------------------------------------------------------------------------
+1. ARCHITECTURE OVERVIEW
+--------------------------------------------------------------------------------
+- Deployment Environment: Google Cloud Run (Serverless, scale-to-zero container)
+- Scheduled Triggering: Google Cloud Scheduler
+- Database Connection: Firebase Realtime Database (Existing)
+- Notification Delivery: Gmail SMTP Server (Existing)
+
+--------------------------------------------------------------------------------
+2. COMPUTE RUNTIME & TRAFFIC ESTIMATES
+--------------------------------------------------------------------------------
+A. Daily Report Trigger (once a day):
+   - Execution time to pull database, compile PDF & Excel, and send emails: ~10 seconds.
+   - Frequency: 1 request/day = 30 requests/month.
+   - Monthly running time: 300 seconds (5 minutes).
+
+B. Supervisor Gaps Feedback Submissions:
+   - Execution time to load and submit feedback: ~2 seconds.
+   - Frequency (assuming 5 submissions/day): 150 requests/month.
+   - Monthly running time: 300 seconds (5 minutes).
+
+C. Total Monthly Resources Required:
+   - Total Requests: ~180 requests/month
+   - Total Compute Time: 600 vCPU-seconds & 1,200 GiB-seconds/month (with 2GB RAM allocated).
+
+--------------------------------------------------------------------------------
+3. GOOGLE CLOUD FREE TIER ALLOWANCES vs VAPLI USAGE
+--------------------------------------------------------------------------------
+Google Cloud provides generous free tiers every month, which reset indefinitely.
+
+A. Google Cloud Run:
+   - Free Tier Limit: 2,000,000 requests/month
+     --> VAPLI Usage: 180 requests/month (0.009% of limit)
+   - Free Tier Limit: 180,000 vCPU-seconds/month
+     --> VAPLI Usage: 600 vCPU-seconds (0.33% of limit)
+   - Free Tier Limit: 360,000 GiB-seconds/month
+     --> VAPLI Usage: 1,200 GiB-seconds (0.33% of limit)
+   ** Cloud Run Cost: $0.00 (Free)
+
+B. Google Cloud Scheduler:
+   - Free Tier Limit: 3 jobs per billing account/month
+     --> VAPLI Usage: 1 job (33.3% of limit)
+   ** Cloud Scheduler Cost: $0.00 (Free)
+
+C. Google Cloud Build (Deployment):
+   - Free Tier Limit: 120 build-minutes per day
+     --> VAPLI Usage: ~2 build-minutes per deployment (1.6% of limit)
+   ** Cloud Build Cost: $0.00 (Free)
+
+D. Firebase Realtime Database:
+   - Free Tier Limit: 1 GB Storage & 10 GB Data Egress/month
+     --> VAPLI Usage: ~20 MB storage & < 100 MB egress
+   ** Firebase Database Cost: $0.00 (Free)
+
+--------------------------------------------------------------------------------
+4. TOTAL MONTHLY ESTIMATED COST
+--------------------------------------------------------------------------------
+Category                 | Cost (USD) | Cost (INR)
+-------------------------|------------|------------
+Google Cloud Run Compute | $0.00      | ₹0.00
+Google Cloud Scheduler   | $0.00      | ₹0.00
+Google Cloud Build       | $0.00      | ₹0.00
+Firebase Realtime DB     | $0.00      | ₹0.00
+-------------------------|------------|------------
+TOTAL ESTIMATED COST     | $0.00      | ₹0.00
+
+* NOTE: You have connected your billing account to activate these features, but
+  as long as your usage stays within these estimates, you will spend exactly
+  ₹0.00 per month. No costs will be deducted from your credit card.
+================================================================================

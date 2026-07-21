@@ -1,0 +1,64 @@
+================================================================================
+VAPLI - GOOGLE CLOUD RUN DEPLOYMENT & SCHEDULER GUIDE
+================================================================================
+
+Deploy the optimized cloudServer to Google Cloud Run to achieve scale-to-zero
+and eliminate active server idling costs.
+
+--------------------------------------------------------------------------------
+1. CONSOLE API CHECKS
+--------------------------------------------------------------------------------
+Ensure the following APIs are enabled in your project:
+- Cloud Run API
+- Cloud Build API
+- Cloud Scheduler API
+- Artifact Registry API
+
+--------------------------------------------------------------------------------
+2. PREPARE CREDENTIALS
+--------------------------------------------------------------------------------
+Copy your Firebase service account key file (service-account.json) from the parent
+VAPLI directory into the cloudServer folder.
+In PowerShell, you can run:
+   cp ../service-account.json .
+
+This ensures the credential file is uploaded and bundled inside the Cloud Run container.
+
+--------------------------------------------------------------------------------
+3. DEPLOYMENT COMMAND
+--------------------------------------------------------------------------------
+Navigate to the cloudServer directory in your PowerShell terminal and run:
+
+gcloud run deploy vapli-cloud-server `
+  --source . `
+  --region asia-east1 `
+  --allow-unauthenticated
+
+* Note: `--allow-unauthenticated` is required so that supervisors can open
+  and submit the missed-inspection feedback form from their email client. Security
+  is enforced cryptographically on the form endpoints via SHA256 signature checking.
+
+--------------------------------------------------------------------------------
+3. COPY SERVICE URL
+--------------------------------------------------------------------------------
+Once the command outputs the service URL, copy it (e.g.):
+https://vapli-cloud-server-43409271977.asia-east1.run.app
+
+--------------------------------------------------------------------------------
+4. SETTING UP DAILY 3:00 PM AST TRIGGER
+--------------------------------------------------------------------------------
+Create a Google Cloud Scheduler job to wake up and trigger the server daily at
+3:00 PM AST (Arabia Standard Time).
+
+Run this command in your PowerShell terminal (replace the URL with your copied service URL):
+
+gcloud scheduler jobs create http trigger-vapli-reports `
+  --schedule="0 15 * * *" `
+  --time-zone="Australia/Sydney" `
+  --uri="https://vapli-cloud-server-43409271977.asia-east1.run.app/trigger?force=true" `
+  --http-method=GET `
+  --location=asia-east1
+
+* This tells Cloud Scheduler to trigger the endpoint at exactly 3:00 PM Sydney Time.
+* Multi-Client Aware: Leaving out the `client_id` query parameter makes the server dynamically scan the database, fetch ALL active clients under `/clients`, and automatically compile and email reports/feedback links for every client! 
+  (If you ever want to trigger it for only a single client, you can pass `&client_id=your_client_id` in the URL).

@@ -1,0 +1,77 @@
+================================================================================
+VAPLI - GOOGLE CLOUD RUN EMAIL TRIGGER SETUP NOTES
+================================================================================
+
+This guide explains how to build, deploy, and schedule the Hello World email
+trigger service to Google Cloud Run, optimized for the lowest possible cost.
+
+--------------------------------------------------------------------------------
+1. PREREQUISITES
+--------------------------------------------------------------------------------
+A. Ensure you have the Google Cloud CLI installed:
+   https://cloud.google.com/sdk/docs/install
+
+B. Authenticate with your Google Account:
+   gcloud auth login
+
+C. Set your active Google Cloud Project for Cloud Run (replace with your Google Cloud Project ID, e.g., vapli-501...):
+   gcloud config set project <YOUR_CLOUD_PROJECT_ID>
+
+   Note: If your Firebase project (dummy-firebase-project-id) and Cloud Run project (vapli-501...) are different:
+   - Run the deploy and scheduler commands against your Google Cloud project (vapli-501...).
+   - The deployed code will still connect to the Firebase project's Database/Services since those URLs and credentials are loaded from your configuration (e.g. .env).
+
+D. Enable the necessary APIs on your Cloud Run project:
+   gcloud services enable run.googleapis.com build.googleapis.com cloudscheduler.googleapis.com
+
+--------------------------------------------------------------------------------
+2. HOW TO DEPLOY TO CLOUD RUN
+--------------------------------------------------------------------------------
+A. Open your terminal and navigate to this CLOUD directory:
+   cd c:\Users\muthu\Freelance\vapli\CLOUD
+
+B. Run the following command to build and deploy (Google Cloud Build will containerize
+   and upload the code without needing Docker installed on your local computer):
+
+   gcloud run deploy helloworld-email --source . --region Asia-East1 --allow-unauthenticated
+
+   Note: 
+   - `--allow-unauthenticated` is used here for simple Hello World testing. For production,
+     we will configure Cloud Scheduler with OIDC authentication to restrict access to the endpoint.
+   - "Asia-East1" (Taiwan) or "asia-south1" (Mumbai) is ideal for low latency in India.
+
+C. After completion, the terminal will print a service URL (e.g., https://helloworld-email-xxxxx-de.a.run.app).
+
+--------------------------------------------------------------------------------
+3. HOW TO TEST THE DEPLOYMENT
+--------------------------------------------------------------------------------
+- Test immediate execution (ignores the hardcoded time check):
+  Open your browser or run:
+  curl "https://<YOUR-CLOUD-RUN-URL>/?force=true"
+
+- Test the time matching check:
+  Open your browser or run:
+  curl "https://<YOUR-CLOUD-RUN-URL>/"
+
+--------------------------------------------------------------------------------
+4. SCALING TO ZERO & SCHEDULING (FOR LOWEST COST)
+--------------------------------------------------------------------------------
+Cloud Run automatically scales to 0 instances when there are no incoming requests.
+When scaled to zero, you pay absolutely NOTHING. 
+
+To run the script at your perfect time (e.g. 10:30 AM IST) without keeping the
+container running 24/7 (which would cost money):
+
+A. Create a Cloud Scheduler job that hits your Cloud Run URL at the scheduled time.
+B. Run the following command to schedule it using the gcloud CLI:
+
+   gcloud scheduler jobs create http trigger-email-daily \
+     --schedule="30 10 * * *" \
+     --time-zone="Asia/Kolkata" \
+     --uri="https://<YOUR-CLOUD-RUN-URL>/?force=true" \
+     --http-method=GET \
+     --location=asia-east1
+
+   * Why ?force=true is used: Since Cloud Scheduler runs at the exact scheduled
+     time, passing `?force=true` tells the python code to immediately process
+     and send the email when triggered by the scheduler.
