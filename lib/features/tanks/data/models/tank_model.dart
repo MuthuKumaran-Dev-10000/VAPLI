@@ -109,7 +109,12 @@ class TankModel {
     if (m["Groups"] != null) {
       final rawGroups = m["Groups"];
       if (rawGroups is Map) {
-        parsedGroups = Map<String, dynamic>.from(rawGroups);
+        try {
+          parsedGroups = <String, dynamic>{};
+          for (final entry in rawGroups.entries) {
+            parsedGroups[entry.key.toString()] = entry.value;
+          }
+        } catch (_) {}
       }
     }
 

@@ -334,7 +334,7 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
         .onValue
         .listen((event) {
       if (!mounted) return;
-      if (!event.snapshot.exists || event.snapshot.value == null) {
+      if (!event.snapshot.exists || event.snapshot.value == null || event.snapshot.value is! Map) {
         setState(() {
           _activeAlerts = [];
           _activeAlertImages = {};
@@ -346,6 +346,7 @@ class _TankInputBrowserState extends State<TankInputBrowser> {
       final images = <String, String>{};
 
       for (final e in raw.entries) {
+        if (e.value is! Map) continue;
         final alertId = e.key.toString();
         final alertMap = Map<dynamic, dynamic>.from(e.value as Map);
         final alert = AlertModel.fromMap(alertId, alertMap);

@@ -91,13 +91,23 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     _capturedAtCustom = _capturedAtStart; // 🔖 Added for Historical Upload Permission
     _duplicateReason = widget.duplicateReason ?? ''; // 🔖 Added for Duplicate Reading Validation
 
-    _props = widget.tank.inspectionProperties.map((p) {
-      return Map<String, dynamic>.from(p.map((k, v) {
-        if (v is List) return MapEntry(k, List<dynamic>.from(v));
-        if (v is Map) return MapEntry(k, Map<String, dynamic>.from(v as Map));
-        return MapEntry(k, v);
-      }));
-    }).toList();
+    Map<String, dynamic> copyMap(Map m) {
+      final res = <String, dynamic>{};
+      for (final entry in m.entries) {
+        final k = entry.key.toString();
+        final v = entry.value;
+        if (v is List) {
+          res[k] = List<dynamic>.from(v);
+        } else if (v is Map) {
+          res[k] = copyMap(v);
+        } else {
+          res[k] = v;
+        }
+      }
+      return res;
+    }
+
+    _props = widget.tank.inspectionProperties.map((p) => copyMap(p)).toList();
 
     // Identify all parameter IDs that belong to any group
     for (final p in _props) {
@@ -3179,9 +3189,11 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
 
   dynamic _deepCast(dynamic value) {
     if (value is Map) {
-      return Map<String, dynamic>.from(
-        value.map((k, v) => MapEntry(k.toString(), _deepCast(v)))
-      );
+      final res = <String, dynamic>{};
+      for (final e in value.entries) {
+        res[e.key.toString()] = _deepCast(e.value);
+      }
+      return res;
     }
     if (value is List) {
       return value.map(_deepCast).toList();

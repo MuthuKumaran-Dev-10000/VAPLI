@@ -24,9 +24,11 @@ class TankRepository {
   Map<String, dynamic>? _safeMap(dynamic value) {
     if (value is! Map) return null;
     try {
-      return Map<String, dynamic>.from(
-        (value as Map).map((k, v) => MapEntry(k.toString(), v)),
-      );
+      final res = <String, dynamic>{};
+      for (final e in (value as Map).entries) {
+        res[e.key.toString()] = e.value;
+      }
+      return res;
     } catch (_) {
       return null;
     }
