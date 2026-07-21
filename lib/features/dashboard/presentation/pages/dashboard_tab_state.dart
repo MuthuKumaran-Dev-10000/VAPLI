@@ -59,6 +59,10 @@ class _DashboardTabState extends State<DashboardTab> {
 
   // Alerts
   List<_AlertModel> _allAlerts = [];
+  List<AlertFolderGroup> _folderGroups = [];
+  bool _syncingFolders = false;
+  List<AlertFolderGroup> _completedFolderGroups = [];
+  bool _syncingCompletedFolders = false;
   List<_CompletedTask> _completed = [];
   StreamSubscription? _alertSub;
   StreamSubscription? _completedSub;
@@ -3123,15 +3127,65 @@ class _DashboardTabState extends State<DashboardTab> {
     _alertSub = _ref('alerts').onValue.listen((event) {
       final snap = event.snapshot;
       if (!snap.exists || snap.value == null) {
-        if (mounted) setState(() => _allAlerts = []);
+        if (mounted) {
+          setState(() {
+            _allAlerts = [];
+            _folderGroups = [];
+          });
+        }
         return;
       }
       final raw = Map<dynamic, dynamic>.from(snap.value as Map);
       final list = raw.values
           .map((v) => _AlertModel.fromMap(Map<dynamic, dynamic>.from(v as Map)))
           .toList();
-      if (mounted) setState(() => _allAlerts = list);
+      if (mounted) {
+        setState(() => _allAlerts = list);
+        _updateFolderGroups();
+      }
     });
+  }
+
+  Future<void> _updateFolderGroups() async {
+    if (!mounted) return;
+    setState(() => _syncingFolders = true);
+    try {
+      final activeAlerts = _todayOpenAlerts.map((a) => DashboardAlertDisplayItem(
+        id: a.id,
+        alertTitle: a.alertTitle,
+        message: a.message,
+        op: a.op,
+        severity: a.severity,
+        tankId: a.tankId,
+        tankName: a.tankName,
+        tankCode: a.tankCode,
+        paramId: a.paramId,
+        paramLabel: a.paramLabel,
+        paramValue: a.paramValue,
+        capturedBy: a.capturedBy,
+        capturedByName: a.capturedByName,
+        imageUrl: a.imageUrl,
+        constraintId: a.constraintId,
+        timestamp: a.timestamp,
+        acknowledged: a.acknowledged,
+        isLive: a.isLive,
+        status: a.status,
+        readingId: a.readingId,
+        ifThen: a.ifThen,
+      )).toList();
+
+      final syncedFolders = await DashboardAlertsSyncService.syncAndGetFolders(activeAlerts);
+      if (mounted) {
+        setState(() {
+          _folderGroups = syncedFolders;
+          _syncingFolders = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _syncingFolders = false);
+      }
+    }
   }
 
   void _subscribeCompleted() {
@@ -3139,7 +3193,12 @@ class _DashboardTabState extends State<DashboardTab> {
     _completedSub = _ref('completed_tasks').onValue.listen((event) {
       final snap = event.snapshot;
       if (!snap.exists || snap.value == null) {
-        if (mounted) setState(() => _completed = []);
+        if (mounted) {
+          setState(() {
+            _completed = [];
+            _completedFolderGroups = [];
+          });
+        }
         return;
       }
       final raw = Map<dynamic, dynamic>.from(snap.value as Map);
@@ -3152,13 +3211,65 @@ class _DashboardTabState extends State<DashboardTab> {
           alertId: m['alert_id']?.toString() ?? '',
           completedAt: m['completed_at']?.toString() ?? '',
           completedBy: m['completed_by']?.toString() ?? '',
+          completedDescription: m['completed_description']?.toString() ?? '',
+          completedPhotoUrl: m['completed_photo_url']?.toString() ?? '',
           alert:
               _AlertModel.fromMap(Map<dynamic, dynamic>.from(alertMap as Map)),
         ));
       }
       list.sort((a, b) => b.completedAt.compareTo(a.completedAt));
-      if (mounted) setState(() => _completed = list);
+      if (mounted) {
+        setState(() => _completed = list);
+        _updateCompletedFolderGroups();
+      }
     });
+  }
+
+  Future<void> _updateCompletedFolderGroups() async {
+    if (!mounted) return;
+    setState(() => _syncingCompletedFolders = true);
+    try {
+      final completedAlerts = _completed.map((c) {
+        final a = c.alert;
+        return DashboardAlertDisplayItem(
+          id: a.id,
+          alertTitle: a.alertTitle,
+          message: a.message,
+          op: a.op,
+          severity: a.severity,
+          tankId: a.tankId,
+          tankName: a.tankName,
+          tankCode: a.tankCode,
+          paramId: a.paramId,
+          paramLabel: a.paramLabel,
+          paramValue: a.paramValue,
+          capturedBy: a.capturedBy,
+          capturedByName: a.capturedByName,
+          imageUrl: a.imageUrl,
+          constraintId: a.constraintId,
+          timestamp: c.completedAt,
+          acknowledged: true,
+          isLive: a.isLive,
+          status: 'COMPLETED',
+          readingId: a.readingId,
+          ifThen: a.ifThen,
+          completedDescription: c.completedDescription,
+          completedPhotoUrl: c.completedPhotoUrl,
+        );
+      }).toList();
+
+      final syncedFolders = await DashboardAlertsSyncService.syncAndGetCompletedFolders(completedAlerts);
+      if (mounted) {
+        setState(() {
+          _completedFolderGroups = syncedFolders;
+          _syncingCompletedFolders = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _syncingCompletedFolders = false);
+      }
+    }
   }
 
   void _subscribeSettings() {
@@ -3247,15 +3358,50 @@ class _DashboardTabState extends State<DashboardTab> {
 
   // ── Complete task ──────────────────────────────────────────────────────────
 
-  Future<void> _completeAlert(_AlertModel alert, String completedByName) async {
+  Future<String> _uploadCompletedTaskPhoto(File file) async {
+    final ts = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
+    const folder = 'dashboard_completed_tasks';
+    final sig = crypto.sha1
+        .convert(
+          utf8.encode(
+            'folder=$folder&timestamp=$ts${EnvConfig.cloudinaryApiSecret}',
+          ),
+        )
+        .toString();
+    final req = http.MultipartRequest('POST',
+        Uri.parse(
+          'https://api.cloudinary.com/v1_1/${EnvConfig.cloudinaryCloudName}/image/upload',
+        ));
+    req.fields['api_key'] = EnvConfig.cloudinaryApiKey;
+    req.fields['timestamp'] = ts;
+    req.fields['signature'] = sig;
+    req.fields['folder'] = folder;
+    req.files.add(await http.MultipartFile.fromPath('file', file.path,
+        contentType:
+            MediaType.parse(lookupMimeType(file.path) ?? 'image/jpeg')));
+    final res = await http.Response.fromStream(await req.send());
+    if (res.statusCode != 200) {
+      throw Exception('Photo upload failed (${res.statusCode})');
+    }
+    return (json.decode(res.body) as Map)['secure_url'] as String;
+  }
+
+  // ── Complete task ──────────────────────────────────────────────────────────
+
+  Future<void> _completeAlert(
+      _AlertModel alert, String completedByName, String description, List<String> photoUrls) async {
     final taskId = 'task_${alert.id}';
     final now = DateTime.now().toIso8601String();
+    final firstUrl = photoUrls.isNotEmpty ? photoUrls.first : '';
 
     // Write to completed_tasks/
     await _ref('completed_tasks/$taskId').set({
       'alert_id': alert.id,
       'completed_at': now,
       'completed_by': completedByName,
+      'completed_description': description,
+      'completed_photo_url': firstUrl,
+      'completed_photo_urls': photoUrls,
       'alert': {
         'id': alert.id,
         'alert_title': alert.alertTitle,
@@ -3274,136 +3420,318 @@ class _DashboardTabState extends State<DashboardTab> {
         'timestamp': alert.timestamp,
         'acknowledged': true,
         'live': alert.isLive,
-        'status': 'COMPLETED', // 🔖 Added for Alert Lifecycle Bug Fix
+        'status': 'COMPLETED',
         'if_then': alert.ifThen,
         'reading_id': alert.readingId,
+        'completed_description': description,
+        'completed_photo_url': firstUrl,
+        'completed_photo_urls': photoUrls,
       },
     });
 
     // Mark acknowledged and status: COMPLETED in alerts/
     await _ref('alerts/${alert.id}').update({
       'acknowledged': true,
-      'status': 'COMPLETED', // 🔖 Added for Alert Lifecycle Bug Fix
+      'status': 'COMPLETED',
+      'completed_description': description,
+      'completed_photo_url': firstUrl,
+      'completed_photo_urls': photoUrls,
     });
     debugPrint('[Dashboard] Task completed: ${alert.id}');
   }
 
   // ── Confirmation dialog ────────────────────────────────────────────────────
 
-  Future<void> _showCompleteDialog(_AlertModel alert) async {
+  Future<void> _showCompleteDialog(BuildContext context, _AlertModel alert) async {
     bool checked = false;
     bool saving = false;
+    bool uploadingPhoto = false;
+    final List<String> uploadedUrls = [];
+    final List<File> localPhotoFiles = [];
+    final descCtrl = TextEditingController();
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (ctx, setDlg) => AlertDialog(
-          backgroundColor: _kCard,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          title: Row(children: [
-            Icon(_sevIcon(alert.severity),
-                color: _sevColor(alert.severity), size: 20),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text('Complete Task',
-                  style: GoogleFonts.dmSans(
-                      color: _kText,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15)),
-            ),
-          ]),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(alert.alertTitle,
-                  style: GoogleFonts.dmSans(
-                      color: _kText,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13)),
-              const SizedBox(height: 4),
-              Text(alert.message,
-                  style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
-              const SizedBox(height: 16),
-              // Verification checkbox
-              GestureDetector(
-                onTap: () => setDlg(() => checked = !checked),
-                child: Row(children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    width: 22,
-                    height: 22,
-                    decoration: BoxDecoration(
-                      color: checked ? _kSuccess.withOpacity(0.15) : _kSurface,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                          color: checked ? _kSuccess : _kBorderH,
-                          width: checked ? 2 : 1),
-                    ),
-                    child: checked
-                        ? const Icon(Icons.check_rounded,
-                            size: 14, color: _kSuccess)
-                        : null,
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'I have verified and checked this task has been resolved.',
-                      style: GoogleFonts.dmSans(color: _kText, fontSize: 12),
-                    ),
-                  ),
-                ]),
+      builder: (context) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          final isReady = checked &&
+              descCtrl.text.trim().isNotEmpty &&
+              uploadedUrls.isNotEmpty &&
+              !saving &&
+              !uploadingPhoto;
+
+          return AlertDialog(
+            backgroundColor: _kCard,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            title: Row(children: [
+              Icon(_sevIcon(alert.severity), color: _sevColor(alert.severity), size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Complete Task',
+                    style: GoogleFonts.dmSans(
+                        color: _kText,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15)),
               ),
-            ],
+            ]),
+            content: SizedBox(
+              width: MediaQuery.of(ctx).size.width * 0.85,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                  Text(alert.alertTitle,
+                      style: GoogleFonts.dmSans(
+                          color: _kText,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13)),
+                  const SizedBox(height: 4),
+                  Text(alert.message,
+                      style: GoogleFonts.dmSans(color: _kSub, fontSize: 12)),
+                  const SizedBox(height: 16),
+
+                  // Description Input (Compulsory)
+                  Text(
+                    'Resolution Description (Compulsory)',
+                    style: GoogleFonts.dmSans(
+                        color: _kText,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: descCtrl,
+                    style: GoogleFonts.dmSans(color: _kText, fontSize: 13),
+                    decoration: InputDecoration(
+                      hintText: 'Enter one-line description...',
+                      hintStyle: GoogleFonts.dmSans(color: _kSub, fontSize: 12),
+                      filled: true,
+                      fillColor: _kSurface,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kBorder),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(color: _kBorder),
+                      ),
+                    ),
+                    onChanged: (_) => setDlg(() {}),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Capture Verification Photos (Compulsory, Multi-Photo support)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Verification Photos (${uploadedUrls.length})',
+                        style: GoogleFonts.dmSans(
+                            color: _kText,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12),
+                      ),
+                      if (uploadingPhoto)
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(color: _kCopper, strokeWidth: 1.5),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  SizedBox(
+                    height: 100,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: localPhotoFiles.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (ctx, idx) {
+                        if (idx == localPhotoFiles.length) {
+                          // Plus button card to snap new photo
+                          return InkWell(
+                            onTap: uploadingPhoto
+                                ? null
+                                : () async {
+                                    try {
+                                      final picker = ImagePicker();
+                                      final img = await picker.pickImage(
+                                          source: ImageSource.camera, imageQuality: 90);
+                                      if (img == null) return;
+
+                                      final File? annotatedFile = await Navigator.push<File>(
+                                        ctx,
+                                        MaterialPageRoute(
+                                          builder: (_) => ImageMarkerScreen(imageFile: File(img.path)),
+                                        ),
+                                      );
+                                      if (annotatedFile == null) return;
+
+                                      setDlg(() {
+                                        uploadingPhoto = true;
+                                      });
+
+                                      final url = await _uploadCompletedTaskPhoto(annotatedFile);
+
+                                      setDlg(() {
+                                        localPhotoFiles.add(annotatedFile);
+                                        uploadedUrls.add(url);
+                                        uploadingPhoto = false;
+                                      });
+                                    } catch (e) {
+                                      setDlg(() => uploadingPhoto = false);
+                                      if (ctx.mounted) {
+                                        ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                                          content: Text('Photo capture failed: $e'),
+                                          backgroundColor: _kDanger,
+                                        ));
+                                      }
+                                    }
+                                  },
+                            borderRadius: BorderRadius.circular(8),
+                            child: Container(
+                              width: 90,
+                              decoration: BoxDecoration(
+                                color: _kSurface,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: _kBorder),
+                              ),
+                              child: const Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.add_a_photo_outlined, color: _kCopper, size: 24),
+                                  SizedBox(height: 4),
+                                  Text('Add Photo', style: TextStyle(color: _kSub, fontSize: 10)),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+
+                        // Preview of already captured photo
+                        return Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.file(
+                                localPhotoFiles[idx],
+                                width: 90,
+                                height: 100,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            Positioned(
+                              top: 2,
+                              right: 2,
+                              child: InkWell(
+                                onTap: () {
+                                  setDlg(() {
+                                    localPhotoFiles.removeAt(idx);
+                                    uploadedUrls.removeAt(idx);
+                                  });
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.all(3),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0x99000000),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.close, color: Colors.white, size: 12),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Verification Checkbox
+                  GestureDetector(
+                    onTap: () => setDlg(() => checked = !checked),
+                    child: Row(children: [
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 160),
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: checked ? _kSuccess.withOpacity(0.15) : _kSurface,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: checked ? _kSuccess : _kBorderH,
+                              width: checked ? 2 : 1),
+                        ),
+                        child: checked
+                            ? const Icon(Icons.check_rounded, size: 14, color: _kSuccess)
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'I have verified and checked this task has been resolved.',
+                          style: GoogleFonts.dmSans(color: _kText, fontSize: 12),
+                        ),
+                      ),
+                    ]),
+                  ),
+                ],
+              ),
+            ),
           ),
           actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.pop(ctx),
-              child: Text('Cancel', style: GoogleFonts.dmSans(color: _kSub)),
-            ),
-            GestureDetector(
-              onTap: (!checked || saving)
-                  ? null
-                  : () async {
-                      setDlg(() => saving = true);
-                      try {
-                        await _completeAlert(alert, 'Inspector');
-                        if (ctx.mounted) Navigator.pop(ctx);
-                      } catch (e) {
-                        setDlg(() => saving = false);
-                        if (ctx.mounted) {
-                          ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                            content: Text('Failed: $e'),
-                            backgroundColor: _kDanger,
-                          ));
-                        }
-                      }
-                    },
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
-                decoration: BoxDecoration(
-                  color: checked && !saving ? _kSuccess : _kSurface,
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: saving
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(
-                            color: Colors.white, strokeWidth: 2))
-                    : Text('Save',
-                        style: GoogleFonts.dmSans(
-                            color: checked ? Colors.white : _kSubL,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 13)),
+              TextButton(
+                onPressed: saving ? null : () => Navigator.pop(ctx),
+                child: Text('Cancel', style: GoogleFonts.dmSans(color: _kSub)),
               ),
-            ),
-          ],
-        ),
+              GestureDetector(
+                onTap: !isReady
+                    ? null
+                    : () async {
+                        setDlg(() => saving = true);
+                        try {
+                          await _completeAlert(
+                            alert,
+                            'Inspector',
+                            descCtrl.text.trim(),
+                            uploadedUrls,
+                          );
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        } catch (e) {
+                          setDlg(() => saving = false);
+                          if (ctx.mounted) {
+                            ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                              content: Text('Failed: $e'),
+                              backgroundColor: _kDanger,
+                            ));
+                          }
+                        }
+                      },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: isReady ? _kSuccess : _kSurface,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: saving
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : Text('Save',
+                          style: GoogleFonts.dmSans(
+                              color: isReady ? Colors.white : _kSubL,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13)),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -3455,32 +3783,195 @@ class _DashboardTabState extends State<DashboardTab> {
                 // ── Download buttons and time range selectors (At the TOP!) ──
                 SliverToBoxAdapter(child: _buildDownloadButtonsSection()),
 
-                // ── Today's Tasks (alerts) ────────────────────────────────
-                if (_showActiveAlerts)
+                // ── Alerts Management Center Action Banner Card ─────────────
+                if (_showActiveAlerts || _showCompletedAlerts)
                   SliverToBoxAdapter(
-                    child: RepaintBoundary(
-                      key: _alertsCaptureKey,
-                      child: _buildAlertsPanel(),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => AlertsScreen(
+                                alertCardBuilder: (item) {
+                                  final alertModel = _AlertModel(
+                                    id: item.id,
+                                    alertTitle: item.alertTitle,
+                                    message: item.message,
+                                    op: item.op,
+                                    severity: item.severity,
+                                    tankId: item.tankId,
+                                    tankName: item.tankName,
+                                    tankCode: item.tankCode,
+                                    paramId: item.paramId,
+                                    paramLabel: item.paramLabel,
+                                    paramValue: item.paramValue,
+                                    capturedBy: item.capturedBy,
+                                    capturedByName: item.capturedByName,
+                                    imageUrl: item.imageUrl,
+                                    constraintId: item.constraintId,
+                                    timestamp: item.timestamp,
+                                    acknowledged: item.acknowledged,
+                                    isLive: item.isLive,
+                                    status: item.status,
+                                    readingId: item.readingId,
+                                    ifThen: item.ifThen,
+                                  );
+                                  return Builder(
+                                    builder: (cardContext) => _AlertCard(
+                                      alert: alertModel,
+                                      onComplete: () => _showCompleteDialog(cardContext, alertModel),
+                                    ),
+                                  );
+                                },
+                                completedCardBuilder: (item) {
+                                  final alertModel = _AlertModel(
+                                    id: item.id,
+                                    alertTitle: item.alertTitle,
+                                    message: item.message,
+                                    op: item.op,
+                                    severity: item.severity,
+                                    tankId: item.tankId,
+                                    tankName: item.tankName,
+                                    tankCode: item.tankCode,
+                                    paramId: item.paramId,
+                                    paramLabel: item.paramLabel,
+                                    paramValue: item.paramValue,
+                                    capturedBy: item.capturedBy,
+                                    capturedByName: item.capturedByName,
+                                    imageUrl: item.imageUrl,
+                                    constraintId: item.constraintId,
+                                    timestamp: item.timestamp,
+                                    acknowledged: true,
+                                    isLive: item.isLive,
+                                    status: item.status,
+                                    readingId: item.readingId,
+                                    ifThen: item.ifThen,
+                                    completedDescription: item.completedDescription,
+                                    completedPhotoUrl: item.completedPhotoUrl,
+                                    completedPhotoUrls: item.completedPhotoUrls,
+                                  );
+                                  final completedTask = _CompletedTask(
+                                    alertId: item.id,
+                                    completedAt: item.timestamp,
+                                    completedBy: item.capturedByName.isNotEmpty ? item.capturedByName : 'Inspector',
+                                    completedDescription: item.completedDescription,
+                                    completedPhotoUrl: item.completedPhotoUrl,
+                                    completedPhotoUrls: item.completedPhotoUrls,
+                                    alert: alertModel,
+                                  );
+                                  return _CompletedCard(task: completedTask);
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(16),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF1E2024), Color(0xFF141618)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: _kCopper.withOpacity(0.4)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: _kCopper.withOpacity(0.08),
+                                blurRadius: 12,
+                                offset: const Offset(0, 4),
+                              )
+                            ],
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: _kCopper.withOpacity(0.15),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: _kCopper.withOpacity(0.3)),
+                                ),
+                                child: const Icon(Icons.folder_special_rounded, color: _kCopper, size: 22),
+                              ),
+                              const SizedBox(width: 14),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            'Alerts Center',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.spaceGrotesk(
+                                              color: _kText,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                        ),
+                                        if (_todayOpenAlerts.isNotEmpty) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: _kDanger,
+                                              borderRadius: BorderRadius.circular(10),
+                                            ),
+                                            child: Text(
+                                              '${_todayOpenAlerts.length} NEW',
+                                              style: GoogleFonts.spaceGrotesk(
+                                                color: Colors.white,
+                                                fontSize: 8.5,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${_todayOpenAlerts.length} Active Alerts · ${_completed.length} Completed Tasks',
+                                      style: GoogleFonts.dmSans(color: _kSub, fontSize: 11),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: _kCopper,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      'View Alerts',
+                                      style: GoogleFonts.dmSans(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 10),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ),
-
-                // ── Completed Today ───────────────────────────────────────
-                if (_showCompletedAlerts)
-                  SliverToBoxAdapter(
-                      child: _buildCompletedSection(
-                    'TASKS COMPLETED TODAY',
-                    _completedToday,
-                    isToday: true,
-                  )),
-
-                // ── Completed Previous ────────────────────────────────────
-                if (_showCompletedAlerts)
-                  SliverToBoxAdapter(
-                      child: _buildCompletedSection(
-                    'PREVIOUS DAYS',
-                    _completedPrevious,
-                    isToday: false,
-                  )),
 
                 // ── Summary strip ─────────────────────────────────────────
                 if (_showInspectionValues)
@@ -3661,8 +4152,10 @@ class _DashboardTabState extends State<DashboardTab> {
                         height: 40,
                         child: DropdownButtonFormField<String>(
                           value: _alertFormatVal,
+                          isExpanded: true,
+                          iconSize: 18,
                           dropdownColor: _kSurface,
-                          style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                          style: GoogleFonts.inter(color: _kText, fontSize: 12),
                           decoration: InputDecoration(
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
@@ -3672,12 +4165,12 @@ class _DashboardTabState extends State<DashboardTab> {
                               borderRadius: BorderRadius.circular(8),
                               borderSide: const BorderSide(color: _kCopper),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                             isDense: true,
                           ),
                           items: const [
-                            DropdownMenuItem(value: 'pdf', child: Text('PDF')),
-                            DropdownMenuItem(value: 'excel', child: Text('Excel')),
+                            DropdownMenuItem(value: 'pdf', child: Text('PDF', overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'excel', child: Text('Excel', overflow: TextOverflow.ellipsis)),
                           ],
                           onChanged: isExporting
                               ? null
@@ -3796,8 +4289,10 @@ class _DashboardTabState extends State<DashboardTab> {
                         height: 40,
                         child: DropdownButtonFormField<String>(
                           value: _inspectionFormatVal,
+                          isExpanded: true,
+                          iconSize: 18,
                           dropdownColor: _kSurface,
-                          style: GoogleFonts.inter(color: _kText, fontSize: 13),
+                          style: GoogleFonts.inter(color: _kText, fontSize: 12),
                           decoration: InputDecoration(
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(8),
@@ -3807,12 +4302,12 @@ class _DashboardTabState extends State<DashboardTab> {
                               borderRadius: BorderRadius.circular(8),
                               borderSide: const BorderSide(color: _kCopper),
                             ),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                             isDense: true,
                           ),
                           items: const [
-                            DropdownMenuItem(value: 'pdf', child: Text('PDF')),
-                            DropdownMenuItem(value: 'excel', child: Text('Excel')),
+                            DropdownMenuItem(value: 'pdf', child: Text('PDF', overflow: TextOverflow.ellipsis)),
+                            DropdownMenuItem(value: 'excel', child: Text('Excel', overflow: TextOverflow.ellipsis)),
                           ],
                           onChanged: isExporting
                               ? null
@@ -3931,14 +4426,17 @@ class _DashboardTabState extends State<DashboardTab> {
               label: 'By Time',
               icon: Icons.access_time_rounded,
               selected: _filter == _AlertFilter.time,
-              onTap: () => setState(() {
-                if (_filter == _AlertFilter.time) {
-                  _filterAscending = !_filterAscending;
-                } else {
-                  _filter = _AlertFilter.time;
-                  _filterAscending = false;
-                }
-              }),
+              onTap: () {
+                setState(() {
+                  if (_filter == _AlertFilter.time) {
+                    _filterAscending = !_filterAscending;
+                  } else {
+                    _filter = _AlertFilter.time;
+                    _filterAscending = false;
+                  }
+                });
+                _updateFolderGroups();
+              },
               trailing: _filter == _AlertFilter.time
                   ? (_filterAscending
                       ? Icons.arrow_upward_rounded
@@ -3950,27 +4448,70 @@ class _DashboardTabState extends State<DashboardTab> {
               label: 'By Severity',
               icon: Icons.warning_amber_rounded,
               selected: _filter == _AlertFilter.severity,
-              onTap: () => setState(() => _filter = _AlertFilter.severity),
+              onTap: () {
+                setState(() => _filter = _AlertFilter.severity);
+                _updateFolderGroups();
+              },
             ),
             const SizedBox(width: 8),
             _FilterChip(
               label: 'Today Only',
               icon: Icons.today_rounded,
               selected: _filterTodayOnly,
-              onTap: () => setState(() => _filterTodayOnly = !_filterTodayOnly),
+              onTap: () {
+                setState(() => _filterTodayOnly = !_filterTodayOnly);
+                _updateFolderGroups();
+              },
             ),
           ]),
 
           const SizedBox(height: 10),
 
-          // Alert cards or empty state
+          // Alert folders or empty state
           if (alerts.isEmpty)
             _AlertsEmpty()
+          else if (_syncingFolders && _folderGroups.isEmpty)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: CircularProgressIndicator(color: _kCopper),
+              ),
+            )
           else
-            ...alerts.map((a) => _AlertCard(
-                  alert: a,
-                  onComplete: () => _showCompleteDialog(a),
-                )),
+            FolderAlertsView(
+              folders: _folderGroups,
+              alertCardBuilder: (item) {
+                final alertModel = _AlertModel(
+                  id: item.id,
+                  alertTitle: item.alertTitle,
+                  message: item.message,
+                  op: item.op,
+                  severity: item.severity,
+                  tankId: item.tankId,
+                  tankName: item.tankName,
+                  tankCode: item.tankCode,
+                  paramId: item.paramId,
+                  paramLabel: item.paramLabel,
+                  paramValue: item.paramValue,
+                  capturedBy: item.capturedBy,
+                  capturedByName: item.capturedByName,
+                  imageUrl: item.imageUrl,
+                  constraintId: item.constraintId,
+                  timestamp: item.timestamp,
+                  acknowledged: item.acknowledged,
+                  isLive: item.isLive,
+                  status: item.status,
+                  readingId: item.readingId,
+                  ifThen: item.ifThen,
+                );
+                return Builder(
+                  builder: (cardContext) => _AlertCard(
+                    alert: alertModel,
+                    onComplete: () => _showCompleteDialog(cardContext, alertModel),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );

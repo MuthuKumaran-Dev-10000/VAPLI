@@ -73,8 +73,38 @@ class _CompletedCardState extends State<_CompletedCard> {
                 _DetailRow('Alert Time', _fmtTs(a.timestamp)),
                 _DetailRow('Completed By', widget.task.completedBy),
                 _DetailRow('Completed At', _fmtTs(widget.task.completedAt)),
+                if (widget.task.completedDescription.isNotEmpty)
+                  _DetailRow('Resolution Detail', widget.task.completedDescription),
                 if (a.ifThen.isNotEmpty) _DetailRow('IF-THEN Detail', a.ifThen),
                 _DetailRow('Alert ID', a.id),
+                if (widget.task.completedPhotoUrl.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text('Resolution Evidence:',
+                      style: GoogleFonts.dmSans(
+                          color: _kSub, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: CachedNetworkImage(
+                      imageUrl: widget.task.completedPhotoUrl,
+                      height: 140,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      placeholder: (context, url) => Container(
+                        color: const Color(0xFF141618),
+                        height: 140,
+                        child: const Center(
+                            child: CircularProgressIndicator(
+                                color: _kCopper, strokeWidth: 2)),
+                      ),
+                      errorWidget: (context, url, error) => Container(
+                        color: const Color(0xFF141618),
+                        height: 140,
+                        child: const Icon(Icons.broken_image, color: Colors.white24),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

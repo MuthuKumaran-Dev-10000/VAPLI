@@ -30,6 +30,8 @@ class DatabaseModeService {
     'reading_feedback',
     'sync_logs',
     'settings',
+    'Dashboard_Alerts_display',
+    'Dashboard_Alerts_completed',
   };
 
   static Future<void> init() async {

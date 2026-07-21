@@ -56,6 +56,18 @@ import 'package:lubrication_indicator/features/tanks/data/repositories/tank_repo
 import 'package:lubrication_indicator/features/tanks/data/repositories/tank_tree_repository.dart';
 import 'package:lubrication_indicator/features/readings/data/models/reading_model.dart';
 import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
+import 'package:lubrication_indicator/features/dashboard_folders/dashboard_alerts_display_model.dart';
+import 'package:lubrication_indicator/features/dashboard_folders/dashboard_alerts_sync_service.dart';
+import 'package:lubrication_indicator/features/dashboard_folders/folder_alerts_view.dart';
+import 'package:lubrication_indicator/features/dashboard_folders/alerts_screen.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:lubrication_indicator/features/readings/presentation/pages/image_marker_screen.dart';
+import 'package:lubrication_indicator/core/services/env_config.dart';
+import 'package:crypto/crypto.dart' as crypto;
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:mime/mime.dart';
+import 'package:http_parser/http_parser.dart';
 part 'widgets/_alert_card.dart';
 part 'widgets/_alert_card_state.dart';
 part 'widgets/_completed_card.dart';

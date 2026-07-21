@@ -4,6 +4,9 @@ class _CompletedTask {
   final String alertId;
   final String completedAt;
   final String completedBy;
+  final String completedDescription;
+  final String completedPhotoUrl;
+  final List<String> completedPhotoUrls;
   final _AlertModel alert;
 
   _CompletedTask({
@@ -11,6 +14,9 @@ class _CompletedTask {
     required this.completedAt,
     required this.completedBy,
     required this.alert,
+    this.completedDescription = '',
+    this.completedPhotoUrl = '',
+    this.completedPhotoUrls = const [],
   });
 }
 

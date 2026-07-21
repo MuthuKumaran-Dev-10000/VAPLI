@@ -49,6 +49,7 @@ import 'package:lubrication_indicator/features/auth/data/models/user_model.dart'
 import 'package:lubrication_indicator/features/dashboard/data/repositories/dashboard_stats_repository.dart';
 import 'package:lubrication_indicator/features/readings/data/repositories/reading_repository.dart';
 import 'package:lubrication_indicator/features/alerts/data/models/alert_model.dart'; // 🔖 Added for Alert Lifecycle Bug Fix
+import 'package:lubrication_indicator/features/dashboard_folders/dashboard_alerts_display_model.dart';
 import 'image_marker_screen.dart';
 part 'reading_entry_state.dart';
 part 'reading_entry_models/_autofill_result.dart';

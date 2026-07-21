@@ -489,90 +489,252 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     );
   }
 
-  void _showViolationBottomSheet(_Violation violation) {
+  final Map<String, Map<String, int>> _violationSeverityRatings = {};
+  final Map<String, Map<String, String>> _violationTimeRanges = {};
+  final Map<String, Map<String, String>> _violationDueDates = {};
+
+  Widget _buildTimeOption(
+    StateSetter setSheetState,
+    String label,
+    String value,
+    String currentValue,
+    Color activeColor,
+    VoidCallback onTap,
+  ) {
+    final selected = currentValue == value;
+    return InkWell(
+      onTap: () {
+        setSheetState(onTap);
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? activeColor.withOpacity(0.2) : _kSurface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: selected ? activeColor : _kBorder,
+            width: selected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Text(
+          label,
+          style: GoogleFonts.dmSans(
+            color: selected ? _kText : _kSub,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            fontSize: 12,
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showViolationBottomSheet(_Violation violation, String paramId) {
     final color = _severityColor(violation.severity);
     final icon = _severityIcon(violation.severity);
 
+    int rating = _violationSeverityRatings[paramId]?[violation.constraintId] ?? 50;
+    String timeRange = _violationTimeRanges[paramId]?[violation.constraintId] ?? 'today';
+    DateTime? customDueDate;
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: _kBg,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (BuildContext sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(icon, color: color, size: 28),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        violation.alertTitle,
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 16,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(icon, color: color, size: 28),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          violation.alertTitle,
+                          style: GoogleFonts.spaceGrotesk(
+                            color: _kText,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          violation.severity.toUpperCase(),
+                          style: GoogleFonts.spaceGrotesk(
+                            color: color,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 10,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    violation.message,
+                    style: GoogleFonts.dmSans(
+                      color: _kText.withOpacity(0.9),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(color: _kBorder),
+                  const SizedBox(height: 10),
+
+                  // Compulsory Severity Score (0 to 100)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Compulsory Severity Score (0-100)',
                         style: GoogleFonts.spaceGrotesk(
                           color: _kText,
+                          fontSize: 12,
                           fontWeight: FontWeight.bold,
-                          fontSize: 18,
                         ),
                       ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: color),
+                        ),
+                        child: Text(
+                          '$rating / 100',
+                          style: GoogleFonts.spaceGrotesk(
+                            color: color,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  Slider(
+                    value: rating.toDouble(),
+                    min: 0,
+                    max: 100,
+                    divisions: 100,
+                    activeColor: color,
+                    inactiveColor: _kBorder,
+                    onChanged: (v) {
+                      setSheetState(() {
+                        rating = v.round();
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Target Time Range to Complete
+                  Text(
+                    'Time Range to Complete Alert',
+                    style: GoogleFonts.spaceGrotesk(
+                      color: _kText,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.15),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        violation.severity.toUpperCase(),
-                        style: GoogleFonts.spaceGrotesk(
-                          color: color,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 10,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _buildTimeOption(setSheetState, 'Today', 'today', timeRange, color, () {
+                        timeRange = 'today';
+                      }),
+                      _buildTimeOption(setSheetState, 'Tomorrow', 'tomorrow', timeRange, color, () {
+                        timeRange = 'tomorrow';
+                      }),
+                      _buildTimeOption(setSheetState, '1 Week', '1_week', timeRange, color, () {
+                        timeRange = '1_week';
+                      }),
+                      _buildTimeOption(setSheetState, 'Custom Date', 'custom', timeRange, color, () async {
+                        final picked = await showDatePicker(
+                          context: ctx,
+                          initialDate: DateTime.now().add(const Duration(days: 2)),
+                          firstDate: DateTime.now(),
+                          lastDate: DateTime.now().add(const Duration(days: 365)),
+                        );
+                        if (picked != null) {
+                          setSheetState(() {
+                            timeRange = 'custom';
+                            customDueDate = picked;
+                          });
+                        }
+                      }),
+                    ],
+                  ),
+                  if (timeRange == 'custom' && customDueDate != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Due Date: ${customDueDate!.day}/${customDueDate!.month}/${customDueDate!.year}',
+                      style: GoogleFonts.dmSans(color: color, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                   ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  violation.message,
-                  style: GoogleFonts.dmSans(
-                    color: _kText.withOpacity(0.9),
-                    fontSize: 14,
-                    height: 1.4,
-                  ),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  height: 48,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: color,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
+                  const SizedBox(height: 20),
+
+                  SizedBox(
+                    width: double.infinity,
+                    height: 46,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: color,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _violationSeverityRatings.putIfAbsent(paramId, () => {})[violation.constraintId] = rating;
+                          _violationTimeRanges.putIfAbsent(paramId, () => {})[violation.constraintId] = timeRange;
+                          if (customDueDate != null) {
+                            _violationDueDates.putIfAbsent(paramId, () => {})[violation.constraintId] =
+                                customDueDate!.toIso8601String();
+                          }
+                        });
+                        _writeLiveAlertWithPhoto(
+                          paramId: paramId,
+                          constraintId: violation.constraintId,
+                        );
+                        Navigator.pop(sheetContext);
+                      },
+                      child: Text(
+                        'Acknowledge & Set Weightage',
+                        style: GoogleFonts.spaceGrotesk(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
+                        ),
                       ),
                     ),
-                    onPressed: () => Navigator.pop(sheetContext),
-                    child: Text(
-                      'Acknowledge',
-                      style: GoogleFonts.spaceGrotesk(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 14,
-                      ),
-                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
+                ],
+              ),
+            );
+          },
         );
       },
     );
@@ -1131,6 +1293,16 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     final alertId = existingId ?? _alertKey(paramId, constraintId);
     _liveAlertIds[paramId]![constraintId] = alertId;
 
+    final rating = _violationSeverityRatings[paramId]?[constraintId] ?? 50;
+    final timeRange = _violationTimeRanges[paramId]?[constraintId] ?? 'today';
+    final dueDateStr = _violationDueDates[paramId]?[constraintId] ?? '';
+    final rankScore = DashboardAlertDisplayItem.calcRankScore(
+      v.severity,
+      rating,
+      timeRange,
+      dueDateStr,
+    );
+
     final photoUrl =
         imageUrl ?? _violationPhotoUrls[paramId]?[constraintId] ?? '';
 
@@ -1154,6 +1326,10 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
       'live': true,
       'status': 'active', // 🔖 Added for Alert Lifecycle Bug Fix
       'if_then': _buildIfThenString(paramId, constraintId, _collectValues()), // 🔖 Added for IF-THEN detail
+      'severity_rating': rating,
+      'due_time_range': timeRange,
+      'due_date': dueDateStr,
+      'rank_score': rankScore,
     };
 
     try {
@@ -1353,7 +1529,7 @@ class _ReadingEntryScreenState extends State<ReadingEntryScreen> {
     }
 
     // Show Bottom Sheet violation popup from below based on alert severity
-    _showViolationBottomSheet(violation);
+    _showViolationBottomSheet(violation, paramId);
 
     await _writeLiveAlertWithPhoto(
         paramId: paramId, constraintId: violation.constraintId);
