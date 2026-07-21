@@ -3682,34 +3682,36 @@ class _DashboardTabState extends State<DashboardTab> {
               ),
             ),
           ),
-          actions: [
+            actions: [
               TextButton(
                 onPressed: saving ? null : () => Navigator.pop(ctx),
                 child: Text('Cancel', style: GoogleFonts.dmSans(color: _kSub)),
               ),
-              GestureDetector(
+              InkWell(
                 onTap: !isReady
                     ? null
                     : () async {
-                        setDlg(() => saving = true);
+                        final desc = descCtrl.text.trim();
+                        final photos = List<String>.from(uploadedUrls);
+                        Navigator.pop(ctx); // Pop dialog cleanly first!
+                        await Future.delayed(const Duration(milliseconds: 150));
                         try {
                           await _completeAlert(
                             alert,
                             'Inspector',
-                            descCtrl.text.trim(),
-                            uploadedUrls,
+                            desc,
+                            photos,
                           );
-                          if (ctx.mounted) Navigator.pop(ctx);
                         } catch (e) {
-                          setDlg(() => saving = false);
-                          if (ctx.mounted) {
-                            ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                               content: Text('Failed: $e'),
                               backgroundColor: _kDanger,
                             ));
                           }
                         }
                       },
+                borderRadius: BorderRadius.circular(9),
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 180),
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
@@ -3734,9 +3736,694 @@ class _DashboardTabState extends State<DashboardTab> {
         },
       ),
     );
+
+    // Delay controller disposal until dialog unmount finishes
+    Future.delayed(const Duration(milliseconds: 400), () {
+      descCtrl.dispose();
+    });
+  }
+
+  // ── Bulk Task Completion Flow ───────────────────────────────────────────────
+
+  _AlertModel _alertModelFromDisplayItem(DashboardAlertDisplayItem item) {
+    return _AlertModel(
+      id: item.id,
+      alertTitle: item.alertTitle,
+      message: item.message,
+      op: item.op,
+      severity: item.severity,
+      tankId: item.tankId,
+      tankName: item.tankName,
+      tankCode: item.tankCode,
+      paramId: item.paramId,
+      paramLabel: item.paramLabel,
+      paramValue: item.paramValue,
+      capturedBy: item.capturedBy,
+      capturedByName: item.capturedByName,
+      imageUrl: item.imageUrl,
+      constraintId: item.constraintId,
+      timestamp: item.timestamp,
+      acknowledged: item.acknowledged,
+      isLive: item.isLive,
+      status: item.status,
+      readingId: item.readingId,
+      ifThen: item.ifThen,
+    );
+  }
+
+  /// Step 1 of bulk flow: gather proof (description + photos).
+  /// Returns null if user cancelled, otherwise (description, photoUrls).
+  Future<({String description, List<String> photoUrls})?> _showBulkProofDialog(
+    BuildContext context,
+    int alertCount,
+  ) async {
+    bool uploadingPhoto = false;
+    bool checked = false;
+    final List<String> uploadedUrls = [];
+    final List<File> localPhotoFiles = [];
+    final descCtrl = TextEditingController();
+
+    final result = await showDialog<({String description, List<String> photoUrls})?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dlgCtx) => StatefulBuilder(
+        builder: (ctx, setDlg) {
+          final isReady = checked &&
+              descCtrl.text.trim().isNotEmpty &&
+              uploadedUrls.isNotEmpty &&
+              !uploadingPhoto;
+
+          return AlertDialog(
+            backgroundColor: _kCard,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18)),
+            title: Row(children: [
+              const Icon(Icons.task_alt_rounded, color: _kSuccess, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Bulk Complete',
+                        style: GoogleFonts.dmSans(
+                            color: _kText,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15)),
+                    Text('Applies to $alertCount alert${alertCount > 1 ? "s" : ""}',
+                        style: GoogleFonts.dmSans(
+                            color: _kSub, fontSize: 11)),
+                  ],
+                ),
+              ),
+            ]),
+            content: SizedBox(
+              width: MediaQuery.of(ctx).size.width * 0.85,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Description field
+                    Text('Resolution Description (Compulsory)',
+                        style: GoogleFonts.dmSans(
+                            color: _kText,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 12)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: descCtrl,
+                      style: GoogleFonts.dmSans(color: _kText, fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Enter one-line description...',
+                        hintStyle:
+                            GoogleFonts.dmSans(color: _kSub, fontSize: 12),
+                        filled: true,
+                        fillColor: _kSurface,
+                        contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 8),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide:
+                                const BorderSide(color: _kBorder)),
+                        enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide:
+                                const BorderSide(color: _kBorder)),
+                      ),
+                      onChanged: (_) => setDlg(() {}),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Photo capture
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                            'Verification Photos * (Compulsory - Min 1)',
+                            style: GoogleFonts.dmSans(
+                                color: uploadedUrls.isEmpty ? _kDanger : _kText,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12)),
+                        if (uploadingPhoto)
+                          const SizedBox(
+                              width: 12,
+                              height: 12,
+                              child: CircularProgressIndicator(
+                                  color: _kCopper, strokeWidth: 1.5)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    SizedBox(
+                      height: 100,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: localPhotoFiles.length + 1,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(width: 8),
+                        itemBuilder: (listCtx, idx) {
+                          if (idx == localPhotoFiles.length) {
+                            return InkWell(
+                              onTap: uploadingPhoto
+                                  ? null
+                                  : () async {
+                                      try {
+                                        final picker = ImagePicker();
+                                        final img =
+                                            await picker.pickImage(
+                                                source:
+                                                    ImageSource.camera,
+                                                imageQuality: 90);
+                                        if (img == null) return;
+                                        final File? annotated =
+                                            await Navigator.push<File>(
+                                          listCtx,
+                                          MaterialPageRoute(
+                                            builder: (_) =>
+                                                ImageMarkerScreen(
+                                                    imageFile:
+                                                        File(img.path)),
+                                          ),
+                                        );
+                                        if (annotated == null) return;
+                                        setDlg(
+                                            () => uploadingPhoto = true);
+                                        final url =
+                                            await _uploadCompletedTaskPhoto(
+                                                annotated);
+                                        setDlg(() {
+                                          localPhotoFiles.add(annotated);
+                                          uploadedUrls.add(url);
+                                          uploadingPhoto = false;
+                                        });
+                                      } catch (e) {
+                                        setDlg(() =>
+                                            uploadingPhoto = false);
+                                        if (listCtx.mounted) {
+                                          ScaffoldMessenger.of(listCtx)
+                                              .showSnackBar(SnackBar(
+                                            content: Text(
+                                                'Photo capture failed: $e'),
+                                            backgroundColor: _kDanger,
+                                          ));
+                                        }
+                                      }
+                                    },
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                width: 90,
+                                decoration: BoxDecoration(
+                                  color: _kSurface,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border:
+                                      Border.all(color: uploadedUrls.isEmpty ? _kDanger.withOpacity(0.5) : _kBorder),
+                                ),
+                                child: Column(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.add_a_photo_outlined,
+                                        color: uploadedUrls.isEmpty ? _kDanger : _kCopper, size: 24),
+                                    const SizedBox(height: 4),
+                                    Text(uploadedUrls.isEmpty ? 'Photo Req *' : 'Add Photo',
+                                        style: TextStyle(
+                                            color: uploadedUrls.isEmpty ? _kDanger : _kSub, fontSize: 10, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
+                          return Stack(children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.file(localPhotoFiles[idx],
+                                  width: 90,
+                                  height: 100,
+                                  fit: BoxFit.cover),
+                            ),
+                            Positioned(
+                              top: 2,
+                              right: 2,
+                              child: InkWell(
+                                onTap: () => setDlg(() {
+                                  localPhotoFiles.removeAt(idx);
+                                  uploadedUrls.removeAt(idx);
+                                }),
+                                child: Container(
+                                  padding: const EdgeInsets.all(3),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0x99000000),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.close,
+                                      color: Colors.white, size: 12),
+                                ),
+                              ),
+                            ),
+                          ]);
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Verification checkbox
+                    GestureDetector(
+                      onTap: () => setDlg(() => checked = !checked),
+                      child: Row(children: [
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 160),
+                          width: 22,
+                          height: 22,
+                          decoration: BoxDecoration(
+                            color: checked
+                                ? _kSuccess.withOpacity(0.15)
+                                : _kSurface,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                                color:
+                                    checked ? _kSuccess : _kBorderH,
+                                width: checked ? 2 : 1),
+                          ),
+                          child: checked
+                              ? const Icon(Icons.check_rounded,
+                                  size: 14, color: _kSuccess)
+                              : null,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'I have verified this task is resolved.',
+                            style: GoogleFonts.dmSans(
+                                color: _kText, fontSize: 12),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dlgCtx, null),
+                child:
+                    Text('Cancel', style: GoogleFonts.dmSans(color: _kSub)),
+              ),
+              InkWell(
+                onTap: () {
+                  if (!isReady) {
+                    String msg = 'Please fill all required fields';
+                    if (descCtrl.text.trim().isEmpty) {
+                      msg = 'Please enter a resolution description.';
+                    } else if (uploadedUrls.isEmpty) {
+                      msg = 'Compulsory: Take at least 1 verification photo!';
+                    } else if (!checked) {
+                      msg = 'Please check the verification checkbox.';
+                    }
+                    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
+                      content: Text(msg, style: GoogleFonts.dmSans()),
+                      backgroundColor: _kDanger,
+                      duration: const Duration(seconds: 2),
+                    ));
+                    return;
+                  }
+                  Navigator.pop(
+                    dlgCtx,
+                    (
+                      description: descCtrl.text.trim(),
+                      photoUrls: List<String>.from(uploadedUrls),
+                    ),
+                  );
+                },
+                borderRadius: BorderRadius.circular(9),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 9),
+                  decoration: BoxDecoration(
+                    color: isReady ? _kSuccess : _kSurface,
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text('Next →',
+                      style: GoogleFonts.dmSans(
+                          color: isReady ? Colors.white : _kSubL,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13)),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    // Delay controller disposal until dialog unmount transition finishes
+    Future.delayed(const Duration(milliseconds: 400), () {
+      descCtrl.dispose();
+    });
+
+    return result;
+  }
+
+  /// Step 2: show asset multi-select sheet, return selected alerts.
+  Future<List<DashboardAlertDisplayItem>?> _showBulkAssetSelectSheet(
+    BuildContext context,
+    List<DashboardAlertDisplayItem> allAlerts,
+  ) async {
+    // Group alerts by tankId → one row per asset
+    final Map<String, List<DashboardAlertDisplayItem>> byAsset = {};
+    for (final a in allAlerts) {
+      byAsset.putIfAbsent(a.tankId, () => []).add(a);
+    }
+    final assetIds = byAsset.keys.toList();
+    final selected = Set<String>.from(assetIds); // all selected by default
+
+    return showModalBottomSheet<List<DashboardAlertDisplayItem>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _kCard,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (sheetCtx) => StatefulBuilder(
+        builder: (ctx, setSt) {
+          final allSelected = selected.length == assetIds.length;
+          final totalSelectedAlerts =
+              selected.fold<int>(0, (s, id) => s + (byAsset[id]?.length ?? 0));
+
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 16,
+              right: 16,
+              top: 16,
+              bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Drag handle
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration: BoxDecoration(
+                      color: _kBorderH,
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+
+                // Header
+                Row(children: [
+                  const Icon(Icons.checklist_rounded,
+                      color: _kSuccess, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Select Assets to Complete',
+                        style: GoogleFonts.spaceGrotesk(
+                            color: _kText,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: _kSuccess.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('${selected.length}/${assetIds.length}',
+                        style: GoogleFonts.spaceGrotesk(
+                            color: _kSuccess,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+
+                // Select All / Deselect All row
+                Row(children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setSt(() => selected
+                        ..clear()
+                        ..addAll(assetIds)),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: allSelected
+                              ? _kSuccess.withOpacity(0.12)
+                              : _kSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: allSelected
+                                  ? _kSuccess.withOpacity(0.5)
+                                  : _kBorder),
+                        ),
+                        child: Center(
+                          child: Text('Select All',
+                              style: GoogleFonts.dmSans(
+                                  color: allSelected ? _kSuccess : _kSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: InkWell(
+                      onTap: () => setSt(() => selected.clear()),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: selected.isEmpty
+                              ? _kDanger.withOpacity(0.10)
+                              : _kSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                              color: selected.isEmpty
+                                  ? _kDanger.withOpacity(0.4)
+                                  : _kBorder),
+                        ),
+                        child: Center(
+                          child: Text('Deselect All',
+                              style: GoogleFonts.dmSans(
+                                  color:
+                                      selected.isEmpty ? _kDanger : _kSub,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600)),
+                        ),
+                      ),
+                    ),
+                  ),
+                ]),
+                const SizedBox(height: 10),
+                const Divider(color: _kBorder, height: 1),
+
+                // Asset list
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(ctx).size.height * 0.40,
+                  ),
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: assetIds.length,
+                    itemBuilder: (_, i) {
+                      final tankId = assetIds[i];
+                      final assetAlerts = byAsset[tankId]!;
+                      final isSelected = selected.contains(tankId);
+
+                      return InkWell(
+                        onTap: () => setSt(() {
+                          if (isSelected) {
+                            selected.remove(tankId);
+                          } else {
+                            selected.add(tankId);
+                          }
+                        }),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: 10, horizontal: 4),
+                          child: Row(children: [
+                            AnimatedContainer(
+                              duration:
+                                  const Duration(milliseconds: 150),
+                              width: 22,
+                              height: 22,
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? _kSuccess.withOpacity(0.15)
+                                    : _kSurface,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                    color: isSelected
+                                        ? _kSuccess
+                                        : _kBorderH,
+                                    width: isSelected ? 2 : 1),
+                              ),
+                              child: isSelected
+                                  ? const Icon(Icons.check_rounded,
+                                      size: 14, color: _kSuccess)
+                                  : null,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                children: [
+                                  Text(assetAlerts.first.tankName,
+                                      style: GoogleFonts.dmSans(
+                                          color: _kText,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13)),
+                                  Text(
+                                      '${assetAlerts.first.tankCode}  ·  ${assetAlerts.length} Alert${assetAlerts.length > 1 ? "s" : ""}',
+                                      style: GoogleFonts.dmSans(
+                                          color: _kSub, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                            if (isSelected)
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 7, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: _kSuccess.withOpacity(0.12),
+                                  borderRadius:
+                                      BorderRadius.circular(6),
+                                ),
+                                child: Text(
+                                    '${assetAlerts.length} alert${assetAlerts.length > 1 ? "s" : ""}',
+                                    style: GoogleFonts.spaceGrotesk(
+                                        color: _kSuccess,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.bold)),
+                              ),
+                          ]),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+                const Divider(color: _kBorder, height: 1),
+                const SizedBox(height: 12),
+
+                // Confirm button
+                SizedBox(
+                  width: double.infinity,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    decoration: BoxDecoration(
+                      color: selected.isEmpty
+                          ? _kSurface
+                          : _kSuccess,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: selected.isEmpty
+                            ? null
+                            : () {
+                                final result = selected
+                                    .expand((id) => byAsset[id]!)
+                                    .toList();
+                                Navigator.pop(sheetCtx, result);
+                              },
+                        child: Padding(
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 13),
+                          child: Center(
+                            child: Text(
+                              selected.isEmpty
+                                  ? 'Select at least one asset'
+                                  : 'CONFIRM COMPLETION  ($totalSelectedAlerts Alert${totalSelectedAlerts > 1 ? "s" : ""})',
+                              style: GoogleFonts.spaceGrotesk(
+                                color: selected.isEmpty
+                                    ? _kSubL
+                                    : Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Full bulk complete flow: Step 1 proof → Step 2 asset select → sequential completions.
+  Future<void> _showBulkCompleteFlow(
+    BuildContext context,
+    List<DashboardAlertDisplayItem> alerts,
+  ) async {
+    if (alerts.isEmpty) return;
+
+    // Step 1: gather proof
+    final proof = await _showBulkProofDialog(context, alerts.length);
+    if (proof == null) return;
+
+    // Wait 300ms for dialog pop transition to finish cleanly before opening bottom sheet
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    // Step 2: asset select
+    if (!context.mounted) return;
+    final selectedAlerts =
+        await _showBulkAssetSelectSheet(context, alerts);
+    if (selectedAlerts == null || selectedAlerts.isEmpty) return;
+
+    // Step 3: sequential completion with progress snackbar
+    if (!context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(SnackBar(
+      content: Text(
+          'Completing ${selectedAlerts.length} alert${selectedAlerts.length > 1 ? "s" : ""}…',
+          style: GoogleFonts.dmSans()),
+      backgroundColor: _kSuccess,
+      duration: const Duration(seconds: 3),
+    ));
+
+    int doneCount = 0;
+    for (final item in selectedAlerts) {
+      try {
+        final alertModel = _alertModelFromDisplayItem(item);
+        await _completeAlert(
+          alertModel,
+          'Inspector',
+          proof.description,
+          proof.photoUrls,
+        );
+        doneCount++;
+      } catch (_) {
+        // continue with rest even if one fails
+      }
+    }
+
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            '$doneCount of ${selectedAlerts.length} alert${selectedAlerts.length > 1 ? "s" : ""} marked complete!',
+            style: GoogleFonts.dmSans()),
+        backgroundColor: _kSuccess,
+        duration: const Duration(seconds: 3),
+      ));
+    }
   }
 
   // ── Sorted / filtered alerts ───────────────────────────────────────────────
+
 
   List<_AlertModel> get _todayOpenAlerts {
     var open = _allAlerts
@@ -3793,7 +4480,8 @@ class _DashboardTabState extends State<DashboardTab> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) => AlertsScreen(
+                              builder: (_) => Builder(
+                                builder: (screenCtx) => AlertsScreen(
                                 alertCardBuilder: (item) {
                                   final alertModel = _AlertModel(
                                     id: item.id,
@@ -3863,6 +4551,9 @@ class _DashboardTabState extends State<DashboardTab> {
                                   );
                                   return _CompletedCard(task: completedTask);
                                 },
+                                onBulkCompleteRequested: (alerts, _) =>
+                                    _showBulkCompleteFlow(screenCtx, alerts),
+                              ),
                               ),
                             ),
                           );

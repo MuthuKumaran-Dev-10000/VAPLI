@@ -10,11 +10,22 @@ class FolderAlertsView extends StatefulWidget {
   final Widget Function(DashboardAlertDisplayItem) alertCardBuilder;
   final bool isCompleted;
 
+  /// Called when the user taps "Complete Task" at folder/asset level.
+  /// Provides all alerts belonging to that folder/asset for bulk completion.
+  final void Function(List<DashboardAlertDisplayItem> alerts, BuildContext ctx)?
+      onBulkCompleteRequested;
+
+  /// Called whenever the drill-down depth changes.
+  /// 0 = root (param list), 1 = inside a param, 2 = inside an asset.
+  final void Function(int depth)? onNavigationDepthChanged;
+
   const FolderAlertsView({
     super.key,
     required this.folders,
     required this.alertCardBuilder,
     this.isCompleted = false,
+    this.onBulkCompleteRequested,
+    this.onNavigationDepthChanged,
   });
 
   @override
@@ -36,9 +47,23 @@ class _FolderAlertsViewState extends State<FolderAlertsView> {
 
   Color get _themeColor => widget.isCompleted ? _kSuccess : _kCopper;
 
+  int get _depth {
+    if (_selectedParam == null) return 0;
+    if (_selectedAssetId == null) return 1;
+    return 2;
+  }
+
+  void _navigateTo({String? param, String? assetId}) {
+    _selectedParam = param;
+    _selectedAssetId = assetId;
+    widget.onNavigationDepthChanged?.call(_depth);
+    setState(() {});
+  }
+
   @override
   void didUpdateWidget(FolderAlertsView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final oldDepth = _depth;
     // If the folder list is empty or doesn't contain current selected param, reset navigation
     if (widget.folders.isEmpty) {
       _selectedParam = null;
@@ -55,6 +80,11 @@ class _FolderAlertsViewState extends State<FolderAlertsView> {
           _selectedAssetId = null;
         }
       }
+    }
+    if (_depth != oldDepth) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        widget.onNavigationDepthChanged?.call(_depth);
+      });
     }
   }
 
@@ -87,74 +117,122 @@ class _FolderAlertsViewState extends State<FolderAlertsView> {
                 )
               ],
             ),
-            child: InkWell(
-              onTap: () {
-                setState(() {
-                  _selectedParam = paramFolder.paramLabel;
-                });
-              },
-              borderRadius: BorderRadius.circular(14),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                child: Row(
-                  children: [
-                    FannedCardLayout(alerts: allAlertsInParam),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            paramFolder.paramLabel,
-                            style: GoogleFonts.spaceGrotesk(
-                              color: _kText,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
+            child: Column(
+              children: [
+                InkWell(
+                  onTap: () => _navigateTo(param: paramFolder.paramLabel),
+
+                  borderRadius: BorderRadius.circular(14),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                    child: Row(
+                      children: [
+                        FannedCardLayout(alerts: allAlertsInParam),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '${paramFolder.totalAssets} Assets',
-                                style: GoogleFonts.dmSans(
-                                  color: _kSub,
-                                  fontSize: 11,
+                                paramFolder.paramLabel,
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: _kText,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Container(
-                                width: 3,
-                                height: 3,
-                                decoration: const BoxDecoration(
-                                  color: _kSub,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Text(
-                                widget.isCompleted
-                                    ? '${paramFolder.totalAlerts} Completed'
-                                    : '${paramFolder.totalAlerts} Alerts',
-                                style: GoogleFonts.dmSans(
-                                  color: widget.isCompleted ? _kSuccess : _kDanger,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  Text(
+                                    '${paramFolder.totalAssets} Assets',
+                                    style: GoogleFonts.dmSans(
+                                      color: _kSub,
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Container(
+                                    width: 3,
+                                    height: 3,
+                                    decoration: const BoxDecoration(
+                                      color: _kSub,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    widget.isCompleted
+                                        ? '${paramFolder.totalAlerts} Completed'
+                                        : '${paramFolder.totalAlerts} Alerts',
+                                    style: GoogleFonts.dmSans(
+                                      color: widget.isCompleted ? _kSuccess : _kDanger,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
-                        ],
+                        ),
+                        const Icon(
+                          Icons.chevron_right_rounded,
+                          color: _kSub,
+                          size: 20,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                // ── Bulk Complete Task button (only for active alerts) ─────
+                if (!widget.isCompleted && widget.onBulkCompleteRequested != null)
+                  Builder(
+                    builder: (bCtx) => InkWell(
+                      onTap: () {
+                        final alerts = paramFolder.assets
+                            .expand((a) => a.alerts)
+                            .toList();
+                        widget.onBulkCompleteRequested!(alerts, bCtx);
+                      },
+                      borderRadius: const BorderRadius.only(
+                        bottomLeft: Radius.circular(14),
+                        bottomRight: Radius.circular(14),
+                      ),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 9),
+                        decoration: BoxDecoration(
+                          color: _kSuccess.withOpacity(0.08),
+                          borderRadius: const BorderRadius.only(
+                            bottomLeft: Radius.circular(14),
+                            bottomRight: Radius.circular(14),
+                          ),
+                          border: Border(
+                            top: BorderSide(color: _kSuccess.withOpacity(0.25)),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.task_alt_rounded,
+                                color: _kSuccess, size: 14),
+                            const SizedBox(width: 6),
+                            Text(
+                              'COMPLETE TASK',
+                              style: GoogleFonts.spaceGrotesk(
+                                color: _kSuccess,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.0,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                    const Icon(
-                      Icons.chevron_right_rounded,
-                      color: _kSub,
-                      size: 20,
-                    ),
-                  ],
-                ),
-              ),
+                  ),
+              ],
             ),
           );
         }).toList(),
@@ -175,11 +253,8 @@ class _FolderAlertsViewState extends State<FolderAlertsView> {
           // Navigation Back Header
           _buildBackHeader(
             title: currentParamGroup.paramLabel,
-            onBack: () {
-              setState(() {
-                _selectedParam = null;
-              });
-            },
+            onBack: () => _navigateTo(),
+
           ),
           const SizedBox(height: 10),
 
@@ -191,56 +266,101 @@ class _FolderAlertsViewState extends State<FolderAlertsView> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: _themeColor.withOpacity(0.25)),
               ),
-              child: InkWell(
-                onTap: () {
-                  setState(() {
-                    _selectedAssetId = assetFolder.tankId;
-                  });
-                },
-                borderRadius: BorderRadius.circular(12),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                  child: Row(
-                    children: [
-                      FannedCardLayout(
-                        alerts: assetFolder.alerts,
-                        size: 40.0,
+              child: Column(
+                children: [
+                  InkWell(
+                    onTap: () => _navigateTo(param: _selectedParam, assetId: assetFolder.tankId),
+
+                    borderRadius: BorderRadius.circular(12),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      child: Row(
+                        children: [
+                          FannedCardLayout(
+                            alerts: assetFolder.alerts,
+                            size: 40.0,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  assetFolder.tankName,
+                                  style: GoogleFonts.dmSans(
+                                    color: _kText,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  widget.isCompleted
+                                      ? '${assetFolder.alertCount} Completed'
+                                      : '${assetFolder.alertCount} Alerts',
+                                  style: GoogleFonts.dmSans(
+                                    color: widget.isCompleted ? _kSuccess : _kDanger,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(
+                            Icons.chevron_right_rounded,
+                            color: _kSub,
+                            size: 18,
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              assetFolder.tankName,
-                              style: GoogleFonts.dmSans(
-                                color: _kText,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                              ),
+                    ),
+                  ),
+                  // ── Asset-level Bulk Complete button ────────────────────
+                  if (!widget.isCompleted && widget.onBulkCompleteRequested != null)
+                    Builder(
+                      builder: (bCtx) => InkWell(
+                        onTap: () => widget
+                            .onBulkCompleteRequested!(assetFolder.alerts, bCtx),
+                        borderRadius: const BorderRadius.only(
+                          bottomLeft: Radius.circular(12),
+                          bottomRight: Radius.circular(12),
+                        ),
+                        child: Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.symmetric(vertical: 7),
+                          decoration: BoxDecoration(
+                            color: _kSuccess.withOpacity(0.07),
+                            borderRadius: const BorderRadius.only(
+                              bottomLeft: Radius.circular(12),
+                              bottomRight: Radius.circular(12),
                             ),
-                            const SizedBox(height: 3),
-                            Text(
-                              widget.isCompleted
-                                  ? '${assetFolder.alertCount} Completed'
-                                  : '${assetFolder.alertCount} Alerts',
-                              style: GoogleFonts.dmSans(
-                                color: widget.isCompleted ? _kSuccess : _kDanger,
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                              ),
+                            border: Border(
+                              top: BorderSide(
+                                  color: _kSuccess.withOpacity(0.2)),
                             ),
-                          ],
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.task_alt_rounded,
+                                  color: _kSuccess, size: 12),
+                              const SizedBox(width: 5),
+                              Text(
+                                'COMPLETE TASK',
+                                style: GoogleFonts.spaceGrotesk(
+                                  color: _kSuccess,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.9,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      const Icon(
-                        Icons.chevron_right_rounded,
-                        color: _kSub,
-                        size: 18,
-                      ),
-                    ],
-                  ),
-                ),
+                    ),
+                ],
               ),
             );
           }),
@@ -262,11 +382,7 @@ class _FolderAlertsViewState extends State<FolderAlertsView> {
         _buildBackHeader(
           title: currentAssetFolder.tankName,
           subtitle: currentParamGroup.paramLabel,
-          onBack: () {
-            setState(() {
-              _selectedAssetId = null;
-            });
-          },
+          onBack: () => _navigateTo(param: _selectedParam),
         ),
         const SizedBox(height: 10),
 

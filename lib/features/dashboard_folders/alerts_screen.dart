@@ -14,11 +14,16 @@ class AlertsScreen extends StatefulWidget {
   final Widget Function(DashboardAlertDisplayItem)? alertCardBuilder;
   final Widget Function(DashboardAlertDisplayItem)? completedCardBuilder;
 
+  /// Called when user taps "Complete Task" on a param/asset folder for bulk completion.
+  final void Function(List<DashboardAlertDisplayItem> alerts, BuildContext ctx)?
+      onBulkCompleteRequested;
+
   const AlertsScreen({
     super.key,
     this.onCompleteTaskRequested,
     this.alertCardBuilder,
     this.completedCardBuilder,
+    this.onBulkCompleteRequested,
   });
 
   @override
@@ -52,6 +57,12 @@ class _AlertsScreenState extends State<AlertsScreen> {
   String _activeFilter = 'All'; // Controller 1: 'All', 'Critical', 'Warning'
   String _sortBy = 'Severity'; // Controller 2: 'Severity', 'Time'
   bool _todayOnly = false; // Controller 3: TODAY ONLY toggle
+
+  // File-system navigation depth (0 = root, 1 = param open, 2 = asset open)
+  int _activeDepth = 0;
+  int _completedDepth = 0;
+
+  bool get _isAtRoot => _activeDepth == 0 && _completedDepth == 0;
 
   Future<void> _syncActiveFolders() async {
     if (!mounted) return;
@@ -288,7 +299,16 @@ class _AlertsScreenState extends State<AlertsScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: _kCopper, size: 18),
-          onPressed: () => Navigator.pop(context),
+          onPressed: () {
+            if (!_isAtRoot) {
+              setState(() {
+                _activeDepth = 0;
+                _completedDepth = 0;
+              });
+            } else {
+              Navigator.pop(context);
+            }
+          },
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -314,35 +334,37 @@ class _AlertsScreenState extends State<AlertsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 3-Row Filter Controllers Bar
-            _buildFilterControllersBar(),
-            const SizedBox(height: 18),
+            // 3-Row Filter Controllers Bar — only shown at root
+            if (_isAtRoot) ...[_buildFilterControllersBar(), const SizedBox(height: 18)],
 
-            // Active Alerts Section
-            if (_showActiveAlerts) ...[
-              Row(
-                children: [
-                  Container(
-                    width: 3,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      color: _kCopper,
-                      borderRadius: BorderRadius.circular(2),
+
+            // Active Alerts Section — hidden when completed section is drilled in
+            if (_showActiveAlerts && _completedDepth == 0) ...[
+              if (_isAtRoot) ...[
+                Row(
+                  children: [
+                    Container(
+                      width: 3,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: _kCopper,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    "ACTIVE ALERTS FOLDERS",
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: _kSub,
-                      letterSpacing: 1.2,
+                    const SizedBox(width: 10),
+                    Text(
+                      "ACTIVE ALERTS FOLDERS",
+                      style: GoogleFonts.spaceGrotesk(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: _kSub,
+                        letterSpacing: 1.2,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
               if (_syncingActive && _activeFolders.isEmpty)
                 const Center(
                   child: Padding(
@@ -371,35 +393,40 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   folders: _activeFolders,
                   isCompleted: false,
                   alertCardBuilder: widget.alertCardBuilder ?? _defaultLeafAlertCard,
+                  onBulkCompleteRequested: widget.onBulkCompleteRequested,
+                  onNavigationDepthChanged: (d) => setState(() => _activeDepth = d),
                 ),
+
               const SizedBox(height: 24),
             ],
 
-            // Completed Alerts Section
-            if (_showCompletedAlerts) ...[
-              Row(
-                children: [
-                  Container(
-                    width: 3,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      color: _kSuccess,
-                      borderRadius: BorderRadius.circular(2),
+            // Completed Alerts Section — hidden when active section is drilled in
+            if (_showCompletedAlerts && _activeDepth == 0) ...[
+              if (_isAtRoot) ...[
+                Row(
+                  children: [
+                    Container(
+                      width: 3,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: _kSuccess,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  Text(
-                    "COMPLETED ALERTS FOLDERS",
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: _kSub,
-                      letterSpacing: 1.2,
+                    const SizedBox(width: 10),
+                    Text(
+                      "COMPLETED ALERTS FOLDERS",
+                      style: GoogleFonts.spaceGrotesk(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: _kSub,
+                        letterSpacing: 1.2,
+                      ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
+                  ],
+                ),
+                const SizedBox(height: 12),
+              ],
               if (_syncingCompleted && _completedFolders.isEmpty)
                 const Center(
                   child: Padding(
@@ -428,6 +455,7 @@ class _AlertsScreenState extends State<AlertsScreen> {
                   folders: _completedFolders,
                   isCompleted: true,
                   alertCardBuilder: widget.completedCardBuilder ?? _defaultCompletedLeafCard,
+                  onNavigationDepthChanged: (d) => setState(() => _completedDepth = d),
                 ),
             ],
           ],
